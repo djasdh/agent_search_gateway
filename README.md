@@ -125,6 +125,22 @@ ad_filter:      # enabled/level(off|ads|ads+tracking|full)/extra_domains/hosts_f
 browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufox预留)/proxy_*/wait_for_selector/screenshot
 ```
 
+### searxng 配置分工（gateway.yaml vs settings.yml）
+
+搜索系统的 searxng 相关配置分两层，**各读各的，不重复**：
+
+| 文件 | 管什么 | 谁读 | 改后生效 |
+|---|---|---|---|
+| `gateway.yaml` 的 `searxng`/`search` 块 | **怎么调 searxng**：连哪个地址（`searxng.url`）、超时、结果数、缓存 | gateway (node) | 重启 gateway |
+| `/etc/agent-search/settings.yml` | **searxng 内部引擎配置**：启哪些引擎（google/bing/ddg/brave）、safesearch、UA | SearXNG 容器启动时 | `docker restart searxng-main` |
+
+要点：
+
+- `gateway.yaml` 的 `searxng.url` 必须指向 searxng 实际端口（本机 `8890`），flaresolverr 同理（`8191`）
+- settings.yml 是独立配置文件，**不要放 `/tmp`**（重启会丢）；本机约定在 `/etc/agent-search/settings.yml`
+- searxng 容器挂载方式：`-v /etc/agent-search/settings.yml:/etc/searxng/settings.yml:ro`
+- 改引擎开关（如启用/禁用某个引擎）只动 settings.yml + 重启 searxng，**不需要动 gateway**
+
 ### 广告过滤（StevenBlack hosts）
 
 - 数据源：StevenBlack/hosts（MIT），本地缓存 `data/adblock/hosts`（gitignore，不入库）
