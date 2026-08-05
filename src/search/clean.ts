@@ -55,6 +55,20 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max) + "…";
 }
 
+/**
+ * 文件型垃圾检测：sitemap/数据接口 XML/办公数据文件等非人类阅读页面。
+ * 搜索引擎（尤其 google cse）常把这些塞进结果里，对一般查询都没用。
+ * 刻意不挡 PDF/.doc/.ppt——论文、文档、演示在不少场景里是有价值结果。
+ */
+const FILE_JUNK_EXT = new Set([".xml", ".xlsx", ".xls", ".csv"]);
+function isFileJunkUrl(u: URL): boolean {
+  const path = u.pathname.toLowerCase();
+  if (path.includes("sitemap")) return true;
+  const m = path.match(/\.([a-z0-9]{2,6})$/);
+  if (m && FILE_JUNK_EXT.has(m[0])) return true;
+  return false;
+}
+
 export interface CleanResult {
   results: CleanedResult[];
   /** 因广告/垃圾域名过滤丢弃的数量（不含切片/去重） */
@@ -76,9 +90,10 @@ export function cleanResults(results: SearxngResult[], opts: CleanOptions): Clea
     const title = (r.title ?? "").trim();
     if (!url || !title) continue;
 
+    let u: URL;
     let host: string | null;
     try {
-      const u = new URL(url);
+      u = new URL(url);
       if (u.protocol !== "http:" && u.protocol !== "https:") continue;
       host = u.hostname.toLowerCase();
     } catch {
@@ -86,6 +101,11 @@ export function cleanResults(results: SearxngResult[], opts: CleanOptions): Clea
     }
 
     if (opts.shouldBlock && opts.shouldBlock(host)) {
+      blockedCount += 1;
+      continue;
+    }
+
+    if (isFileJunkUrl(u)) {
       blockedCount += 1;
       continue;
     }
