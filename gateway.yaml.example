@@ -32,6 +32,24 @@ search:
   cache_max_entries: 200
   max_concurrent: 2       # 搜索并发信号量
 
+rerank:
+  enabled: true
+  # 轻量重排层：绕过 searxng 的 category 分组排序，按「score × boost」降序重排，
+  # 让被分组算法埋掉的高分结果（如带缩略图的 bilibili 视频）正常入场。
+  # key 用 searxng 注册名（JSON engine 字段），非 settings.yml 的 name；
+  # 默认 1.0，不配 = 按原始 score 排序。
+  engine_boost:
+    bilibili: 1.2
+    "google cse": 1.0
+    bing: 1.0
+    duckduckgo: 1.0
+    brave: 1.0
+    wikipedia: 1.0
+    github: 1.0
+    stackoverflow: 1.0
+    reddit: 1.0
+    news: 1.0
+
 ad_filter:
   enabled: true
   # off | ads | ads+tracking | full

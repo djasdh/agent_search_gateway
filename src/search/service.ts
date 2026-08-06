@@ -7,6 +7,7 @@ import { Semaphore } from "../utils/semaphore.js";
 import { StringCache } from "./cache.js";
 import { cleanResults } from "./clean.js";
 import { renderSearchMarkdown } from "./render.js";
+import { rerankResults } from "./rerank.js";
 import { searchSearxng, type SearchRequest } from "./searxng.js";
 
 export interface SearchParams {
@@ -85,7 +86,13 @@ export function createSearchService(
       const { data, latencyMs } = result;
       const rawCount = data.results.length;
 
-      const { results: cleaned, blockedCount } = cleanResults(data.results, {
+      // 轻量重排：绕过 searxng category 分组排序，按 score × boost 降序
+      const reranked = rerankResults(data.results, {
+        enabled: config.rerankEnabled,
+        engineBoost: config.rerankEngineBoost,
+      });
+
+      const { results: cleaned, blockedCount } = cleanResults(reranked, {
         maxResults: params.numResults ?? config.searchMaxResults,
         maxResultChars: config.searchMaxResultChars,
         minScore: params.minScore,

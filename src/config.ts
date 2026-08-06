@@ -53,6 +53,12 @@ const configSchema = z.object({
       cache_max_entries: 200,
       max_concurrent: 2,
     }),
+  rerank: z
+    .object({
+      enabled: z.boolean().default(true),
+      engine_boost: z.record(z.string(), z.number().nonnegative()).default({}),
+    })
+    .catch({ enabled: true, engine_boost: {} }),
   ad_filter: z
     .object({
       enabled: z.boolean().default(true),
@@ -151,6 +157,8 @@ export interface GatewayConfig {
   searchCacheTtlMs: number;
   searchCacheMaxEntries: number;
   searchMaxConcurrent: number;
+  rerankEnabled: boolean;
+  rerankEngineBoost: Record<string, number>;
   adFilterEnabled: boolean;
   adFilterLevel: AdFilterLevel;
   adFilterExtraDomains: string[];
@@ -239,6 +247,8 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     searchCacheTtlMs: v.search.cache_ttl_ms,
     searchCacheMaxEntries: v.search.cache_max_entries,
     searchMaxConcurrent: v.search.max_concurrent,
+    rerankEnabled: v.rerank.enabled,
+    rerankEngineBoost: v.rerank.engine_boost,
     adFilterEnabled: v.ad_filter.enabled,
     adFilterLevel: v.ad_filter.level,
     adFilterExtraDomains: v.ad_filter.extra_domains,
