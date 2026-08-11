@@ -13,6 +13,12 @@ const PRIVATE_CIDRS = [
   "fe80::/10",
 ];
 
+/** 默认豁免段：Clash/类似代理的 fake-ip 区间，连接后由 TUN 转发到真实出站，不触达内网。 */
+export const DEFAULT_EXEMPT_CIDRS = [
+  "198.18.0.0/15",
+  "fdfe:dcba:9876::/64",
+];
+
 function ipToBigInt(ip: string): bigint | null {
   // 支持 IPv4 和 IPv6
   if (ip.includes(".") && !ip.includes(":")) {
@@ -64,22 +70,26 @@ function ipInCidr(ip: string, cidr: string): boolean {
   return (addr & mask) === (netAddr & mask);
 }
 
-function isPrivateIp(ip: string): boolean {
+export function isPrivateIp(ip: string, exemptCidrs: string[] = []): boolean {
   const normalized = ip.replace(/^\[|\]$/g, "").split("%")[0];
   if (normalized === "::1") return true;
+  // 命中豁免段视为非私有（如 Clash fake-ip）
+  if (exemptCidrs.some((cidr) => ipInCidr(normalized, cidr))) return false;
   return PRIVATE_CIDRS.some((cidr) => ipInCidr(normalized, cidr));
 }
 
 /** 解析 hostname 的所有 A/AAAA 记录，任一为私网 IP 即视为私有（SSRF 防护）。 */
-export async function isPrivateHost(hostname: string): Promise<boolean> {
+export async function isPrivateHost(
+  hostname: string,
+  opts: { exemptCidrs?: string[] } = {},
+): Promise<boolean> {
+  const exemptCidrs = opts.exemptCidrs ?? DEFAULT_EXEMPT_CIDRS;
   if (hostname === "localhost") return true;
   try {
     const records = await lookup(hostname, { all: true });
-    return records.some((r) => isPrivateIp(r.address));
+    return records.some((r) => isPrivateIp(r.address, exemptCidrs));
   } catch {
     // 解析失败：保守起见视为不可解析（由调用方决定）
     return false;
   }
 }
-
-export { isPrivateIp };

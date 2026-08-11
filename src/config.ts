@@ -84,6 +84,9 @@ const configSchema = z.object({
       max_bytes: z.number().int().positive().default(5242880),
       user_agent: z.string().default(""),
       block_private_ips: z.boolean().default(true),
+      private_ip_exempt_cidrs: z
+        .array(z.string())
+        .default(["198.18.0.0/15", "fdfe:dcba:9876::/64"]),
       structural: z.enum(["clean", "full"]).default("clean"),
       max_output_chars: z.number().int().positive().default(20000),
       cache_ttl_ms: z.number().int().positive().default(600000),
@@ -94,6 +97,7 @@ const configSchema = z.object({
       max_bytes: 5242880,
       user_agent: "",
       block_private_ips: true,
+      private_ip_exempt_cidrs: ["198.18.0.0/15", "fdfe:dcba:9876::/64"],
       structural: "clean",
       max_output_chars: 20000,
       cache_ttl_ms: 600000,
@@ -170,6 +174,7 @@ export interface GatewayConfig {
   fetchMaxBytes: number;
   fetchUserAgent: string;
   fetchBlockPrivateIps: boolean;
+  fetchPrivateIpExemptCidrs: string[];
   fetchStructural: "clean" | "full";
   fetchMaxOutputChars: number;
   fetchCacheTtlMs: number;
@@ -260,6 +265,7 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     fetchMaxBytes: v.fetch.max_bytes,
     fetchUserAgent: v.fetch.user_agent,
     fetchBlockPrivateIps: v.fetch.block_private_ips,
+    fetchPrivateIpExemptCidrs: v.fetch.private_ip_exempt_cidrs,
     fetchStructural: v.fetch.structural,
     fetchMaxOutputChars: v.fetch.max_output_chars,
     fetchCacheTtlMs: v.fetch.cache_ttl_ms,

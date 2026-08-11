@@ -58,7 +58,9 @@ export async function directFetch(
   if (config.fetchBlockPrivateIps) {
     let privateHost = false;
     try {
-      privateHost = await isPrivateHost(url.hostname);
+      privateHost = await isPrivateHost(url.hostname, {
+        exemptCidrs: config.fetchPrivateIpExemptCidrs,
+      });
     } catch {
       /* 解析失败按非私有处理，交由请求阶段决定 */
     }

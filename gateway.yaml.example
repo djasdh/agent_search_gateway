@@ -76,6 +76,9 @@ fetch:
   max_bytes: 5242880       # 响应体上限 5MB
   user_agent: ""           # 空=默认 Chrome UA
   block_private_ips: true  # SSRF 防护
+  private_ip_exempt_cidrs:  # 命中视为非私有（默认豁免 Clash fake-ip 段）
+    - 198.18.0.0/15
+    - fdfe:dcba:9876::/64
   structural: clean        # clean(默认去导航/广告) | full(保留完整结构)
   max_output_chars: 20000  # 输出 md 上限
   cache_ttl_ms: 600000     # fetch 结果缓存 10 分钟
