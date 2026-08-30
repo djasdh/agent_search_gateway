@@ -55,6 +55,26 @@ describe("isPrivateIp", () => {
   it("自定义豁免段可放行指定私有段", () => {
     expect(isPrivateIp("10.0.0.5", ["10.0.0.0/24"])).toBe(false);
   });
+
+  it("公网 IPv6（GUA）不误判为私有——跨地址族不比较", () => {
+    // 知乎/APNIC、Wikimedia、HN、Facebook 的真实公网 IPv6：
+    // 之前 128 位 IPv6 数值与 IPv4 段 0.0.0.0/8 跨族位运算误命中
+    const gua = [
+      "240d:c010:15c:1::178",
+      "2001:df2:e500:ed1a::1",
+      "2606:7100:1:67::26",
+      "2a03:2880:f328:22:face:b00c:0:4420",
+      "2606:4700::6810:84e5",
+    ];
+    for (const ip of gua) expect(isPrivateIp(ip), ip).toBe(false);
+  });
+
+  it("真 IPv6 私有段仍拦截（不因族检查放行）", () => {
+    expect(isPrivateIp("fc00::1")).toBe(true); // ULA
+    expect(isPrivateIp("fd12:3456:789a::1")).toBe(true); // ULA fd00::/8
+    expect(isPrivateIp("fe80::1")).toBe(true); // link-local
+    expect(isPrivateIp("::1")).toBe(true); // loopback
+  });
 });
 
 describe("isPrivateHost", () => {

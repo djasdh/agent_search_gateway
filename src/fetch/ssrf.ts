@@ -58,15 +58,21 @@ function ipInCidr(ip: string, cidr: string): boolean {
   const netAddr = ipToBigInt(net);
   if (addr === null || netAddr === null) return false;
 
-  const isV4 = net.includes(".");
-  const maxBits = isV4 ? 32 : 128;
+  // 地址族一致性：IPv6 地址只跟 IPv6 网段比，IPv4 同理。
+  // 否则 128 位 IPv6 数值与 32 位 IPv4 mask 跨族位运算会误命中
+  // （实测公网 240d:c010::… 会撞上 0.0.0.0/8）。
+  const ipIsV4 = ip.includes(".") && !ip.includes(":");
+  const netIsV4 = net.includes(".") && !net.includes(":");
+  if (ipIsV4 !== netIsV4) return false;
+
+  const maxBits = netIsV4 ? 32 : 128;
   if (bits > maxBits) return false;
 
   const mask =
     bits === 0
       ? 0n
       : (BigInt("0xffffffffffffffffffffffffffffffff") << BigInt(maxBits - bits)) &
-        BigInt(isV4 ? "0xffffffff" : "0xffffffffffffffffffffffffffffffff");
+        BigInt(netIsV4 ? "0xffffffff" : "0xffffffffffffffffffffffffffffffff");
   return (addr & mask) === (netAddr & mask);
 }
 
