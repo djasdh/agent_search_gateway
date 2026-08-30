@@ -33,8 +33,12 @@ async function main(): Promise<void> {
 
     process.on("SIGTERM", () => void shutdown("SIGTERM"));
     process.on("SIGINT", () => void shutdown("SIGINT"));
+    // 未捕获异常：记录后退出，交给 systemd/进程管理器拉起。
+    // 带病存活可能处于半初始化状态继续服务，比崩溃更糟。
     process.on("uncaughtException", (err) => {
-      logger.error(`uncaught exception: ${err.stack ?? String(err)}`);
+      logger.error(`uncaught exception, exiting: ${err.stack ?? String(err)}`);
+      logger.close();
+      process.exit(1);
     });
     process.on("unhandledRejection", (reason) => {
       logger.error(`unhandled rejection: ${String(reason)}`);
