@@ -14,11 +14,12 @@ logging:
   file: ""             # 空=输出到 stdout，否则写文件
 
 searxng:
-  url: http://127.0.0.1:8888
-  timeout_ms: 10000
+  url: http://127.0.0.1:8890
+  timeout_ms: 20000    # 需大于 searxng 内部 max_request_timeout(15s)，
+                       # 否则引擎超时等待期间网关先 abort → 稳定 SEARCH_TIMEOUT
 
 flaresolverr:
-  url: http://127.0.0.1:8192
+  url: http://127.0.0.1:8191
   enabled: true            # 路由②（CF/JS 渲染）总开关
   timeout_ms: 60000        # FlareSolverr 请求超时
   max_concurrent: 2        # 并发信号量（保护浏览器资源）
@@ -41,7 +42,7 @@ rerank:
   engine_boost:
     bilibili: 1.2
     "google cse": 1.0
-    bing: 1.0
+    bing: 0.7
     duckduckgo: 1.0
     brave: 1.0
     wikipedia: 1.0
