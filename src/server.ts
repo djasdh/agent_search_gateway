@@ -261,10 +261,22 @@ function isInitializeRequest(body: unknown): boolean {
   );
 }
 
+/** POST body 上限（MCP 请求都很小，1MB 足够；防超大 body 打满内存） */
+const MAX_BODY_BYTES = 1024 * 1024;
+
 function readJsonBody(req: import("node:http").IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c as Buffer));
+    let received = 0;
+    req.on("data", (c) => {
+      received += (c as Buffer).byteLength;
+      if (received > MAX_BODY_BYTES) {
+        req.destroy(); // 中断连接，不继续累积
+        reject(new Error(`request body exceeds ${MAX_BODY_BYTES} bytes`));
+        return;
+      }
+      chunks.push(c as Buffer);
+    });
     req.on("end", () => {
       const raw = Buffer.concat(chunks).toString("utf-8");
       if (!raw) {
