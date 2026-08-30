@@ -28,9 +28,36 @@ export interface DirectFetchResult {
 const MAX_REDIRECTS = 5;
 const HTML_TYPES = ["text/html", "application/xhtml+xml"];
 
+/** TextDecoder 支持的常见 charset 别名（大小写不敏感） */
+const KNOWN_CHARSETS = new Set([
+  "utf-8", "utf8", "gbk", "gb2312", "gb18030", "big5", "shift_jis", "shift-jis",
+  "euc-jp", "euc-kr", "iso-8859-1", "iso-8859-2", "iso-8859-15", "latin1",
+  "windows-1250", "windows-1251", "windows-1252", "windows-1256", "koi8-r",
+  "us-ascii", "ascii", "utf-16le", "utf-16be",
+]);
+
 function isHtmlContentType(ct: string): boolean {
   const base = ct.split(";")[0].trim().toLowerCase();
   return HTML_TYPES.some((t) => base === t || base.startsWith(t));
+}
+
+/**
+ * 从 HTML 头部探测 charset：很多老站（尤其中文站）只在
+ * <meta charset> / <meta http-equiv> 声明，HTTP header 没有。
+ * 返回 null 表示未声明（调用方回退 header/utf-8）。
+ */
+function sniffHtmlCharset(buf: Buffer): string | null {
+  // charset 声明基本都在前 4KB；ascii 片段即可匹配
+  const head = buf.subarray(0, 4096).toString("latin1");
+  // <meta charset="gbk"> / <meta charset=gbk>
+  let m = /<meta[^>]+charset\s*=\s*["']?\s*([\w-]+)/i.exec(head);
+  if (!m) {
+    // <meta http-equiv="Content-Type" content="text/html; charset=gbk">
+    m = /<meta[^>]+content\s*=\s*["'][^"']*charset\s*=\s*([\w-]+)/i.exec(head);
+  }
+  if (!m) return null;
+  const cs = m[1].toLowerCase();
+  return KNOWN_CHARSETS.has(cs) ? cs : null;
 }
 
 /**
@@ -165,9 +192,10 @@ export async function directFetch(
       }
       await reader.cancel().catch(() => {});
 
-      // 按 charset 解码
-      const charset = /charset=([\w-]+)/i.exec(contentType)?.[1] ?? "utf-8";
+      // 解码：header charset 优先，缺失时嗅探 <meta charset>（老中文站常见）
       const buf = Buffer.concat(chunks);
+      let charset = /charset=([\w-]+)/i.exec(contentType)?.[1];
+      if (!charset) charset = sniffHtmlCharset(buf) ?? "utf-8";
       currentHtml = new TextDecoder(charset as BufferEncoding, { fatal: false }).decode(buf);
 
       return {

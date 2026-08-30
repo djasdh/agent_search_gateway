@@ -1,9 +1,19 @@
 import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { Buffer } from "node:buffer";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { GatewayConfig } from "../src/config.js";
 import { directFetch } from "../src/fetch/direct.js";
+
+/**
+ * GBK 编码的 HTML（header 不带 charset，只在 <meta> 声明）。
+ * 内容：<html><head><meta charset="gbk"><title>中文</title></head>
+ * <body><p>中文测试</p></body></html>
+ * 由 python3 html.encode('gbk') 预生成。
+ */
+const GBK_HTML_HEX =
+  "3c68746d6c3e3c686561643e3c6d65746120636861727365743d2267626b223e3c7469746c653ed6d0cec43c2f7469746c653e3c2f686561643e3c626f64793e3c703ed6d0cec4b2e2cad43c2f703e3c2f626f64793e3c2f68746d6c3e";
 
 function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   return {
@@ -79,6 +89,10 @@ beforeAll(async () => {
     } else if (url.pathname === "/error") {
       res.writeHead(500, { "Content-Type": "text/html" });
       res.end("<html>error</html>");
+    } else if (url.pathname === "/gbk") {
+      // header 不带 charset，只在 <meta> 声明 GBK（老中文站常见）
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(Buffer.from(GBK_HTML_HEX, "hex"));
     } else if (url.pathname === "/ua") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(`<html><body>UA=${req.headers["user-agent"] ?? "none"}</body></html>`);
@@ -101,6 +115,13 @@ describe("directFetch", () => {
     expect(r.ok).toBe(true);
     expect(r.html).toContain("你好");
     expect(r.finalUrl).toBe(`${base}/html`);
+  });
+
+  it("header 无 charset 时用 <meta charset> 探测解码（GBK 老站）", async () => {
+    const r = await directFetch(makeConfig(), `${base}/gbk`);
+    expect(r.ok).toBe(true);
+    expect(r.html).toContain("中文测试");
+    expect(r.html).toContain("<title>中文</title>");
   });
 
   it("跟随重定向", async () => {
