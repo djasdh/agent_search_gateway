@@ -58,6 +58,8 @@ export class BrowserPool {
   private ttlTimer: ReturnType<typeof setTimeout> | null = null;
   private sem: Semaphore;
   private closed = false;
+  /** 每次 closeAll 递增；launch 前后不一致说明期间发生过关闭 */
+  private generation = 0;
   /** hostname → 私网判定缓存（避免每个子资源请求都做 DNS 查询） */
   private ssrfCache = new Map<string, { blocked: boolean; at: number }>();
   private static readonly SSRF_CACHE_TTL_MS = 60_000;
@@ -147,7 +149,13 @@ export class BrowserPool {
       throw new BrowserPoolError("camoufox 引擎尚未接入（预留）。当前请使用 chromium。");
     }
     this.logger.debug("启动 playwright chromium...");
+    const gen = this.generation;
     const browser = await chromium.launch(this.launchOptions());
+    if (gen !== this.generation) {
+      // launch 期间发生过 closeAll：立即关掉新实例，避免逃逸回收（永不释放）
+      await browser.close().catch(() => {});
+      throw new BrowserPoolError("浏览器池已关闭，请重试");
+    }
     this.browsers.push(browser);
     return browser;
   }
@@ -239,6 +247,7 @@ export class BrowserPool {
 
   async closeAll(): Promise<void> {
     this.closed = true;
+    this.generation += 1;
     if (this.ttlTimer) clearTimeout(this.ttlTimer);
     this.ttlTimer = null;
     for (const b of this.browsers) {
