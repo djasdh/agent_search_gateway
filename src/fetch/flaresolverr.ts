@@ -1,11 +1,12 @@
 import type { GatewayConfig } from "../config.js";
+import { assertPublicHttpUrl } from "./ssrf.js";
 
 export interface FlareSolverrResult {
   ok: boolean;
   renderedHtml?: string;
   finalUrl?: string;
   statusCode?: number;
-  errorKind?: "timeout" | "http" | "network" | "not_ok" | "empty" | "invalid_json" | "too_large";
+  errorKind?: "timeout" | "http" | "network" | "not_ok" | "empty" | "invalid_json" | "too_large" | "blocked";
   errorMessage?: string;
 }
 
@@ -66,6 +67,22 @@ export function createFlareSolverrClient(config: GatewayConfig) {
   }
 
   async function doRequest(url: string): Promise<FlareSolverrResult> {
+    // FlareSolverr 会自行解析并访问 URL，网关必须前置校验协议 + 内网（SSRF）
+    const check = await assertPublicHttpUrl(url, {
+      exemptCidrs: config.fetchPrivateIpExemptCidrs,
+      enabled: config.fetchBlockPrivateIps,
+    });
+    if (!check.ok) {
+      return {
+        ok: false,
+        errorKind: "blocked",
+        errorMessage:
+          check.reason === "private_ip"
+            ? `SSRF 防护：拒绝内网地址 ${url}`
+            : `非法 URL: ${url}`,
+      };
+    }
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.flaresolverrTimeoutMs);
     try {

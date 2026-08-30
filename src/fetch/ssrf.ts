@@ -93,3 +93,41 @@ export async function isPrivateHost(
     return false;
   }
 }
+
+export interface UrlCheckResult {
+  ok: boolean;
+  /** 拒绝原因：invalid_url | protocol | private_ip */
+  reason?: "invalid_url" | "protocol" | "private_ip";
+}
+
+/**
+ * 校验一个 http(s) URL 是否允许访问（协议 + 非内网）。
+ * 供浏览器渲染 / FlareSolverr 等「独立解析并访问」的链路使用，
+ * 与 directFetch 的 checkUrlAllowed 语义一致。
+ * enabled=false 时仅做协议检查（对应配置 fetch.block_private_ips=false）。
+ */
+export async function assertPublicHttpUrl(
+  urlStr: string,
+  opts: { exemptCidrs: string[]; enabled: boolean },
+): Promise<UrlCheckResult> {
+  let url: URL;
+  try {
+    url = new URL(urlStr);
+  } catch {
+    return { ok: false, reason: "invalid_url" };
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return { ok: false, reason: "protocol" };
+  }
+  if (!opts.enabled) return { ok: true };
+  let privateHost = false;
+  try {
+    privateHost = await isPrivateHost(url.hostname, { exemptCidrs: opts.exemptCidrs });
+  } catch {
+    /* 解析失败按非私有处理 */
+  }
+  if (privateHost) {
+    return { ok: false, reason: "private_ip" };
+  }
+  return { ok: true };
+}

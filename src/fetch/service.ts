@@ -119,7 +119,12 @@ export function createFetchService(config: GatewayConfig, logger: Logger, browse
         }
       }
 
-      const code = fs.errorKind === "timeout" ? ErrorCodes.FETCH_TIMEOUT : ErrorCodes.FETCH_RENDER_FAIL;
+      const code =
+        fs.errorKind === "timeout"
+          ? ErrorCodes.FETCH_TIMEOUT
+          : fs.errorKind === "blocked"
+            ? ErrorCodes.FETCH_BLOCKED
+            : ErrorCodes.FETCH_RENDER_FAIL;
       const msg = fs.errorMessage ?? "未知错误";
       logger.debug(`FlareSolverr failed: ${params.url} kind=${fs.errorKind} msg=${msg}`);
       return {

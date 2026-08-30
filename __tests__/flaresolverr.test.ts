@@ -146,4 +146,28 @@ describe("createFlareSolverrClient", () => {
     expect(r.ok).toBe(false);
     expect(r.errorKind).toBe("network");
   });
+
+  it("SSRF：内网 URL 被拦截（不发请求到 FlareSolverr）", async () => {
+    const cfg = makeConfig({ flaresolverrUrl: base, fetchBlockPrivateIps: true });
+    const client = createFlareSolverrClient(cfg);
+    const r = await client.requestGet("http://169.254.169.254/latest/meta-data/");
+    expect(r.ok).toBe(false);
+    expect(r.errorKind).toBe("blocked");
+  });
+
+  it("SSRF：非 http/https 协议被拦截", async () => {
+    const cfg = makeConfig({ flaresolverrUrl: base, fetchBlockPrivateIps: true });
+    const client = createFlareSolverrClient(cfg);
+    const r = await client.requestGet("file:///etc/passwd");
+    expect(r.ok).toBe(false);
+    expect(r.errorKind).toBe("blocked");
+  });
+
+  it("fetchBlockPrivateIps=false 时内网 URL 放行（仅协议检查）", async () => {
+    const cfg = makeConfig({ flaresolverrUrl: base, fetchBlockPrivateIps: false });
+    const client = createFlareSolverrClient(cfg);
+    setBehavior({ status: "ok", response: "<html><body>ok</body></html>" });
+    const r = await client.requestGet("http://127.0.0.1:8080/");
+    expect(r.ok).toBe(true);
+  });
 });

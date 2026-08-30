@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import type { GatewayConfig } from "../config.js";
 import type { BrowserPool } from "./pool.js";
 import type { Logger } from "../logger.js";
+import { assertPublicHttpUrl } from "../fetch/ssrf.js";
 
 export interface RenderResult {
   ok: boolean;
@@ -24,6 +25,18 @@ export async function renderWithPlaywright(
 ): Promise<RenderResult> {
   if (!pool.enabled) {
     return { ok: false, errorMessage: "浏览器功能未启用（browser.enabled=false）" };
+  }
+  // SSRF：浏览器渲染会自行解析并访问 URL（含重定向），导航前校验
+  const check = await assertPublicHttpUrl(url, {
+    exemptCidrs: config.fetchPrivateIpExemptCidrs,
+    enabled: config.fetchBlockPrivateIps,
+  });
+  if (!check.ok) {
+    return {
+      ok: false,
+      errorMessage:
+        check.reason === "private_ip" ? `SSRF 防护：拒绝内网地址 ${url}` : `非法 URL: ${url}`,
+    };
   }
   try {
     const { page } = await pool.acquireSession();

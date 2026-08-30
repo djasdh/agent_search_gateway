@@ -1,6 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
+import { isPrivateHost } from "../fetch/ssrf.js";
 
 export class BrowserPoolError extends Error {}
 
@@ -45,12 +46,59 @@ export class BrowserPool {
   private ttlTimer: ReturnType<typeof setTimeout> | null = null;
   private sem: Semaphore;
   private closed = false;
+  /** hostname → 私网判定缓存（避免每个子资源请求都做 DNS 查询） */
+  private ssrfCache = new Map<string, { blocked: boolean; at: number }>();
+  private static readonly SSRF_CACHE_TTL_MS = 60_000;
+  private static readonly SSRF_CACHE_MAX = 500;
 
   constructor(
     private config: GatewayConfig,
     private logger: Logger,
   ) {
     this.sem = new Semaphore(config.browserMaxConcurrent);
+  }
+
+  /**
+   * route 级 SSRF 防护：拦截页面内所有请求（导航重定向/子资源），
+   * 非 http(s) 或解析为内网 IP 的一律 abort。
+   */
+  private async setupSsrfGuard(ctx: BrowserContext): Promise<void> {
+    if (!this.config.fetchBlockPrivateIps) return;
+    await ctx.route("**/*", async (route) => {
+      const url = route.request().url();
+      if (!/^https?:/i.test(url)) {
+        await route.abort().catch(() => {});
+        return;
+      }
+      let host: string;
+      try {
+        host = new URL(url).hostname;
+      } catch {
+        await route.abort().catch(() => {});
+        return;
+      }
+      const cached = this.ssrfCache.get(host);
+      let blocked: boolean;
+      if (cached && Date.now() - cached.at < BrowserPool.SSRF_CACHE_TTL_MS) {
+        blocked = cached.blocked;
+      } else {
+        try {
+          blocked = await isPrivateHost(host, {
+            exemptCidrs: this.config.fetchPrivateIpExemptCidrs,
+          });
+        } catch {
+          blocked = false;
+        }
+        this.ssrfCache.set(host, { blocked, at: Date.now() });
+        if (this.ssrfCache.size > BrowserPool.SSRF_CACHE_MAX) this.ssrfCache.clear();
+      }
+      if (blocked) {
+        this.logger.debug(`SSRF guard: 拦截内网请求 ${url}`);
+        await route.abort("blockedbyclient").catch(() => {});
+        return;
+      }
+      await route.continue().catch(() => {});
+    });
   }
 
   get enabled(): boolean {
@@ -118,6 +166,7 @@ export class BrowserPool {
       const browser = await this.ensureBrowser();
       if (!this.context) {
         this.context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+        await this.setupSsrfGuard(this.context);
       }
       if (!this.currentPage || this.currentPage.isClosed()) {
         this.currentPage = await this.context.newPage();

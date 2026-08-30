@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import type { GatewayConfig } from "../config.js";
 import type { BrowserPool } from "./pool.js";
 import type { Logger } from "../logger.js";
+import { assertPublicHttpUrl } from "../fetch/ssrf.js";
 import { pageScreenshot, pageSnapshot } from "./snapshot.js";
 
 export interface ToolResult {
@@ -28,6 +29,18 @@ export class BrowserTools {
 
   async navigate(url: string): Promise<ToolResult> {
     if (!this.pool.enabled) return errResult(new Error("浏览器功能未启用"));
+    // SSRF：浏览器会自行解析并访问 URL，导航前校验协议 + 内网
+    const check = await assertPublicHttpUrl(url, {
+      exemptCidrs: this.config.fetchPrivateIpExemptCidrs,
+      enabled: this.config.fetchBlockPrivateIps,
+    });
+    if (!check.ok) {
+      return errResult(
+        new Error(
+          check.reason === "private_ip" ? `SSRF 防护：拒绝内网地址 ${url}` : `非法 URL: ${url}`,
+        ),
+      );
+    }
     try {
       const { page } = await this.pool.acquireSession();
       await page.goto(url, { waitUntil: "networkidle", timeout: this.config.browserTimeoutMs });
