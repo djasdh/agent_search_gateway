@@ -1,4 +1,5 @@
 import { createServer as createHttpServer } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { GatewayConfig } from "../src/config.js";
@@ -151,5 +152,30 @@ describe("directFetch", () => {
     const r = await directFetch(cfg, "http://localhost:1/");
     expect(r.ok).toBe(false);
     expect(r.errorKind).toBe("blocked_private_ip");
+  });
+
+  it("SSRF：重定向到内网地址被拒绝（绕过防护）", async () => {
+    // 公网 URL → 302 → 内网 URL（如云 metadata），必须被拦截
+    const cfg = makeConfig({ fetchBlockPrivateIps: true, fetchTimeoutMs: 2000 });
+    const r = await directFetch(cfg, `${base}/redirect`);
+    expect(r.ok).toBe(false);
+    expect(r.errorKind).toBe("blocked_private_ip");
+  });
+
+  it("SSRF：重定向到非 http/https 协议被拒绝", async () => {
+    // location: file:///etc/passwd —— 重定向目标协议也要校验
+    const fileServer = createHttpServer((_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(302, { Location: "file:///etc/passwd" });
+      res.end();
+    });
+    await new Promise<void>((r) => fileServer.listen(0, "127.0.0.1", r));
+    const fileBase = `http://127.0.0.1:${(fileServer.address() as AddressInfo).port}`;
+    try {
+      const r = await directFetch(makeConfig(), `${fileBase}/x`);
+      expect(r.ok).toBe(false);
+      expect(r.errorKind).toBe("invalid_url");
+    } finally {
+      fileServer.close();
+    }
   });
 });

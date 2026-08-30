@@ -34,27 +34,19 @@ function isHtmlContentType(ct: string): boolean {
 }
 
 /**
- * 直接 HTTP 抓取目标 URL。
- * - 只收 text/html
- * - 流式读响应体到 max_bytes，超限截断并标注 truncated
- * - SSRF 防护：blockPrivateIps=true 时拒绝私网主机
- * - 跟随重定向（≤MAX_REDIRECTS）
+ * 校验 URL 是否允许抓取：协议必须 http/https，且（启用时）hostname 非内网。
+ * 初始 URL 与每次重定向目标都调用 —— 防止 302 跳转绕过 SSRF 检查直达内网。
  */
-export async function directFetch(
+async function checkUrlAllowed(
   config: GatewayConfig,
-  urlStr: string,
-): Promise<DirectFetchResult> {
-  let url: URL;
-  try {
-    url = new URL(urlStr);
-  } catch {
-    return { ok: false, errorKind: "invalid_url", errorMessage: `非法 URL: ${urlStr}` };
-  }
+  url: URL,
+): Promise<
+  | { ok: true }
+  | { ok: false; errorKind: "invalid_url" | "blocked_private_ip"; errorMessage: string }
+> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
-    return { ok: false, errorKind: "invalid_url", errorMessage: `仅支持 http/https: ${urlStr}` };
+    return { ok: false, errorKind: "invalid_url", errorMessage: `仅支持 http/https: ${url.toString()}` };
   }
-
-  // SSRF 防护
   if (config.fetchBlockPrivateIps) {
     let privateHost = false;
     try {
@@ -71,6 +63,32 @@ export async function directFetch(
         errorMessage: `SSRF 防护：拒绝内网地址 ${url.hostname}`,
       };
     }
+  }
+  return { ok: true };
+}
+
+/**
+ * 直接 HTTP 抓取目标 URL。
+ * - 只收 text/html
+ * - 流式读响应体到 max_bytes，超限截断并标注 truncated
+ * - SSRF 防护：blockPrivateIps=true 时拒绝私网主机
+ * - 跟随重定向（≤MAX_REDIRECTS）
+ */
+export async function directFetch(
+  config: GatewayConfig,
+  urlStr: string,
+): Promise<DirectFetchResult> {
+  let url: URL;
+  try {
+    url = new URL(urlStr);
+  } catch {
+    return { ok: false, errorKind: "invalid_url", errorMessage: `非法 URL: ${urlStr}` };
+  }
+
+  // SSRF 防护（初始 URL；重定向目标在循环内同样检查）
+  const initialCheck = await checkUrlAllowed(config, url);
+  if (!initialCheck.ok) {
+    return { ok: false, errorKind: initialCheck.errorKind, errorMessage: initialCheck.errorMessage };
   }
 
   const ua = config.fetchUserAgent && config.fetchUserAgent.length > 0 ? config.fetchUserAgent : DEFAULT_UA;
@@ -93,13 +111,27 @@ export async function directFetch(
       status = res.status;
       contentType = res.headers.get("content-type") ?? "";
 
-      // 重定向
+      // 重定向：先校验目标协议/内网，再继续（防 SSRF 跳板）
       if (status >= 300 && status < 400) {
         const loc = res.headers.get("location");
         if (!loc) {
           return { ok: false, errorKind: "http", status, errorMessage: `重定向无 location (${status})` };
         }
-        currentUrl = new URL(loc, currentUrl);
+        let nextUrl: URL;
+        try {
+          nextUrl = new URL(loc, currentUrl);
+        } catch {
+          return { ok: false, errorKind: "invalid_url", status, errorMessage: `重定向 location 非法: ${loc}` };
+        }
+        const nextCheck = await checkUrlAllowed(config, nextUrl);
+        if (!nextCheck.ok) {
+          return {
+            ok: false,
+            errorKind: nextCheck.errorKind,
+            errorMessage: `${nextCheck.errorMessage}（重定向目标 ${nextUrl.hostname}）`,
+          };
+        }
+        currentUrl = nextUrl;
         continue;
       }
 
