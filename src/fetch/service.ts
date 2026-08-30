@@ -44,6 +44,15 @@ function shouldUpgradeToFlareSolverr(config: GatewayConfig, direct: DirectFetchR
   return false;
 }
 
+/** max_chars 参数钳制上限：防止 agent 传超大值把整页塞进 LLM context */
+const MAX_OUTPUT_CHARS_LIMIT = 200000;
+
+function clampMaxChars(v: number | undefined, config: GatewayConfig): number | undefined {
+  if (v === undefined) return undefined;
+  if (v <= 0) return undefined;
+  return Math.min(v, MAX_OUTPUT_CHARS_LIMIT);
+}
+
 export function createFetchService(config: GatewayConfig, logger: Logger, browserPool?: BrowserPool): FetchService {
   const fsClient = createFlareSolverrClient(config);
   const cache = new FetchCache(config.fetchCacheMaxEntries, config.fetchCacheTtlMs);
@@ -69,7 +78,7 @@ export function createFetchService(config: GatewayConfig, logger: Logger, browse
   }
 
   async function fetch(params: FetchParams): Promise<FetchOutcome> {
-    const maxChars = params.maxChars;
+    const maxChars = clampMaxChars(params.maxChars, config);
 
     // 先查 direct 缓存
     const directCached = cachedGet("direct", params.url, maxChars);

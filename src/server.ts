@@ -144,7 +144,13 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
         "抓取一个网页 URL 并转换为 markdown。返回页面标题和正文的 markdown 文本，默认清理导航/广告，可保留链接/表格/代码块。",
       inputSchema: {
         url: z.string().url().describe("要抓取的网页 URL"),
-        max_chars: z.number().int().positive().optional().describe("输出 markdown 最大字符数"),
+        max_chars: z
+          .number()
+          .int()
+          .positive()
+          .max(200000)
+          .optional()
+          .describe("输出 markdown 最大字符数（上限 200000）"),
       },
     },
     async (args) => {
