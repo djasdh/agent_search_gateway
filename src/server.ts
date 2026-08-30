@@ -256,7 +256,16 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
 interface Session {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
+  lastSeenAt: number;
 }
+
+/**
+ * session 空闲过期：客户端崩溃/断连不发 DELETE 时回收 transport +
+ * 浏览器上下文，防 sessions Map 无限增长。客户端正常重连会重新
+ * initialize，不受影响。
+ */
+const SESSION_IDLE_TTL_MS = 60 * 60 * 1000; // 1 小时无活动
+const SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 每 5 分钟扫一次
 
 function isInitializeRequest(body: unknown): boolean {
   return (
@@ -352,6 +361,7 @@ export async function startHttpServer(
 
       if (sessionId && sessions.has(sessionId)) {
         const s = sessions.get(sessionId)!;
+        s.lastSeenAt = Date.now();
         transport = s.transport;
         mcpServer = s.server;
         logger.debug(`reusing session: ${sessionId}`);
@@ -360,7 +370,7 @@ export async function startHttpServer(
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
-            sessions.set(sid, { transport, server: mcpServer });
+            sessions.set(sid, { transport, server: mcpServer, lastSeenAt: Date.now() });
             logger.debug(`session initialized: ${sid}`);
           },
         });
@@ -440,6 +450,20 @@ export async function startHttpServer(
     httpServer.listen(config.port, config.host, () => resolve());
   });
 
+  // 空闲 session 清扫：过期即关闭 transport + 浏览器上下文
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [sid, s] of sessions) {
+      if (now - s.lastSeenAt > SESSION_IDLE_TTL_MS) {
+        sessions.delete(sid);
+        releaseBrowserSession(sid);
+        void s.transport.close().catch(() => {});
+        logger.debug(`session expired (idle > ${SESSION_IDLE_TTL_MS}ms): ${sid}`);
+      }
+    }
+  }, SESSION_SWEEP_INTERVAL_MS);
+  sweep.unref?.();
+
   const address = httpServer.address();
   const port = typeof address === "object" && address ? address.port : config.port;
   logger.info(`gateway listening on http://${config.host}:${port}/mcp`);
@@ -448,6 +472,7 @@ export async function startHttpServer(
     url: `http://${config.host}:${port}/mcp`,
     close: async () => {
       shutdown = true;
+      clearInterval(sweep);
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       for (const [, s] of sessions) {
         try {
