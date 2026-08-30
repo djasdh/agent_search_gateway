@@ -5,6 +5,7 @@ import { BrowserPool } from "../src/browser/pool.js";
 import { BrowserTools } from "../src/browser/tools.js";
 import type { GatewayConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
+import { mcpSessionContext } from "../src/utils/session-context.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -107,6 +108,33 @@ describe("BrowserTools（真实 playwright）", () => {
 
   afterAll(async () => {
     await pool.closeAll();
+  });
+
+  it("不同 MCP session 的浏览器上下文互相隔离", async () => {
+    // session A 打开页面（写 cookie）；session B 应有独立 context，看不到 A 的 cookie
+    const rA = await mcpSessionContext.run("session-a", () => tools.navigate(base));
+    expect(rA.ok).toBe(true);
+    await mcpSessionContext.run("session-a", async () => {
+      const { page } = await pool.acquireSession();
+      await page.evaluate(() => (document.cookie = "user=a"));
+      expect(await page.evaluate(() => document.cookie)).toContain("user=a");
+    });
+    await mcpSessionContext.run("session-b", async () => {
+      // B 自己打开页面后读取 cookie（about:blank 上读 cookie 会 SecurityError）
+      const r = await tools.navigate(base);
+      expect(r.ok).toBe(true);
+      const { page } = await pool.acquireSession();
+      expect(await page.evaluate(() => document.cookie)).not.toContain("user=a");
+    });
+  });
+
+  it("browser_close 只清理当前 session 的上下文", async () => {
+    await mcpSessionContext.run("session-close", () => tools.navigate(base));
+    const r = await mcpSessionContext.run("session-close", () => tools.close());
+    expect(r.ok).toBe(true);
+    // 关闭后再次使用应自动重建（共享 browser 进程仍在）
+    const r2 = await mcpSessionContext.run("session-close", () => tools.navigate(base));
+    expect(r2.ok).toBe(true);
   });
 
   it("navigate 返回无障碍树", async () => {

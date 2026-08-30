@@ -2,10 +2,20 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { isPrivateHost } from "../fetch/ssrf.js";
+import { mcpSessionContext } from "../utils/session-context.js";
 
 export class BrowserPoolError extends Error {}
 
 export interface BrowserSession {
+  page: Page;
+  lastActiveAt: number;
+}
+
+/** 无 sessionId（fetch 渲染路径）使用的共享 context 键 */
+const SHARED_KEY = "__shared__";
+
+interface SessionState {
+  context: BrowserContext;
   page: Page;
   lastActiveAt: number;
 }
@@ -40,8 +50,10 @@ class Semaphore {
  */
 export class BrowserPool {
   private browsers: Browser[] = [];
-  private context: BrowserContext | null = null;
-  private currentPage: Page | null = null;
+  /** 共享 context（fetch 渲染等无 sessionId 的场景） */
+  private shared: SessionState | null = null;
+  /** per-session context：browser_* 工具按 MCP sessionId 隔离 */
+  private sessions = new Map<string, SessionState>();
   private lastActiveAt = 0;
   private ttlTimer: ReturnType<typeof setTimeout> | null = null;
   private sem: Semaphore;
@@ -159,32 +171,70 @@ export class BrowserPool {
     await this.closeAll();
   }
 
-  /** 获取一个 page（会话）。TTL 复位。并发受信号量保护。 */
+  /** 创建新 context（含 SSRF route guard）。 */
+  private async newContext(): Promise<BrowserContext> {
+    const browser = await this.ensureBrowser();
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+    await this.setupSsrfGuard(ctx);
+    return ctx;
+  }
+
+  /**
+   * 获取一个 page（会话）。TTL 复位。并发受信号量保护。
+   * 有 mcpSessionContext 时按 sessionId 隔离（每个 MCP 客户端独立
+   * context/page，cookie 与浏览状态互不可见）；否则用共享 context
+   * （fetch 渲染路径）。
+   */
   async acquireSession(): Promise<BrowserSession> {
     const release = await this.sem.acquire();
     try {
-      const browser = await this.ensureBrowser();
-      if (!this.context) {
-        this.context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-        await this.setupSsrfGuard(this.context);
+      const sessionId = mcpSessionContext.getStore();
+      let state: SessionState | undefined;
+      if (sessionId) {
+        state = this.sessions.get(sessionId);
+        if (state && (state.page.isClosed() || !state.context.pages().includes(state.page))) {
+          // 页面被意外关闭，重建 page（context 保留，保住 cookie/存储）
+          state = undefined;
+        }
+        if (!state) {
+          const context = await this.newContext();
+          state = { context, page: await context.newPage(), lastActiveAt: 0 };
+          this.sessions.set(sessionId, state);
+        }
+      } else {
+        if (this.shared && (this.shared.page.isClosed() || !this.shared.context.pages().includes(this.shared.page))) {
+          this.shared = null;
+        }
+        if (!this.shared) {
+          const context = await this.newContext();
+          this.shared = { context, page: await context.newPage(), lastActiveAt: 0 };
+        }
+        state = this.shared;
       }
-      if (!this.currentPage || this.currentPage.isClosed()) {
-        this.currentPage = await this.context.newPage();
-      }
+      state.lastActiveAt = Date.now();
       this.lastActiveAt = Date.now();
       this.resetTtl();
-      return { page: this.currentPage, lastActiveAt: this.lastActiveAt };
+      return { page: state.page, lastActiveAt: state.lastActiveAt };
     } finally {
       release();
     }
   }
 
-  /** 关闭当前会话页面（browser_close 工具用） */
+  /**
+   * 关闭当前 MCP 会话的页面+context（browser_close 工具用）。
+   * 只影响调用方会话，不动其它客户端，也不关共享渲染 context。
+   */
   async closeSession(): Promise<void> {
-    if (this.currentPage && !this.currentPage.isClosed()) {
-      await this.currentPage.close().catch(() => {});
+    const sessionId = mcpSessionContext.getStore();
+    if (sessionId && this.sessions.has(sessionId)) {
+      const state = this.sessions.get(sessionId)!;
+      this.sessions.delete(sessionId);
+      try {
+        await state.context.close();
+      } catch {
+        /* ignore */
+      }
     }
-    this.currentPage = null;
   }
 
   async closeAll(): Promise<void> {
@@ -195,8 +245,8 @@ export class BrowserPool {
       await b.close().catch(() => {});
     }
     this.browsers = [];
-    this.context = null;
-    this.currentPage = null;
+    this.shared = null;
+    this.sessions.clear();
     this.closed = false; // 允许重新创建
   }
 

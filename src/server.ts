@@ -11,6 +11,7 @@ import { createFetchService } from "./fetch/service.js";
 import { getHealth } from "./health.js";
 import type { Logger } from "./logger.js";
 import { createSearchService } from "./search/service.js";
+import { mcpSessionContext } from "./utils/session-context.js";
 
 export const GATEWAY_VERSION = "0.1.0";
 
@@ -294,6 +295,12 @@ export async function startHttpServer(
 
   const sessions = new Map<string, Session>();
   let shutdown = false;
+  // session 结束时同步清理对应的浏览器上下文（context/page），防泄漏
+  const releaseBrowserSession = (sessionId: string) => {
+    const pool = sharedBrowserPool;
+    if (!pool) return;
+    void mcpSessionContext.run(sessionId, () => pool.closeSession()).catch(() => {});
+  };
 
   const httpServer = createHttp(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -342,6 +349,7 @@ export async function startHttpServer(
         transport.onclose = () => {
           if (transport.sessionId) {
             sessions.delete(transport.sessionId);
+            releaseBrowserSession(transport.sessionId);
           }
         };
         await mcpServer.connect(transport);
@@ -356,7 +364,10 @@ export async function startHttpServer(
       }
 
       try {
-        await transport.handleRequest(req, res, body);
+        // 注入 sessionId 到 AsyncLocalStorage：browser_* 工具据此隔离上下文
+        await mcpSessionContext.run(sessionId ?? undefined, () =>
+          transport.handleRequest(req, res, body),
+        );
       } catch (err) {
         logger.error(`transport handleRequest failed: ${String(err)}`);
         if (!res.headersSent) {
@@ -373,7 +384,9 @@ export async function startHttpServer(
         return;
       }
       try {
-        await sessions.get(sessionId)!.transport.handleRequest(req, res, undefined);
+        await mcpSessionContext.run(sessionId ?? undefined, () =>
+          sessions.get(sessionId)!.transport.handleRequest(req, res, undefined),
+        );
       } catch (err) {
         logger.error(`GET /mcp failed: ${String(err)}`);
         if (!res.headersSent) {
@@ -388,6 +401,7 @@ export async function startHttpServer(
       if (sessionId && sessions.has(sessionId)) {
         const s = sessions.get(sessionId)!;
         sessions.delete(sessionId);
+        releaseBrowserSession(sessionId);
         try {
           await s.transport.close();
         } catch (err) {

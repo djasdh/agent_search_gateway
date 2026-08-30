@@ -126,7 +126,8 @@ export class BrowserTools {
 
   async close(): Promise<ToolResult> {
     try {
-      await this.pool.closeAll();
+      // 只关当前 MCP 会话的 context/page，不动共享渲染上下文与其它客户端
+      await this.pool.closeSession();
       return okText("浏览器会话已关闭，资源已释放");
     } catch (err) {
       return errResult(err);
