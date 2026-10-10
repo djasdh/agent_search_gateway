@@ -3,6 +3,8 @@ dist/
 .env
 *.log
 data/adblock/hosts
+# 实例配置（含环境相关项，不入库；模板见 gateway.yaml.example）
+gateway.yaml
 .tmp/
 # callgraph 生成产物/调试工具
 docs/callgraph.mmd
