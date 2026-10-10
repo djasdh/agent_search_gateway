@@ -21,6 +21,11 @@ describe("isPrivateIp", () => {
     "::1",
     "fc00::1",
     "fe80::1",
+    // v4-mapped：曾因过不了 hex 校验而判为非私有
+    "::ffff:127.0.0.1",
+    "::ffff:10.0.0.1",
+    "::ffff:7f00:1",
+    "0:0:0:0:0:ffff:7f00:1",
   ];
   const pub = [
     "93.184.216.34",
@@ -29,6 +34,7 @@ describe("isPrivateIp", () => {
     "172.32.0.1", // 172.32 不在 172.16/12 内
     "198.18.0.136",
     "2606:4700::6810:84e5",
+    "::ffff:8.8.8.8", // v4-mapped 的公网地址不该被误拦
   ];
 
   it("私有 IP 判定为私有", () => {
@@ -111,5 +117,22 @@ describe("isPrivateHost", () => {
   it("域名解析出私网 IP 时判定为私有", async () => {
     mocks.lookup.mockResolvedValue([{ address: "10.0.0.5", family: 4 }]);
     expect(await isPrivateHost("intranet.example.com")).toBe(true);
+  });
+
+  it("方括号 IPv6 / v4-mapped 一律判私有（曾可绕过 SSRF 防护直达内网）", async () => {
+    // URL.hostname 对 IPv6 字面量返回带方括号的字符串，lookup 必然抛错；
+    // 旧实现走 catch 的"解析失败按非私有"分支 → directFetch 可直连 127.0.0.1。
+    const hosts = [
+      "[::ffff:127.0.0.1]",
+      "[::ffff:7f00:1]",
+      "[0:0:0:0:0:ffff:7f00:1]",
+      "[::ffff:10.0.0.1]",
+      "[::1]",
+    ];
+    for (const h of hosts) expect(await isPrivateHost(h), h).toBe(true);
+  });
+
+  it("v4-mapped 的公网地址不被误判为私有", async () => {
+    expect(await isPrivateHost("[::ffff:8.8.8.8]")).toBe(false);
   });
 });

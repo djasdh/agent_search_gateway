@@ -19,6 +19,38 @@ export const DEFAULT_EXEMPT_CIDRS = [
   "fdfe:dcba:9876::/64",
 ];
 
+/**
+ * 归一化 hostname：URL.hostname 对 IPv6 字面量会**保留方括号**
+ * （new URL("http://[::1]/").hostname === "[::1]"），带括号的主机名
+ * DNS 解析必然失败，会让"解析失败按非私有"的兜底放行。统一剥离，
+ * 顺带去掉 FQDN 尾点并转小写。
+ */
+export function normalizeHostname(hostname: string): string {
+  return hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
+}
+
+function hexPairToDotted(hiHex: string, loHex: string): string {
+  const hi = parseInt(hiHex, 16);
+  const lo = parseInt(loHex, 16);
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+}
+
+/**
+ * 把 IPv4-mapped IPv6 归一化为点分 IPv4：::ffff:127.0.0.1 / ::ffff:7f00:1 /
+ * 0:0:0:0:0:ffff:7f00:1。否则这类地址既不匹配任何 IPv4 段（含点段过不了
+ * hex 校验），也不匹配 ::1，会被判为非私有。
+ */
+export function unwrapV4Mapped(ip: string): string {
+  const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(ip);
+  if (dotted) return dotted[1];
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
+  if (hex) return hexPairToDotted(hex[1], hex[2]);
+  // 全写形式：0:0:0:0:0:ffff:aabb:ccdd（URL 通常会压缩成 ::ffff:xxxx:xxxx，但别依赖）
+  const full = /^(?:0{1,4}:){5}ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
+  if (full) return hexPairToDotted(full[1], full[2]);
+  return ip;
+}
+
 function ipToBigInt(ip: string): bigint | null {
   // 支持 IPv4 和 IPv6
   if (ip.includes(".") && !ip.includes(":")) {
@@ -77,11 +109,17 @@ function ipInCidr(ip: string, cidr: string): boolean {
 }
 
 export function isPrivateIp(ip: string, exemptCidrs: string[] = []): boolean {
-  const normalized = ip.replace(/^\[|\]$/g, "").split("%")[0];
+  const normalized = unwrapV4Mapped(ip.replace(/^\[|\]$/g, "").split("%")[0]);
   if (normalized === "::1") return true;
   // 命中豁免段视为非私有（如 Clash fake-ip）
   if (exemptCidrs.some((cidr) => ipInCidr(normalized, cidr))) return false;
   return PRIVATE_CIDRS.some((cidr) => ipInCidr(normalized, cidr));
+}
+
+/** IPv4 / IPv6 字面量判定（不含域名）。 */
+function isIpLiteral(host: string): boolean {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true;
+  return host.includes(":") && /^[0-9a-f:.]+$/.test(host);
 }
 
 /** 解析 hostname 的所有 A/AAAA 记录，任一为私网 IP 即视为私有（SSRF 防护）。 */
@@ -90,12 +128,18 @@ export async function isPrivateHost(
   opts: { exemptCidrs?: string[] } = {},
 ): Promise<boolean> {
   const exemptCidrs = opts.exemptCidrs ?? DEFAULT_EXEMPT_CIDRS;
-  if (hostname === "localhost") return true;
+  // URL.hostname 对 IPv6 字面量保留方括号（"[::1]"），先归一化再判断/解析
+  const host = normalizeHostname(hostname);
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  // IP 字面量直接判定，不走 DNS：否则带括号/带点段的形式会让 lookup 抛错，
+  // 落进下面的 catch 被当成"非私有"放行
+  if (isIpLiteral(host)) return isPrivateIp(host, exemptCidrs);
   try {
-    const records = await lookup(hostname, { all: true });
+    const records = await lookup(host, { all: true });
     return records.some((r) => isPrivateIp(r.address, exemptCidrs));
   } catch {
-    // 解析失败：保守起见视为不可解析（由调用方决定）
+    // 解析失败仍放行：纯域名在请求阶段同样会解析失败，不构成 SSRF 通道；
+    // 真正的绕过入口（IP 字面量）已在上方直接判定。
     return false;
   }
 }
