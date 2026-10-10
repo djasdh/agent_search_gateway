@@ -2,7 +2,7 @@
 
 统一搜索/抓取网关：一个 **MCP server（HTTP transport）**，把搜索、网页抓取、浏览器交互封装成稳定的 agent 工具。
 
-面向 3.8GB 小服务器，全自托管，轻量。已完成 P0–P5 全部阶段。
+面向 3.8GB 小服务器，全自托管，轻量。
 
 ## 架构
 
@@ -11,10 +11,10 @@ Agent（hermes / OpenCode / my-agent-core / 其它 MCP client）
   │  MCP over HTTP
   ▼
 gateway (本服务, :3000/mcp)
-  ├─ search → searxng (:8888) → 清洗/广告过滤/缓存 → 纯 md
+  ├─ search → searxng (:8890) → 清洗/广告过滤/缓存 → 纯 md
   ├─ fetch  → 智能路由：
   │     ① direct（普通站，HTML→md）
-  │     ② FlareSolverr (:8192)（CF 挑战/JS 站渲染）
+  │     ② FlareSolverr (:8191)（CF 挑战/JS 站渲染）
   │     ③ playwright（复杂 SPA 渲染）
   │     fetch 缓存按渲染方式隔离
   ├─ browser_* → 内嵌 playwright（agent 交互：navigate/click/type/scroll/find/screenshot）
@@ -61,8 +61,9 @@ gateway (本服务, :3000/mcp)
 ## 快速开始
 
 ```bash
-cd ~/Projects/agent_search_gateway
-npm install
+git clone https://github.com/djasdh/agent_search_gateway.git
+cd agent_search_gateway
+npm ci                             # 有 package-lock.json，用 ci 可复现
 npx playwright install chromium    # 首次安装浏览器
 cp gateway.yaml.example gateway.yaml
 ./scripts/gateway.sh start           # 启动三件套（searxng/flaresolverr/gateway）
@@ -157,15 +158,23 @@ browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufo
 ./scripts/bench.sh                                    # 本机压测（内存/延迟）
 ```
 
-依赖组件目录（固定约定）：
-- `~/Projects/searxng`（含 searxng.sh）
-- `~/Projects/FlareSolverr`（源码 + .venv，需 conda Xvfb 在 PATH）
+`scripts/gateway.sh` 管理三件套，前置期望（脚本内路径可改）：
+- searxng 源码在 `$HOME/Projects/searxng`（含 `searxng.sh`）
+- FlareSolverr 源码在 `$HOME/Projects/FlareSolverr`（含 .venv，需 conda Xvfb 在 PATH）
+
+> 若你已有自己的 searxng / FlareSolverr（或跑在容器里），不必用 gateway.sh：
+> 直接在 `gateway.yaml` 里把 `searxng.url` / `flaresolverr.url` 指向它们，
+> 然后 `npm run build && npm start` 只跑网关本身即可。
 
 ## 测试与压测
 
-- `npm test`：80 个测试（单元 + 集成 + 真实 playwright 浏览器）
+- `npm test`：107 个测试（17 个测试文件）
 - `scripts/bench.sh`：测量各组件内存/延迟，验证 3.8GB 预算
 
 实测（本机模拟）：
 - 空闲内存 ~450MB；搜索后 ~460MB；浏览器工作时 ~1GB；关闭后回落
 - 搜索延迟 0.7-3s；fetch 1.9-6.7s（首次）；browser_navigate 13.6s（冷启动）
+
+---
+
+许可证：[MIT](LICENSE)　·　第三方依赖、外部服务与借鉴来源：[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
