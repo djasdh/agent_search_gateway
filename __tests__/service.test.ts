@@ -106,8 +106,9 @@ describe("createSearchService", () => {
     // 元数据置顶
     expect(text).toContain("direct answer here");
     expect(text).toContain("sug1");
-    // unresponsive 提示
-    expect(text).toContain("brave");
+    // 抑制不可用引擎提示（静默降级，对用户隐藏）
+    expect(text).not.toContain("brave");
+    expect(text).not.toContain("部分引擎暂不可用");
   });
 
   it("缓存：第二次命中", async () => {

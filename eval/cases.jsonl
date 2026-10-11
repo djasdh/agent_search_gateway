@@ -1,0 +1,35 @@
+{"id":"zh-a1","category":"zh-authority","query":"故宫博物院 官方网站 开放时间","expect":["dpm.org.cn","wikipedia.org"]}
+{"id":"zh-a2","category":"zh-authority","query":"民法典 全文 官方 发布","expect":["gov.cn","npc.gov.cn"]}
+{"id":"zh-a3","category":"zh-authority","query":"中国国家统计局 2024年 GDP 数据","expect":["stats.gov.cn","gov.cn"]}
+{"id":"zh-a4","category":"zh-authority","query":"嫦娥六号 月球背面 采样 官方","expect":["gov.cn","cnsa.gov.cn","cas.cn"]}
+{"id":"zh-a5","category":"zh-authority","query":"中国人民银行 贷款市场报价利率 LPR","expect":["pbc.gov.cn","gov.cn"]}
+{"id":"zh-a6","category":"zh-authority","query":"教育部 高考 改革 政策 官方","expect":["moe.gov.cn"]}
+{"id":"zh-a7","category":"zh-authority","query":"中国气象局 台风 预警 官方","expect":["cma.gov.cn","weather.com.cn"]}
+{"id":"zh-a8","category":"zh-authority","query":"量子纠缠 原理 百科","expect":["wikipedia.org","baike.baidu.com"]}
+
+{"id":"zh-u1","category":"zh-ugc","query":"知乎 如何评价 新能源汽车 冬季 续航","expect":["zhihu.com"]}
+{"id":"zh-u2","category":"zh-ugc","query":"小红书 露营 装备 清单 推荐","expect":["xiaohongshu.com"]}
+{"id":"zh-u3","category":"zh-ugc","query":"豆瓣电影 Top250 榜单","expect":["douban.com","movie.douban.com"]}
+{"id":"zh-u4","category":"zh-ugc","query":"贴吧 显卡 性价比 讨论 2025","expect":["tieba.baidu.com"]}
+{"id":"zh-u5","category":"zh-ugc","query":"知乎 考研 数学 复习 经验 分享","expect":["zhihu.com"]}
+{"id":"zh-u6","category":"zh-ugc","query":"B站 机器学习 入门 教程","expect":["bilibili.com"]}
+{"id":"zh-u7","category":"zh-ugc","query":"CSDN Spring Boot 启动报错 排查","expect":["csdn.net","blog.csdn.net"]}
+{"id":"zh-u8","category":"zh-ugc","query":"知乎 上海 落户 政策 经验","expect":["zhihu.com"]}
+
+{"id":"en-t1","category":"en-tech","query":"React useEffect cleanup function example","expect":["react.dev"]}
+{"id":"en-t2","category":"en-tech","query":"python asyncio gather return_exceptions","expect":["docs.python.org"]}
+{"id":"en-t3","category":"en-tech","query":"kubernetes pod pending unschedulable troubleshooting","expect":["kubernetes.io"]}
+{"id":"en-t4","category":"en-tech","query":"TypeScript generic constraint keyof example","expect":["typescriptlang.org"]}
+{"id":"en-t5","category":"en-tech","query":"Attention Is All You Need paper arxiv","expect":["arxiv.org"]}
+{"id":"en-t6","category":"en-tech","query":"docker compose healthcheck depends_on condition","expect":["docs.docker.com"]}
+{"id":"en-t7","category":"en-tech","query":"postgresql jsonb GIN index performance","expect":["postgresql.org"]}
+{"id":"en-t8","category":"en-tech","query":"rust borrow checker error E0502","expect":["doc.rust-lang.org","rust-lang.org"]}
+
+{"id":"news-1","category":"news","query":"OpenAI 最新 模型 发布","expect":["openai.com","reuters.com","techcrunch.com"],"params":{"time_range":"month"}}
+{"id":"news-2","category":"news","query":"英伟达 最新 财报 营收","expect":["reuters.com","cnbc.com","nvidia.com"],"params":{"time_range":"month"}}
+{"id":"news-3","category":"news","query":"全国 台风 最新 路径 预警","expect":["weather.com.cn","cma.gov.cn","cctv.com"]}
+{"id":"news-4","category":"news","query":"国际油价 最新 走势 OPEC 减产","expect":["reuters.com","bloomberg.com"],"params":{"time_range":"week"}}
+{"id":"news-5","category":"news","query":"中国 新能源汽车 月度 销量 数据","expect":["caam.org.cn","reuters.com","gasgoo.com"],"params":{"time_range":"month"}}
+{"id":"news-6","category":"news","query":"人工智能 监管 立法 最新 进展","expect":["reuters.com","gov.cn","thepaper.cn"],"params":{"time_range":"month"}}
+{"id":"news-7","category":"news","query":"苹果 新品 发布会 最新","expect":["apple.com","theverge.com","reuters.com"],"params":{"time_range":"month"}}
+{"id":"news-8","category":"news","query":"世界杯 预选赛 最新 赛况","expect":["fifa.com","espn.com","bbc.com"],"params":{"time_range":"week"}}

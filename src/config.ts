@@ -1,7 +1,15 @@
 import { readFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+
+/** 展开路径开头的 `~` 为当前用户 home（配置文件里的可读写法）。 */
+function expandHome(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return resolve(homedir(), p.slice(2));
+  return p;
+}
 
 const configSchema = z.object({
   gateway: z.object({
@@ -45,6 +53,11 @@ const configSchema = z.object({
       cache_ttl_ms: z.number().int().positive().default(300000),
       cache_max_entries: z.number().int().positive().default(200),
       max_concurrent: z.number().int().positive().max(16).default(2),
+      engines: z.array(z.string()).default([]),
+      fanout_default: z.number().int().min(1).max(8).default(1),
+      quota_enabled: z.boolean().default(true),
+      quota_ledger_path: z.string().default("~/.config/agent-search/quota.json"),
+      quota_tight_threshold: z.number().min(0).max(1).default(0.1),
     })
     .catch({
       max_results: 10,
@@ -52,6 +65,11 @@ const configSchema = z.object({
       cache_ttl_ms: 300000,
       cache_max_entries: 200,
       max_concurrent: 2,
+      engines: [],
+      fanout_default: 1,
+      quota_enabled: true,
+      quota_ledger_path: "~/.config/agent-search/quota.json",
+      quota_tight_threshold: 0.1,
     }),
   rerank: z
     .object({
@@ -161,6 +179,11 @@ export interface GatewayConfig {
   searchCacheTtlMs: number;
   searchCacheMaxEntries: number;
   searchMaxConcurrent: number;
+  searchEngines: string[];
+  searchFanoutDefault: number;
+  searchQuotaEnabled: boolean;
+  searchQuotaLedgerPath: string;
+  searchQuotaTightThreshold: number;
   rerankEnabled: boolean;
   rerankEngineBoost: Record<string, number>;
   adFilterEnabled: boolean;
@@ -252,6 +275,11 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     searchCacheTtlMs: v.search.cache_ttl_ms,
     searchCacheMaxEntries: v.search.cache_max_entries,
     searchMaxConcurrent: v.search.max_concurrent,
+    searchEngines: v.search.engines,
+    searchFanoutDefault: v.search.fanout_default,
+    searchQuotaEnabled: v.search.quota_enabled,
+    searchQuotaLedgerPath: expandHome(v.search.quota_ledger_path),
+    searchQuotaTightThreshold: v.search.quota_tight_threshold,
     rerankEnabled: v.rerank.enabled,
     rerankEngineBoost: v.rerank.engine_boost,
     adFilterEnabled: v.ad_filter.enabled,

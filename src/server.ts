@@ -120,6 +120,13 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
         engines: z.string().optional().describe("指定搜索引擎，逗号分隔"),
         min_score: z.number().min(0).max(1).optional().describe("最低相关度分数 0-1"),
         num_results: z.number().int().min(1).max(20).optional().describe("返回结果条数上限"),
+        fanout: z
+          .number()
+          .int()
+          .min(1)
+          .max(4)
+          .optional()
+          .describe("扇出引擎数量：同时查询的引擎家数（默认 1，仅一家；无结果/不可用时自动静默降级换下一家）"),
       },
     },
     async (args) => {
@@ -130,6 +137,7 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
         safeSearch: args.safesearch,
         categories: args.categories,
         engines: args.engines,
+        fanout: args.fanout,
         minScore: args.min_score,
         numResults: args.num_results,
       });

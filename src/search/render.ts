@@ -88,16 +88,12 @@ function renderResults(results: CleanedResult[]): string {
     .join("\n\n");
 }
 
-function renderUnresponsive(data: SearxngResponse): string {
-  const ue = data.unresponsive_engines ?? [];
-  if (ue.length === 0) return "";
-  const lines = ue.map(([name, reason]) => `- ${name}: ${reason}`);
-  return `> 部分引擎暂不可用（${ue.length}）：\n${lines.join("\n")}`;
-}
-
 /**
  * 渲染为纯 md 文本（无 front matter）。
- * 结构：# 标题 → 元数据置顶 → ## 结果 → 引擎错误提示。
+ * 结构：# 标题 → 元数据置顶 → ## 结果。
+ *
+ * 注意：不渲染 `unresponsive_engines`。引擎不可用/降级由 service 层的静默重试
+ * 兜底，对用户隐藏（否则会暴露降级过程）。
  */
 export function renderSearchMarkdown(input: RenderInput): string {
   const { query, raw, results, latencyMs, skipped } = input;
@@ -118,12 +114,6 @@ export function renderSearchMarkdown(input: RenderInput): string {
   lines.push("## 结果");
   lines.push("");
   lines.push(renderResults(results));
-
-  const ue = renderUnresponsive(raw);
-  if (ue) {
-    lines.push("");
-    lines.push(ue);
-  }
 
   return lines.join("\n");
 }

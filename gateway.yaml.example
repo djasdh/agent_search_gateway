@@ -31,6 +31,14 @@ search:
   cache_ttl_ms: 300000    # 5 分钟
   cache_max_entries: 200
   max_concurrent: 2       # 搜索并发信号量
+  # API 引擎优先级：默认轮换 / 静默降级的候选顺序（searxng 侧 disabled 的引擎会被自动跳过）
+  engines: [youcom, exaapi, tavily, firecrawl]
+  fanout_default: 1       # 默认扇出 1 家；选中引擎无结果/不可用时自动换下一家
+  # §9 配额台账（searxng quota 插件写入，网关消费）：
+  #   剔除已耗尽引擎；fanout>1 时按剩余额度降序取前 N；整体余额紧张时扇出压回 1
+  quota_enabled: true
+  quota_ledger_path: ~/.config/agent-search/quota.json
+  quota_tight_threshold: 0.1   # 候选引擎整体剩余占比低于该值 → 扇出压回 1
 
 rerank:
   enabled: true
