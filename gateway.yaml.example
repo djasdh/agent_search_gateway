@@ -31,14 +31,19 @@ search:
   cache_ttl_ms: 300000    # 5 分钟
   cache_max_entries: 200
   max_concurrent: 2       # 搜索并发信号量
-  # API 引擎优先级：默认轮换 / 静默降级的候选顺序（searxng 侧 disabled 的引擎会被自动跳过）
-  engines: [youcom, exaapi, tavily, firecrawl]
-  fanout_default: 1       # 默认扇出 1 家；选中引擎无结果/不可用时自动换下一家
+  # 引擎分档：
+  #   resident 每次查询都叠加（额度接近耗尽才移出）；rotating 按 fanout 轮换、失败静默换下一家。
+  #   （也兼容旧写法：engines: [a, b, c] 平铺数组 == 全部轮换、resident 为空。）
+  engines:
+    resident: [zhihu, "zhihu web", bilibili]
+    rotating: [exaapi, tavily, firecrawl]
+  fanout_default: 1       # 默认扇出 1 家；选中引擎无结果/不可用时自动换下一家（仅作用于 rotating）
   # §9 配额台账（searxng quota 插件写入，网关消费）：
   #   剔除已耗尽引擎；fanout>1 时按剩余额度降序取前 N；整体余额紧张时扇出压回 1
   quota_enabled: true
   quota_ledger_path: ~/.config/agent-search/quota.json
   quota_tight_threshold: 0.1   # 候选引擎整体剩余占比低于该值 → 扇出压回 1
+  resident_quota_floor: 0.2    # resident 引擎剩余占比低于该值 → 从常住档移出
 
 rerank:
   enabled: true
@@ -47,7 +52,7 @@ rerank:
   # key 用 searxng 注册名（JSON engine 字段），非 settings.yml 的 name；
   # 默认 1.0，不配 = 按原始 score 排序。
   engine_boost:
-    bilibili: 1.2
+    bilibili: 1.0
     "google cse": 1.0
     bing: 1.0
     duckduckgo: 1.0
@@ -57,6 +62,21 @@ rerank:
     stackoverflow: 1.0
     reddit: 1.0
     news: 1.0
+
+  # 多样性重排层（语义向量就绪时生效；embedding/corpus 关闭则降级为引擎分顺序）：
+  #   MMR 贪心去冗余 + 同注册域(eTLD+1)上限，压住「同一来源占满 top-k」。
+  #   λ=1 → MMR 项失效，仅保留同域上限；先按综合分排序再按上限选择。
+  diversity:
+    enabled: true
+    mmr_lambda: 1.0        # 0=全多样，1=全相关（λ=1 时 MMR 项失效，只剩同域上限）
+    max_per_domain: 3      # 同一注册域最多几条
+
+  # 权威重排层（语义向量就绪时生效）：最终分 = rel_norm + weight·auth。
+  #   auth 按注册域/主机名的类别给分（gov/edu/官方文档≈0.95、可信大站≈0.7、UGC≈0.35、未知 0.5）。
+  #   与 diversity 正交：关闭时行为严格等于纯 cosine 序。默认关闭。
+  authority:
+    enabled: true
+    weight: 0.5            # 权威分权重；0=不生效
 
 ad_filter:
   enabled: true
@@ -118,6 +138,7 @@ embedding:                 # 文本向量来源（外部服务），独立于 se
   dim: 0                   # 0=启动探针解析；>0 直接采用
   timeout_ms: 5000
   batch_size: 32
+  concurrency: 4           # 单次 embed 内并发批次数上限（≥1，默认 4）
   max_input_chars: 2000
   # 非空则覆盖内置模型 profile（如 e5 需 query:/passage: 前缀）
   query_prefix: ""

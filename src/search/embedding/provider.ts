@@ -36,6 +36,8 @@ export interface EmbeddingProviderOptions {
   dim: number;
   timeoutMs: number;
   batchSize: number;
+  /** 单次 embed 内并发批次数上限（≥1，内部再以批总数收口）；缺省 4。 */
+  concurrency?: number;
   maxInputChars: number;
   /** 非空则覆盖内置 profile。 */
   queryPrefix?: string;
@@ -66,6 +68,7 @@ export function createEmbeddingProvider(
 ): EmbeddingProvider {
   const baseUrl = opts.baseUrl.replace(/\/+$/, "");
   const batchSize = Math.max(1, opts.batchSize);
+  const concurrency = Math.max(1, opts.concurrency ?? 4);
   const prefixes = resolvePrefixes(opts.model, {
     queryPrefix: opts.queryPrefix,
     passagePrefix: opts.passagePrefix,
@@ -153,28 +156,47 @@ export function createEmbeddingProvider(
       return { ok: true, vectors: [], dim: resolvedDim };
     }
     const inputs = texts.map((t) => withPrefix(t, kind));
-    const vectors: Float32Array[] = [];
+    const batchCount = Math.ceil(inputs.length / batchSize);
+    const vectors: Float32Array[] = new Array(inputs.length);
 
-    for (let i = 0; i < inputs.length; i += batchSize) {
-      const r = await requestBatch(inputs.slice(i, i + batchSize));
-      if (!r.ok) {
-        logger?.debug(`embedding 失败: ${r.error.kind} ${r.error.message}`);
-        return r;
-      }
-      for (const v of r.vectors) {
-        if (resolvedDim === 0) {
-          resolvedDim = v.length;
-        } else if (v.length !== resolvedDim) {
-          return {
-            ok: false,
-            error: { kind: "dim_mismatch", message: `embedding 维度 ${v.length} ≠ 期望 ${resolvedDim}` },
-          };
+    // 有限并发：同时最多 `concurrency` 批。每批结果按**批序号**回填到
+    // `vectors[start + j]`，与完成先后无关，故顺序与入参严格一致。
+    // 任一批失败即短路（后续批次不再发出），返回首个错误 → 调用方整体降级。
+    let nextBatch = 0;
+    let failure: { ok: false; error: EmbedError } | null = null;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        if (failure) return;
+        const idx = nextBatch++;
+        if (idx >= batchCount) return;
+        const start = idx * batchSize;
+        const r = await requestBatch(inputs.slice(start, start + batchSize));
+        if (!r.ok) {
+          if (!failure) {
+            failure = r;
+            logger?.debug(`embedding 失败: ${r.error.kind} ${r.error.message}`);
+          }
+          return;
         }
-        vectors.push(v);
+        for (let j = 0; j < r.vectors.length; j++) vectors[start + j] = r.vectors[j];
+      }
+    };
+    const lanes = Math.min(concurrency, batchCount);
+    await Promise.all(Array.from({ length: lanes }, () => worker()));
+    if (failure) return failure;
+
+    let dim = resolvedDim;
+    for (const v of vectors) {
+      if (dim === 0) dim = v.length;
+      else if (v.length !== dim) {
+        return {
+          ok: false,
+          error: { kind: "dim_mismatch", message: `embedding 维度 ${v.length} ≠ 期望 ${dim}` },
+        };
       }
     }
-
-    return { ok: true, vectors, dim: resolvedDim };
+    resolvedDim = dim;
+    return { ok: true, vectors, dim: resolvedDim, batches: batchCount };
   }
 
   return {

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { GatewayConfig } from "../src/config.js";
 import type { DomainFilter } from "../src/filter/domain-filter.js";
 import type { Logger } from "../src/logger.js";
-import { createSearchService } from "../src/search/service.js";
+import { createSearchService, rotatingContributed } from "../src/search/service.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -69,6 +69,7 @@ beforeAll(async () => {
             { name: "youcom", enabled: false },
             { name: "exaapi", enabled: true },
             { name: "tavily", enabled: true },
+            { name: "zhihu", enabled: true },
           ],
         }),
       );
@@ -76,16 +77,15 @@ beforeAll(async () => {
     }
     const engines = url.searchParams.get("engines") ?? "";
     engineParams.push(engines);
-    if (engines.includes("tavily")) {
-      res.end(
-        JSON.stringify({
-          results: [{ url: "https://ok.example/x", title: "Tavily Hit", content: "hit", engine: "tavily", score: 0.8 }],
-          unresponsive_engines: [["exaapi", "engine timeout"]],
-        }),
-      );
-      return;
+    const results: Array<Record<string, unknown>> = [];
+    // 常住引擎 zhihu：只要被点名就贡献结果（模拟「resident 恒有结果」）
+    if (engines.includes("zhihu")) {
+      results.push({ url: "https://zhihu.example/q", title: "Resident Zhihu", content: "resident", engine: "zhihu", score: 0.9 });
     }
-    res.end(JSON.stringify({ results: [], unresponsive_engines: [["exaapi", "engine timeout"]] }));
+    if (engines.includes("tavily")) {
+      results.push({ url: "https://ok.example/x", title: "Tavily Hit", content: "hit", engine: "tavily", score: 0.8 });
+    }
+    res.end(JSON.stringify({ results, unresponsive_engines: [["exaapi", "engine timeout"]] }));
   });
   await new Promise<void>((r) => mockServer.listen(0, "127.0.0.1", r));
   mockPort = (mockServer.address() as AddressInfo).port;
@@ -135,5 +135,41 @@ describe("createSearchService 引擎选择 + 静默降级", () => {
     const r2 = await svc.search({ query: "cachekey", fanout: 2 });
     expect(r1.cacheHit).toBe(false);
     expect(r2.cacheHit).toBe(false);
+  });
+
+  it("resident 有结果但 rotating 空 → 仍换下一个 rotating 候选", async () => {
+    engineParams = [];
+    const cfg = makeConfig(mockPort, {
+      searchEnginesResident: ["zhihu"],
+      searchEngines: ["exaapi", "tavily"],
+    });
+    const svc = createSearchService(cfg, domainFilter, silentLogger);
+    const r = await svc.search({ query: "resident-masks-rotating" });
+    expect(r.ok).toBe(true);
+    // 首批 zhihu,exaapi：只有 resident(zhihu) 有结果 → rotating(exaapi) 空 → 必须换下一批
+    // 次批 zhihu,tavily：tavily 贡献结果 → 止
+    expect(engineParams).toEqual(["zhihu,exaapi", "zhihu,tavily"]);
+    expect(r.text).toContain("Tavily Hit");
+    expect(r.text).toContain("Resident Zhihu");
+  });
+
+  it("resident 有结果但全部 rotating 候选都空 → 仍返回 resident 结果（不报错）", async () => {
+    engineParams = [];
+    const cfg = makeConfig(mockPort, {
+      searchEnginesResident: ["zhihu"],
+      searchEngines: ["exaapi"], // 无 tavily → rotating 永不贡献
+    });
+    const svc = createSearchService(cfg, domainFilter, silentLogger);
+    const r = await svc.search({ query: "resident-only" });
+    expect(r.ok).toBe(true);
+    expect(engineParams).toEqual(["zhihu,exaapi"]);
+    expect(r.text).toContain("Resident Zhihu");
+  });
+
+  it("rotatingContributed：按结果的 engine / engines[] 判定", () => {
+    expect(rotatingContributed([{ engine: "tavily" }], ["tavily"])).toBe(true);
+    expect(rotatingContributed([{ engines: ["exaapi", "tavily"] }], ["tavily"])).toBe(true);
+    expect(rotatingContributed([{ engine: "zhihu" }], ["tavily"])).toBe(false);
+    expect(rotatingContributed([{ engine: "zhihu" }], [])).toBe(true); // 无 rotating → 旧语义
   });
 });

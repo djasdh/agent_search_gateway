@@ -115,6 +115,7 @@ ad_filter:
     const p = writeYaml(d, "gateway:\n  host: 127.0.0.1\n");
     const c = loadConfig(p);
     expect(c.embeddingEnabled).toBe(false);
+    expect(c.embeddingConcurrency).toBe(4);
     expect(c.corpusEnabled).toBe(false);
     expect(c.corpusRecallK).toBe(10);
     expect(c.corpusTtlMs).toBe(2592000000);
@@ -133,6 +134,7 @@ embedding:
   base_url: http://embed:11434
   model: bge-m3
   dim: 1024
+  concurrency: 2
 corpus:
   enabled: true
   recall_k: 5
@@ -145,6 +147,7 @@ corpus:
     expect(c.embeddingBaseUrl).toBe("http://embed:11434");
     expect(c.embeddingModel).toBe("bge-m3");
     expect(c.embeddingDim).toBe(1024);
+    expect(c.embeddingConcurrency).toBe(2);
     expect(c.corpusEnabled).toBe(true);
     expect(c.corpusRecallK).toBe(5);
     expect(c.corpusTtlMs).toBe(1000);
@@ -161,5 +164,80 @@ corpus:
       if (old === undefined) delete process.env.EMBEDDING_API_KEY;
       else process.env.EMBEDDING_API_KEY = old;
     }
+  });
+
+  it("search.engines 分档对象 → resident/rotating + resident_quota_floor", () => {
+    const d = tempDir();
+    const p = writeYaml(
+      d,
+      `
+gateway:
+  host: 127.0.0.1
+search:
+  engines:
+    resident: [zhihu, "zhihu web", bilibili]
+    rotating: [exaapi, tavily]
+  resident_quota_floor: 0.3
+`,
+    );
+    const c = loadConfig(p);
+    expect(c.searchEnginesResident).toEqual(["zhihu", "zhihu web", "bilibili"]);
+    expect(c.searchEngines).toEqual(["exaapi", "tavily"]);
+    expect(c.searchResidentQuotaFloor).toBe(0.3);
+  });
+
+  it("search.engines 旧平铺数组 → 全轮换、resident 空", () => {
+    const d = tempDir();
+    const p = writeYaml(d, "gateway:\n  host: 127.0.0.1\nsearch:\n  engines: [exaapi, tavily]\n");
+    const c = loadConfig(p);
+    expect(c.searchEnginesResident).toEqual([]);
+    expect(c.searchEngines).toEqual(["exaapi", "tavily"]);
+  });
+
+  it("search.engines 缺省 → 全空清单 + resident_quota_floor 默认 0.2", () => {
+    const d = tempDir();
+    const p = writeYaml(d, "gateway:\n  host: 127.0.0.1\n");
+    const c = loadConfig(p);
+    expect(c.searchEnginesResident).toEqual([]);
+    expect(c.searchEngines).toEqual([]);
+    expect(c.searchResidentQuotaFloor).toBe(0.2);
+  });
+
+  it("rerank.diversity 默认关闭（缺省 = 旧行为）", () => {
+    const d = tempDir();
+    const p = writeYaml(d, "gateway:\n  host: 127.0.0.1\n");
+    const c = loadConfig(p);
+    expect(c.rerankDiversityEnabled).toBe(false);
+    expect(c.rerankDiversityMmrLambda).toBe(0.7);
+    expect(c.rerankDiversityMaxPerDomain).toBe(3);
+  });
+
+  it("读取 rerank.diversity 配置", () => {
+    const d = tempDir();
+    const p = writeYaml(
+      d,
+      `
+gateway:
+  host: 127.0.0.1
+rerank:
+  enabled: true
+  diversity:
+    enabled: true
+    mmr_lambda: 0.4
+    max_per_domain: 2
+`,
+    );
+    const c = loadConfig(p);
+    expect(c.rerankDiversityEnabled).toBe(true);
+    expect(c.rerankDiversityMmrLambda).toBe(0.4);
+    expect(c.rerankDiversityMaxPerDomain).toBe(2);
+  });
+
+  it("rerank.diversity 非法 mmr_lambda 时优雅回退默认（不崩）", () => {
+    const d = tempDir();
+    const p = writeYaml(d, "gateway:\n  host: 127.0.0.1\nrerank:\n  diversity:\n    mmr_lambda: 2\n");
+    const c = loadConfig(p);
+    expect(c.rerankDiversityMmrLambda).toBe(0.7);
+    expect(c.rerankDiversityEnabled).toBe(false);
   });
 });

@@ -52,6 +52,7 @@ async function initSemantic(config: GatewayConfig, logger: Logger): Promise<Sema
           dim: config.embeddingDim,
           timeoutMs: config.embeddingTimeoutMs,
           batchSize: config.embeddingBatchSize,
+          concurrency: config.embeddingConcurrency,
           maxInputChars: config.embeddingMaxInputChars,
           queryPrefix: config.embeddingQueryPrefix,
           passagePrefix: config.embeddingPassagePrefix,
@@ -230,10 +231,6 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
       inputSchema: {
         query: z.string().describe("搜索关键词"),
         language: z.string().optional().describe("语言代码，如 en/zh-CN，默认按 searxng 实例"),
-        time_range: z
-          .enum(["day", "week", "month", "year"])
-          .optional()
-          .describe("时间范围过滤"),
         safesearch: z.enum(["0", "1", "2"]).optional().describe("安全搜索：0 无/1 中/2 严"),
         categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news"),
         engines: z.string().optional().describe("指定搜索引擎，逗号分隔"),
@@ -252,7 +249,6 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
       const result = await searchService.search({
         query: args.query,
         language: args.language,
-        timeRange: args.time_range,
         safeSearch: args.safesearch,
         categories: args.categories,
         engines: args.engines,

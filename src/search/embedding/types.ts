@@ -14,7 +14,7 @@ export interface EmbedError {
 
 /** 批量嵌入结果，vectors 与入参 texts 顺序一一对应。 */
 export type EmbedResult =
-  | { ok: true; vectors: Vector[]; dim: number }
+  | { ok: true; vectors: Vector[]; dim: number; /** 实际发出的批次请求数（供耗时打点）。 */ batches?: number }
   | { ok: false; error: EmbedError };
 
 /** 语料库条目：以规范化 URL 为主键。 */

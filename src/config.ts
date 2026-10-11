@@ -11,6 +11,18 @@ function expandHome(p: string): string {
   return p;
 }
 
+/**
+ * 引擎清单：新格式为分档对象 `{ resident, rotating }`；
+ * 旧格式为平铺数组（等价于「全部轮换」，resident 为空）。
+ */
+const enginesSchema = z.union([
+  z.array(z.string()),
+  z.object({
+    resident: z.array(z.string()).default([]),
+    rotating: z.array(z.string()).default([]),
+  }),
+]);
+
 const configSchema = z.object({
   gateway: z.object({
     host: z.string().default("127.0.0.1"),
@@ -53,11 +65,12 @@ const configSchema = z.object({
       cache_ttl_ms: z.number().int().positive().default(300000),
       cache_max_entries: z.number().int().positive().default(200),
       max_concurrent: z.number().int().positive().max(16).default(2),
-      engines: z.array(z.string()).default([]),
+      engines: enginesSchema.default([]),
       fanout_default: z.number().int().min(1).max(8).default(1),
       quota_enabled: z.boolean().default(true),
       quota_ledger_path: z.string().default("~/.config/agent-search/quota.json"),
       quota_tight_threshold: z.number().min(0).max(1).default(0.1),
+      resident_quota_floor: z.number().min(0).max(1).default(0.2),
     })
     .catch({
       max_results: 10,
@@ -70,13 +83,32 @@ const configSchema = z.object({
       quota_enabled: true,
       quota_ledger_path: "~/.config/agent-search/quota.json",
       quota_tight_threshold: 0.1,
+      resident_quota_floor: 0.2,
     }),
   rerank: z
     .object({
       enabled: z.boolean().default(true),
       engine_boost: z.record(z.string(), z.number().nonnegative()).default({}),
+      diversity: z
+        .object({
+          enabled: z.boolean().default(false),
+          mmr_lambda: z.number().min(0).max(1).default(0.7),
+          max_per_domain: z.number().int().positive().default(3),
+        })
+        .catch({ enabled: false, mmr_lambda: 0.7, max_per_domain: 3 }),
+      authority: z
+        .object({
+          enabled: z.boolean().default(false),
+          weight: z.number().nonnegative().default(1.0),
+        })
+        .catch({ enabled: false, weight: 1.0 }),
     })
-    .catch({ enabled: true, engine_boost: {} }),
+    .catch({
+      enabled: true,
+      engine_boost: {},
+      diversity: { enabled: false, mmr_lambda: 0.7, max_per_domain: 3 },
+      authority: { enabled: false, weight: 1.0 },
+    }),
   ad_filter: z
     .object({
       enabled: z.boolean().default(true),
@@ -166,6 +198,7 @@ const configSchema = z.object({
       dim: z.number().int().nonnegative().default(0),
       timeout_ms: z.number().int().positive().default(5000),
       batch_size: z.number().int().positive().default(32),
+      concurrency: z.number().int().positive().max(8).default(4),
       max_input_chars: z.number().int().positive().default(2000),
       query_prefix: z.string().default(""),
       passage_prefix: z.string().default(""),
@@ -179,6 +212,7 @@ const configSchema = z.object({
       dim: 0,
       timeout_ms: 5000,
       batch_size: 32,
+      concurrency: 4,
       max_input_chars: 2000,
       query_prefix: "",
       passage_prefix: "",
@@ -221,13 +255,27 @@ export interface GatewayConfig {
   searchCacheTtlMs: number;
   searchCacheMaxEntries: number;
   searchMaxConcurrent: number;
+  /** 轮换档（旧平铺数组格式时即该数组本身）。 */
   searchEngines: string[];
+  /** 常住档：每次查询都叠加，额度接近耗尽才移出（默认空 = 旧行为）。 */
+  searchEnginesResident: string[];
   searchFanoutDefault: number;
   searchQuotaEnabled: boolean;
   searchQuotaLedgerPath: string;
   searchQuotaTightThreshold: number;
+  searchResidentQuotaFloor: number;
   rerankEnabled: boolean;
   rerankEngineBoost: Record<string, number>;
+  /** 多样性重排（MMR + 同注册域上限）；关闭时行为等同纯 cosine 重排。 */
+  rerankDiversityEnabled: boolean;
+  /** MMR λ：0=全多样，1=全相关。 */
+  rerankDiversityMmrLambda: number;
+  /** 同一注册域（eTLD+1）最多入选项数。 */
+  rerankDiversityMaxPerDomain: number;
+  /** 权威信号（相关分上叠加 w·auth）；关闭时行为等同纯 cosine 重排。 */
+  rerankAuthorityEnabled: boolean;
+  /** 权威分权重；最终分 = rel_norm + weight·auth。 */
+  rerankAuthorityWeight: number;
   adFilterEnabled: boolean;
   adFilterLevel: AdFilterLevel;
   adFilterExtraDomains: string[];
@@ -266,6 +314,7 @@ export interface GatewayConfig {
   embeddingDim: number;
   embeddingTimeoutMs: number;
   embeddingBatchSize: number;
+  embeddingConcurrency: number;
   embeddingMaxInputChars: number;
   embeddingQueryPrefix: string;
   embeddingPassagePrefix: string;
@@ -314,6 +363,11 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
   const envToken = process.env.GATEWAY_TOKEN;
   const token = envToken && envToken.length > 0 ? envToken : v.gateway.token;
 
+  // 引擎清单兼容解析：平铺数组 → 全轮换；对象 → 分档。
+  const engines = v.search.engines;
+  const resident = Array.isArray(engines) ? [] : engines.resident;
+  const rotating = Array.isArray(engines) ? engines : engines.rotating;
+
   return {
     host: v.gateway.host,
     port: v.gateway.port,
@@ -333,13 +387,20 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     searchCacheTtlMs: v.search.cache_ttl_ms,
     searchCacheMaxEntries: v.search.cache_max_entries,
     searchMaxConcurrent: v.search.max_concurrent,
-    searchEngines: v.search.engines,
+    searchEngines: rotating,
+    searchEnginesResident: resident,
     searchFanoutDefault: v.search.fanout_default,
     searchQuotaEnabled: v.search.quota_enabled,
     searchQuotaLedgerPath: expandHome(v.search.quota_ledger_path),
     searchQuotaTightThreshold: v.search.quota_tight_threshold,
+    searchResidentQuotaFloor: v.search.resident_quota_floor,
     rerankEnabled: v.rerank.enabled,
     rerankEngineBoost: v.rerank.engine_boost,
+    rerankDiversityEnabled: v.rerank.diversity.enabled,
+    rerankDiversityMmrLambda: v.rerank.diversity.mmr_lambda,
+    rerankDiversityMaxPerDomain: v.rerank.diversity.max_per_domain,
+    rerankAuthorityEnabled: v.rerank.authority.enabled,
+    rerankAuthorityWeight: v.rerank.authority.weight,
     adFilterEnabled: v.ad_filter.enabled,
     adFilterLevel: v.ad_filter.level,
     adFilterExtraDomains: v.ad_filter.extra_domains,
@@ -378,6 +439,7 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     embeddingDim: v.embedding.dim,
     embeddingTimeoutMs: v.embedding.timeout_ms,
     embeddingBatchSize: v.embedding.batch_size,
+    embeddingConcurrency: v.embedding.concurrency,
     embeddingMaxInputChars: v.embedding.max_input_chars,
     embeddingQueryPrefix: v.embedding.query_prefix,
     embeddingPassagePrefix: v.embedding.passage_prefix,

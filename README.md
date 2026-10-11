@@ -30,7 +30,7 @@ gateway (本服务, :3000/mcp)
 
 | 工具 | 说明 |
 |---|---|
-| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/time_range/safesearch/categories/engines/min_score/num_results |
+| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results |
 | `fetch` | 抓取 URL → md。自动路由 direct/FlareSolverr/playwright。参数：url/max_chars |
 | `browser_navigate` | 浏览器打开 URL，返回无障碍树快照（省 token） |
 | `browser_snapshot` | 当前页无障碍树快照，可选 target 限定 |

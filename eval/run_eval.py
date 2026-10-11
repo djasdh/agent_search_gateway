@@ -26,7 +26,7 @@ import statistics
 import sys
 import time
 import urllib.request
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 
 SESSION_ID = None
 BASE_URL = None
@@ -158,6 +158,59 @@ def domain_matches(host: str, expected: str) -> bool:
     return host == expected or host.endswith("." + expected)
 
 
+# --------------------------------------------------------------------------- #
+# 多样性：注册域（eTLD+1）启发式，与 src/search/embedding/diversity.ts 对齐
+# --------------------------------------------------------------------------- #
+MULTI_LEVEL_SUFFIXES = {
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk", "sch.uk",
+    "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp", "ad.jp", "ed.jp", "gr.jp", "lg.jp",
+    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "ac.cn",
+    "com.au", "net.au", "org.au", "gov.au", "edu.au",
+    "com.hk", "org.hk", "net.hk", "edu.hk", "gov.hk",
+    "com.tw", "org.tw", "net.tw", "edu.tw", "gov.tw",
+    "co.kr", "or.kr", "ne.kr", "go.kr", "ac.kr",
+    "com.sg", "org.sg", "net.sg", "edu.sg", "gov.sg",
+    "co.in", "net.in", "org.in", "gov.in", "ac.in", "edu.in",
+    "co.nz", "net.nz", "org.nz", "govt.nz", "ac.nz",
+    "co.za", "org.za", "net.za", "gov.za", "ac.za",
+    "com.br", "net.br", "org.br", "gov.br",
+    "com.mx", "org.mx", "gob.mx", "edu.mx",
+    "com.ar", "com.tr", "com.ru", "co.il", "com.ua", "co.th", "com.my",
+}
+_IPV4_RE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+
+
+def registered_domain(host: str) -> str:
+    h = host.strip().lower().rstrip(".")
+    if ":" in h:
+        h = h.split(":")[0]
+    if not h:
+        return h
+    if _IPV4_RE.match(h):
+        return h
+    parts = [p for p in h.split(".") if p]
+    if len(parts) <= 2:
+        return ".".join(parts)
+    last2 = ".".join(parts[-2:])
+    if last2 in MULTI_LEVEL_SUFFIXES:
+        return ".".join(parts[-3:])
+    return last2
+
+
+def diversity_metrics(hosts: list[str]) -> dict:
+    regs = [registered_domain(h) for h in hosts]
+    counts = Counter(regs)
+    distinct = len(counts)
+    max_share = (max(counts.values()) / len(regs)) if regs else 0.0
+    top_domain = counts.most_common(1)[0][0] if regs else ""
+    return {
+        "reg_domains": regs,
+        "distinct_domains": distinct,
+        "max_domain_share": round(max_share, 4),
+        "top_domain": top_domain,
+    }
+
+
 def match_count(hosts: list[str], expects: list[str]) -> int:
     n = 0
     for h in hosts:
@@ -224,6 +277,7 @@ def main() -> None:
         hits = match_count(hosts, expects)
         precision = (hits / len(hosts)) if hosts else 0.0
         topk_hit = hits > 0
+        div = diversity_metrics(hosts)
         rows.append(
             {
                 "id": case["id"],
@@ -238,6 +292,10 @@ def main() -> None:
                 "hits": hits,
                 "precision": precision,
                 "hit": topk_hit,
+                "distinct_domains": div["distinct_domains"],
+                "max_domain_share": div["max_domain_share"],
+                "top_domain": div["top_domain"],
+                "reg_domains": div["reg_domains"],
             }
         )
         flag = "HIT " if topk_hit else "miss"
@@ -255,13 +313,23 @@ def main() -> None:
     def agg(subset: list[dict]) -> dict:
         n = len(subset)
         if n == 0:
-            return {"n": 0, "hit_rate": 0.0, "precision": 0.0, "avg_latency_ms": 0, "avg_results": 0.0}
+            return {
+                "n": 0,
+                "hit_rate": 0.0,
+                "precision": 0.0,
+                "avg_latency_ms": 0,
+                "avg_results": 0.0,
+                "avg_distinct_domains": 0.0,
+                "avg_max_domain_share": 0.0,
+            }
         return {
             "n": n,
             "hit_rate": sum(1 for r in subset if r["hit"]) / n,
             "precision": sum(r["precision"] for r in subset) / n,
             "avg_latency_ms": round(statistics.mean(r["latency_ms"] for r in subset)),
             "avg_results": round(statistics.mean(r["result_count"] for r in subset), 1),
+            "avg_distinct_domains": round(statistics.mean(r["distinct_domains"] for r in subset), 2),
+            "avg_max_domain_share": round(statistics.mean(r["max_domain_share"] for r in subset), 3),
         }
 
     categories = ["zh-authority", "zh-ugc", "en-tech", "news"]
@@ -269,6 +337,22 @@ def main() -> None:
     cat_agg = OrderedDict((c, agg([r for r in rows if r["category"] == c])) for c in categories)
 
     quota_per_query = (total_calls / len(rows)) if rows else 0.0
+
+    # 全局注册域频次（看「知乎占比」这类单一来源占比）
+    global_counts: Counter = Counter()
+    for r in rows:
+        global_counts.update(r["reg_domains"])
+    total_hosts = sum(global_counts.values())
+    global_top = [
+        {"domain": d, "count": c, "share": round(c / total_hosts, 3) if total_hosts else 0.0}
+        for d, c in global_counts.most_common(8)
+    ]
+    diversity_summary = {
+        "avg_distinct_domains": overall["avg_distinct_domains"],
+        "avg_max_domain_share": overall["avg_max_domain_share"],
+        "global_domain_top": global_top,
+        "global_zhihu_share": round(global_counts.get("zhihu.com", 0) / total_hosts, 3) if total_hosts else 0.0,
+    }
 
     summary = {
         "k": args.k,
@@ -278,6 +362,7 @@ def main() -> None:
         "cases": len(rows),
         "overall": overall,
         "by_category": cat_agg,
+        "diversity": diversity_summary,
         "quota": {
             "before": before,
             "after": after,
@@ -329,6 +414,27 @@ def main() -> None:
             f"{pct(a['precision'])} | {a['avg_latency_ms']} ms | {a['avg_results']} |"
         )
     lines.append("")
+    lines.append(f"## 多样性指标（top-{args.k}）")
+    lines.append("")
+    lines.append(
+        f"- 平均不同注册域数（eTLD+1）：**{overall['avg_distinct_domains']}**"
+        f"　·　平均最大同域占比：**{pct(overall['avg_max_domain_share'])}**"
+    )
+    lines.append(
+        f"- 全局 `zhihu.com` 占比：**{pct(diversity_summary['global_zhihu_share'])}**"
+        f"　·　全局出现最多的注册域："
+        + "、".join(f"`{g['domain']}` {pct(g['share'])}" for g in diversity_summary["global_domain_top"][:5])
+    )
+    lines.append("")
+    lines.append("| 类别 | 平均不同注册域数 | 平均最大同域占比 |")
+    lines.append("|---|---|---|")
+    lines.append(
+        f"| **总体** | **{overall['avg_distinct_domains']}** | **{pct(overall['avg_max_domain_share'])}** |"
+    )
+    for c in categories:
+        a = cat_agg[c]
+        lines.append(f"| {cat_label.get(c, c)} (`{c}`) | {a['avg_distinct_domains']} | {pct(a['avg_max_domain_share'])} |")
+    lines.append("")
     lines.append("## 额度消耗（台账 used 差值）")
     lines.append("")
     lines.append("| 引擎 | 调用数 |")
@@ -374,6 +480,9 @@ def main() -> None:
         a = cat_agg[c]
         print(f"  {cat_label.get(c, c):<8} 命中率 {pct(a['hit_rate']):>6}   precision {pct(a['precision']):>6}   "
               f"平均延迟 {a['avg_latency_ms']:>5}ms   n={a['n']}")
+    print(f"多样性 平均不同注册域 {overall['avg_distinct_domains']}   "
+          f"平均最大同域占比 {pct(overall['avg_max_domain_share'])}   "
+          f"zhihu.com 全局占比 {pct(diversity_summary['global_zhihu_share'])}")
     print(f"额度消耗: {total_calls} 次调用 {dict(deltas) if deltas else '(无变化)'}")
     print(f"报告: {args.out_md} / {args.out_json}")
     print()

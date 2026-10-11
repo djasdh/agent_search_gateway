@@ -39,7 +39,6 @@ export interface SearxngResponse {
 export interface SearchRequest {
   query: string;
   language?: string;
-  timeRange?: string;
   safeSearch?: string;
   categories?: string;
   engines?: string;
@@ -55,11 +54,6 @@ export interface SearchCallError {
 export type SearchCallResult =
   | { ok: true; data: SearxngResponse; latencyMs: number }
   | { ok: false; error: SearchCallError };
-
-export function normalizeTimeRange(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  return ["day", "week", "month", "year"].includes(value) ? value : undefined;
-}
 
 export function normalizeSafeSearch(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -87,8 +81,6 @@ export async function searchSearxng(
 
   const lang = normalizeLanguage(req.language);
   if (lang) params.set("language", lang);
-  const tr = normalizeTimeRange(req.timeRange);
-  if (tr) params.set("time_range", tr);
   const ss = normalizeSafeSearch(req.safeSearch);
   if (ss) params.set("safesearch", ss);
   if (req.categories) params.set("categories", req.categories);

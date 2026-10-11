@@ -25,11 +25,11 @@
 {"id":"en-t7","category":"en-tech","query":"postgresql jsonb GIN index performance","expect":["postgresql.org"]}
 {"id":"en-t8","category":"en-tech","query":"rust borrow checker error E0502","expect":["doc.rust-lang.org","rust-lang.org"]}
 
-{"id":"news-1","category":"news","query":"OpenAI 最新 模型 发布","expect":["openai.com","reuters.com","techcrunch.com"],"params":{"time_range":"month"}}
-{"id":"news-2","category":"news","query":"英伟达 最新 财报 营收","expect":["reuters.com","cnbc.com","nvidia.com"],"params":{"time_range":"month"}}
+{"id":"news-1","category":"news","query":"OpenAI 最新 模型 发布","expect":["openai.com","reuters.com","techcrunch.com"]}
+{"id":"news-2","category":"news","query":"英伟达 最新 财报 营收","expect":["reuters.com","cnbc.com","nvidia.com"]}
 {"id":"news-3","category":"news","query":"全国 台风 最新 路径 预警","expect":["weather.com.cn","cma.gov.cn","cctv.com"]}
-{"id":"news-4","category":"news","query":"国际油价 最新 走势 OPEC 减产","expect":["reuters.com","bloomberg.com"],"params":{"time_range":"week"}}
-{"id":"news-5","category":"news","query":"中国 新能源汽车 月度 销量 数据","expect":["caam.org.cn","reuters.com","gasgoo.com"],"params":{"time_range":"month"}}
-{"id":"news-6","category":"news","query":"人工智能 监管 立法 最新 进展","expect":["reuters.com","gov.cn","thepaper.cn"],"params":{"time_range":"month"}}
-{"id":"news-7","category":"news","query":"苹果 新品 发布会 最新","expect":["apple.com","theverge.com","reuters.com"],"params":{"time_range":"month"}}
-{"id":"news-8","category":"news","query":"世界杯 预选赛 最新 赛况","expect":["fifa.com","espn.com","bbc.com"],"params":{"time_range":"week"}}
+{"id":"news-4","category":"news","query":"国际油价 最新 走势 OPEC 减产","expect":["reuters.com","bloomberg.com"]}
+{"id":"news-5","category":"news","query":"中国 新能源汽车 月度 销量 数据","expect":["caam.org.cn","reuters.com","gasgoo.com"]}
+{"id":"news-6","category":"news","query":"人工智能 监管 立法 最新 进展","expect":["reuters.com","gov.cn","thepaper.cn"]}
+{"id":"news-7","category":"news","query":"苹果 新品 发布会 最新","expect":["apple.com","theverge.com","reuters.com"]}
+{"id":"news-8","category":"news","query":"世界杯 预选赛 最新 赛况","expect":["fifa.com","espn.com","bbc.com"]}

@@ -6,8 +6,10 @@ import { parseQuotaLedger, planEngines, type QuotaLedger } from "../src/search/s
 function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   return {
     searchEngines: ["youcom", "exaapi", "tavily", "firecrawl"],
+    searchEnginesResident: [],
     searchFanoutDefault: 1,
     searchQuotaTightThreshold: 0.1,
+    searchResidentQuotaFloor: 0.2,
     ...overrides,
   } as GatewayConfig;
 }
@@ -94,5 +96,64 @@ describe("planEngines 配额消费", () => {
   it("未配置引擎清单时仍交给 searxng 默认（不被配额改写）", () => {
     const cfg = makeConfig({ searchEngines: [] });
     expect(planEngines({ query: "q" }, cfg, enabled, { exaapi: entry(1, 1) })).toEqual([""]);
+  });
+});
+
+describe("planEngines 分档（resident / rotating）", () => {
+  const enabled = new Set(["zhihu", "zhihu web", "bilibili", "exaapi", "tavily", "firecrawl"]);
+  const tiered = () =>
+    makeConfig({
+      searchEnginesResident: ["zhihu", "zhihu web", "bilibili"],
+      searchEngines: ["exaapi", "tavily", "firecrawl"],
+    });
+
+  it("resident 每次查询恒在：叠加到每个 rotating 批次", () => {
+    const batches = planEngines({ query: "q" }, tiered(), enabled, undefined);
+    expect(batches).toEqual([
+      "zhihu,zhihu web,bilibili,exaapi",
+      "zhihu,zhihu web,bilibili,tavily",
+      "zhihu,zhihu web,bilibili,firecrawl",
+    ]);
+  });
+
+  it("resident 额度接近耗尽（剩余 < floor）→ 移出；无额度引擎永不降", () => {
+    const quota: QuotaLedger = {
+      zhihu: entry(100, 85), // 剩余 0.15 < 0.2 → 移出
+      "zhihu web": entry(100, 80), // 剩余 0.20 >= 0.2 → 保留
+      // bilibili 无台账 → 保留
+      exaapi: entry(100, 0),
+    };
+    const batches = planEngines({ query: "q" }, tiered(), enabled, quota);
+    expect(batches).toEqual([
+      "zhihu web,bilibili,exaapi",
+      "zhihu web,bilibili,tavily",
+      "zhihu web,bilibili,firecrawl",
+    ]);
+  });
+
+  it("resident 为空 = 旧行为（仅 rotating）", () => {
+    const legacy = makeConfig({ searchEngines: ["exaapi", "tavily"] });
+    const batches = planEngines({ query: "q" }, legacy, new Set(["exaapi", "tavily"]), undefined);
+    expect(batches).toEqual(["exaapi", "tavily"]);
+  });
+
+  it("rotating 全耗尽 → 仍跑 resident 一批", () => {
+    const quota: QuotaLedger = {
+      exaapi: entry(10, 10),
+      tavily: entry(10, 10),
+      firecrawl: entry(10, 10),
+    };
+    expect(planEngines({ query: "q" }, tiered(), enabled, quota)).toEqual(["zhihu,zhihu web,bilibili"]);
+  });
+
+  it("searxng 侧 disabled 的 resident 引擎被剔除", () => {
+    const en = new Set(["zhihu", "exaapi", "tavily", "firecrawl"]); // zhihu web / bilibili 未启用
+    const batches = planEngines({ query: "q" }, tiered(), en, undefined);
+    expect(batches).toEqual(["zhihu,exaapi", "zhihu,tavily", "zhihu,firecrawl"]);
+  });
+
+  it("全程无 resident 且无 rotating → 交给 searxng 默认", () => {
+    const cfg = makeConfig({ searchEngines: [], searchEnginesResident: [] });
+    expect(planEngines({ query: "q" }, cfg, enabled, undefined)).toEqual([""]);
   });
 });

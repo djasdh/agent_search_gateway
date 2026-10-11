@@ -106,6 +106,68 @@ describe("EmbeddingProvider (openai)", () => {
   });
 });
 
+describe("EmbeddingProvider 批次并发", () => {
+  it("并发受限（maxInFlight≤concurrency）且结果与串行逐元素一致（顺序保持）", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: { body: string }) => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        const inputs: string[] = JSON.parse(init.body).input;
+        await new Promise((r) => setTimeout(r, 15));
+        inFlight--;
+        return jsonResponse({ data: inputs.map((t, i) => ({ index: i, embedding: [t.charCodeAt(0), 1] })) });
+      }),
+    );
+    const texts = ["a", "b", "c", "d", "e"];
+    const serial = await createEmbeddingProvider({ ...openaiOpts, batchSize: 1, concurrency: 1 }).embed(
+      texts,
+      "passage",
+    );
+    const parallel = await createEmbeddingProvider({ ...openaiOpts, batchSize: 1, concurrency: 2 }).embed(
+      texts,
+      "passage",
+    );
+    expect(serial.ok && parallel.ok).toBe(true);
+    if (!serial.ok || !parallel.ok) return;
+    expect(parallel.batches).toBe(5);
+    // 并发回填后顺序与串行完全一致
+    expect(parallel.vectors.map((v) => Array.from(v))).toEqual(serial.vectors.map((v) => Array.from(v)));
+    // 串行阶段峰值 1，并发阶段（上限 2）达到 2
+    expect(maxInFlight).toBe(2);
+  });
+
+  it("默认并发下批次结果顺序仍与入参一致", async () => {
+    const calls = stubEchoFetch();
+    const p = createEmbeddingProvider({ ...openaiOpts, batchSize: 2 });
+    const r = await p.embed(["a", "bb", "ccc"], "passage");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.batches).toBe(2);
+    expect(calls[0].body.input).toEqual(["a", "bb"]);
+    expect(calls[1].body.input).toEqual(["ccc"]);
+  });
+
+  it("任一批失败 → 整体失败（不返回半成品）", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: { body: string }) => {
+        calls++;
+        if (calls === 2) return jsonResponse({}, 500);
+        const inputs: string[] = JSON.parse(init.body).input;
+        return jsonResponse({ data: inputs.map((t, i) => ({ index: i, embedding: [1, 0] })) });
+      }),
+    );
+    const p = createEmbeddingProvider({ ...openaiOpts, batchSize: 1, concurrency: 3 });
+    const r = await p.embed(["a", "b", "c"], "passage");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.kind).toBe("http");
+  });
+});
+
 describe("EmbeddingProvider (ollama)", () => {
   it("解析 embeddings，走 /api/embed", async () => {
     const calls: Captured[] = [];

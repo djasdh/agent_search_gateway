@@ -8,16 +8,22 @@ import { Semaphore } from "../utils/semaphore.js";
 import { StringCache } from "./cache.js";
 import { cleanResults, type CleanedResult } from "./clean.js";
 import type { EmbeddingProvider } from "./embedding/provider.js";
-import { mergeAndRank } from "./embedding/semantic.js";
+import { mergeAndRank, type SemanticTimings } from "./embedding/semantic.js";
 import type { CorpusStore } from "./embedding/store.js";
+import type { EmbedResult } from "./embedding/types.js";
 import { renderResults, renderSearchMarkdown } from "./render.js";
 import { rerankResults } from "./rerank.js";
-import { searchSearxng, type SearchCallError, type SearchRequest, type SearxngResponse } from "./searxng.js";
+import {
+  searchSearxng,
+  type SearchCallError,
+  type SearchRequest,
+  type SearxngResult,
+  type SearxngResponse,
+} from "./searxng.js";
 
 export interface SearchParams {
   query: string;
   language?: string;
-  timeRange?: string;
   safeSearch?: string;
   categories?: string;
   engines?: string;
@@ -107,34 +113,57 @@ function isQuotaTight(usable: string[], quota: QuotaLedger, threshold: number): 
 }
 
 /**
+ * 一个引擎批次：`engines` 是发给 searxng 的完整点名（resident ∪ rotating），
+ * `rotating` 是本批实际参与的 rotating 候选——用于「按 rotating 子集判定是否
+ * 成功」（resident 恒有结果，不能作为成功依据）。`rotating` 为空表示该批没有
+ * rotating 候选（显式 engines / 纯 resident / 未配置），此时回退旧语义：非空即止。
+ */
+export interface EngineBatch {
+  engines: string;
+  rotating: string[];
+}
+
+/**
  * 计算本次搜索的引擎批次（静默降级的候选序列）：
  * - `engines` 显式指定 → 严格按该集合，一次查完（仍按台账剔除已耗尽者）
- * - 否则按 `config.searchEngines` 优先级取前 `fanout` 家；批次无结果/不可用时换下一批
- * - 跳过 searxng 侧 `enabled:false` 的引擎（如 youcom），使其不占用首个批次
+ * - 否则按「分档」组合：
+ *   - **resident**（`config.searchEnginesResident`）：未被 disabled、且额度未接近
+ *     耗尽（剩余 < `resident_quota_floor`）的引擎，**每一批都带上**；无台账=永不降
+ *   - **rotating**（`config.searchEngines`）：取前 `fanout` 家轮换，批次无结果/不可用时换下一批
+ * - resident 为空 → 与旧行为（纯 rotating）逐字等价
+ * - 跳过 searxng 侧 `enabled:false` 的引擎（如 youcom），使其不占用批次
  * - 有台账时:剔除已耗尽引擎；`fanout>1` 按剩余额度降序取前 N；
  *   整体余额低于 `quota_tight_threshold` 时把扇出压回 1
  */
-export function planEngines(
+export function planEngineBatches(
   params: SearchParams,
   config: GatewayConfig,
   enabled: Set<string> | undefined,
   quota: QuotaLedger | undefined,
-): string[] {
+): EngineBatch[] {
   const explicit = parseEngineList(params.engines);
   if (explicit.length > 0) {
     const usable = quota ? explicit.filter((e) => !isExhausted(quota[e])) : explicit;
-    return [(usable.length > 0 ? usable : explicit).join(",")];
+    // 显式 engines：单批、无 rotating 子集概念 → 非空即止（旧行为）
+    return [{ engines: (usable.length > 0 ? usable : explicit).join(","), rotating: [] }];
   }
 
-  const priority = config.searchEngines ?? [];
-  if (priority.length === 0) return [""]; // 未配置引擎清单 → 交给 searxng 默认
+  const resident = config.searchEnginesResident ?? [];
+  const rotating = config.searchEngines ?? [];
+  if (resident.length === 0 && rotating.length === 0) return [{ engines: "", rotating: [] }]; // 交给 searxng 默认
 
-  const filtered = enabled ? priority.filter((e) => enabled.has(e)) : priority.slice();
-  let usable = filtered.length > 0 ? filtered : priority.slice();
+  // 常住档：未被 disabled、且额度未接近耗尽 → 每次查询都带上
+  const floor = config.searchResidentQuotaFloor ?? 0.2;
+  const residentUsable = (enabled ? resident.filter((e) => enabled.has(e)) : resident.slice()).filter((e) => {
+    const q = quota?.[e];
+    return !isExhausted(q) && remainingRatio(q) >= floor;
+  });
 
-  // 剔除已耗尽引擎
+  // 轮换档：沿用既有台账逻辑（剔除耗尽 / fanout / 紧张压回）
+  const filtered = enabled ? rotating.filter((e) => enabled.has(e)) : rotating.slice();
+  let usable = filtered.length > 0 ? filtered : rotating.slice();
+
   if (quota) usable = usable.filter((e) => !isExhausted(quota[e]));
-  if (usable.length === 0) return [];
 
   let fanout = Math.max(1, params.fanout ?? config.searchFanoutDefault ?? 1);
 
@@ -154,11 +183,52 @@ export function planEngines(
       .map((x) => x.name);
   }
 
-  const batches: string[] = [];
+  const rotatingBatches: string[][] = [];
   for (let i = 0; i < usable.length; i += fanout) {
-    batches.push(usable.slice(i, i + fanout).join(","));
+    rotatingBatches.push(usable.slice(i, i + fanout));
   }
-  return batches;
+
+  // resident 为空 → 保持旧行为（仅轮换）；每批的 rotating 子集就是整批
+  if (residentUsable.length === 0) {
+    return rotatingBatches.map((batch) => ({ engines: batch.join(","), rotating: batch }));
+  }
+
+  const residentPrefix = residentUsable.join(",");
+  if (rotatingBatches.length === 0) return [{ engines: residentPrefix, rotating: [] }];
+  return rotatingBatches.map((batch) => ({
+    engines: `${residentPrefix},${batch.join(",")}`,
+    rotating: batch,
+  }));
+}
+
+/** 引擎批次中「发给 searxng 的完整点名」序列（planEngineBatches 的兼容视图）。 */
+export function planEngines(
+  params: SearchParams,
+  config: GatewayConfig,
+  enabled: Set<string> | undefined,
+  quota: QuotaLedger | undefined,
+): string[] {
+  return planEngineBatches(params, config, enabled, quota).map((b) => b.engines);
+}
+
+/** 取单条结果归属的引擎名（searxng 单引擎用 `engine`，多引擎合并用 `engines[]`）。 */
+function resultEngines(r: SearxngResult): string[] {
+  const out: string[] = [];
+  if (typeof r.engine === "string" && r.engine.length > 0) out.push(r.engine);
+  if (Array.isArray(r.engines)) {
+    for (const e of r.engines) if (typeof e === "string" && e.length > 0) out.push(e);
+  }
+  return out;
+}
+
+/**
+ * 本批结果里是否有 rotating 候选贡献（用结果的 `engine` 字段判定）。
+ * rotating 为空 → 视为贡献（该批没有 rotating 候选，回退旧语义）。
+ */
+export function rotatingContributed(results: SearxngResult[], rotating: string[]): boolean {
+  if (rotating.length === 0) return true;
+  const want = new Set(rotating);
+  return results.some((r) => resultEngines(r).some((e) => want.has(e)));
 }
 
 /** 语义层可选依赖；缺省即关闭（行为与旧版一致）。 */
@@ -166,6 +236,41 @@ export interface SearchDeps {
   embeddingProvider?: EmbeddingProvider | null;
   corpus?: CorpusStore | null;
   recallK?: number;
+  /** 结构化耗时打点回调；缺省时仅落一条 debug 日志。 */
+  metricsSink?: (metrics: SearchMetrics) => void;
+}
+
+/**
+ * 单次搜索的分阶段耗时（ms），供瓶颈定位。
+ * 单位均 ms；`residualMs` = total − 其余显式阶段之和（缓存写回/JSON 序列化等）。
+ */
+export interface SearchMetrics {
+  query: string;
+  cacheHit: boolean;
+  /** 端到端墙钟（含引擎/配额加载、缓存查、信号量等待）。 */
+  totalMs: number;
+  /** 引擎集合/配额台账加载 + 缓存查 + 信号量等待。 */
+  preMs: number;
+  /** searxng 请求墙钟（跨批次累加）。 */
+  upstreamMs: number;
+  /** 实际发出的上游批次数。 */
+  upstreamBatches: number;
+  /** 最终采用批次的候选数。 */
+  upstreamRaw: number;
+  /** 按结果 engine 字段统计的引擎分布（可选信息）。 */
+  engineCounts: Record<string, number>;
+  /** 本地轻量重排（score×boost）+ 过滤清洗。 */
+  localMs: number;
+  /** mergeAndRank 整体墙钟（≈ 语义层 totalMs）。 */
+  mergeMs: number;
+  /** markdown 渲染。 */
+  renderMs: number;
+  /** total − 以上阶段之和。 */
+  residualMs: number;
+  /** 语义层内部分解（query/passage 向量、corpus、排序、MMR）；降级/未启用为 null。 */
+  semantic: SemanticTimings | null;
+  /** 语义层是否降级（embedding/语料不可用或失败）。 */
+  degraded: boolean;
 }
 
 /** 构造稳定缓存键（搜索参数 + 选中引擎批次 + 语料命名空间一致）。 */
@@ -173,7 +278,6 @@ function cacheKey(params: SearchParams, batches: string[], semanticTag = ""): st
   return JSON.stringify([
     params.query,
     params.language ?? "",
-    params.timeRange ?? "",
     params.safeSearch ?? "",
     params.categories ?? "",
     params.engines ?? "",
@@ -249,46 +353,102 @@ export function createSearchService(
   const provider = deps.embeddingProvider ?? null;
   const corpus = deps.corpus ?? null;
   const recallK = deps.recallK ?? 10;
+  const diversity = {
+    enabled: config.rerankDiversityEnabled,
+    mmrLambda: config.rerankDiversityMmrLambda,
+    maxPerDomain: config.rerankDiversityMaxPerDomain,
+  };
+  const authority = {
+    enabled: config.rerankAuthorityEnabled,
+    weight: config.rerankAuthorityWeight,
+  };
+
+  const metricsSink = deps.metricsSink;
+  /** 打点：一条结构化 debug 行 + 可选回调（互不影响正常 markdown 输出）。 */
+  const emitMetrics = (m: SearchMetrics): void => {
+    try {
+      logger.debug(`METRICS ${JSON.stringify(m)}`);
+    } catch {
+      /* 打点失败不影响搜索 */
+    }
+    metricsSink?.(m);
+  };
 
   async function search(params: SearchParams): Promise<SearchOutcome> {
+    const tStart = performance.now();
     const enabled = await getEnabledEngines();
     const quota = await getQuota();
-    const batches = planEngines(params, config, enabled, quota);
+    const batches = planEngineBatches(params, config, enabled, quota);
     const limit = params.numResults ?? config.searchMaxResults;
-    const key = cacheKey(params, batches, corpus?.namespace ?? "");
+    const key = cacheKey(params, batches.map((b) => b.engines), corpus?.namespace ?? "");
     const cached = cache.get(key);
     if (cached !== undefined) {
       logger.debug(`search cache hit: "${params.query}"`);
+      emitMetrics({
+        query: params.query,
+        cacheHit: true,
+        totalMs: performance.now() - tStart,
+        preMs: performance.now() - tStart,
+        upstreamMs: 0,
+        upstreamBatches: 0,
+        upstreamRaw: 0,
+        engineCounts: {},
+        localMs: 0,
+        mergeMs: 0,
+        renderMs: 0,
+        residualMs: 0,
+        semantic: null,
+        degraded: false,
+      });
       return { ok: true, text: cached, cacheHit: true };
     }
 
     const release = await sem.acquire();
+    const preMs = performance.now() - tStart;
+    // 语义层：query 向量不依赖候选 → 先起 Promise，与上游 searxng 召回 overlap（省一次串行等待）。
+    // provider/corpus 缺一即无语义层，无需发起；catch 兜底避免未被消费时产生 unhandled rejection。
+    let queryEmbed: Promise<EmbedResult> | undefined;
+    if (provider && corpus) {
+      queryEmbed = provider.embed([params.query], "query");
+      queryEmbed.catch(() => undefined);
+    }
     try {
-      // 静默降级：按批次依次查询，任一批次有结果即止；全部不可用才暴露错误。
+      // 静默降级：按批次依次查询。**以「本批 rotating 候选是否产出结果」判定成功**：
+      // resident 恒有结果，不能作为成功依据（否则会屏蔽 rotating 的换下一家）；
+      // rotating 空/未贡献 → 继续下一批；resident 为空时 = 旧行为（非空即止）。
+      // 全部批次都无 rotating 贡献时，回退到最后一个有结果的批次（resident 结果仍在）。
       let lastData: SearxngResponse | undefined;
       let lastError: SearchCallError | undefined;
       let latencyMs = 0;
+      let upstreamMs = 0;
+      let upstreamBatches = 0;
 
       for (const batch of batches) {
         const req: SearchRequest = {
           query: params.query,
           language: params.language,
-          timeRange: params.timeRange,
           safeSearch: params.safeSearch,
           categories: params.categories,
-          engines: batch || undefined,
+          engines: batch.engines || undefined,
         };
 
+        upstreamBatches++;
+        const tUp = performance.now();
         const result = await searchSearxng(config.searxngUrl, config.searxngTimeoutMs, req);
+        upstreamMs += performance.now() - tUp;
         if (!result.ok) {
           lastError = result.error;
-          logger.debug(`search engine batch "${batch}" failed (${result.error.kind}), trying next`);
+          logger.debug(`search engine batch "${batch.engines}" failed (${result.error.kind}), trying next`);
           continue;
         }
 
         latencyMs += result.latencyMs;
         lastData = result.data;
-        if (result.data.results.length > 0) break;
+        if (result.data.results.length === 0) continue;
+        if (rotatingContributed(result.data.results, batch.rotating)) break;
+        logger.debug(
+          `rotating candidate "${batch.rotating.join(",")}" produced no results, trying next batch`,
+        );
       }
 
       if (!lastData) {
@@ -301,7 +461,7 @@ export function createSearchService(
 
         let recalled: CleanedResult[] = [];
         try {
-          const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK });
+          const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
           recalled = r.results;
         } catch (err) {
           logger.warn(`语料召回失败: ${String(err)}`);
@@ -314,8 +474,13 @@ export function createSearchService(
 
       const data = lastData;
       const rawCount = data.results.length;
+      const engineCounts: Record<string, number> = {};
+      for (const r of data.results) {
+        for (const e of resultEngines(r)) engineCounts[e] = (engineCounts[e] ?? 0) + 1;
+      }
 
       // 轻量重排：绕过 searxng category 分组排序，按 score × boost 降序（语义不可用时的回退顺序）
+      const tLocal = performance.now();
       const reranked = rerankResults(data.results, {
         enabled: config.rerankEnabled,
         engineBoost: config.rerankEngineBoost,
@@ -328,23 +493,51 @@ export function createSearchService(
           ? (host) => isBlocked(host, domainFilter.blocked, domainFilter.allowlist)
           : undefined,
       });
+      const localMs = performance.now() - tLocal;
 
       // 合并语料召回 + 纯语义排序；失败则回退引擎分顺序
       let ranked: CleanedResult[] = cleaned;
+      let semanticTimings: SemanticTimings | null = null;
+      let degraded = false;
+      const tMerge = performance.now();
       try {
-        const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK });
+        const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
         ranked = merged.results;
+        semanticTimings = merged.timings ?? null;
+        degraded = merged.degraded;
       } catch (err) {
         logger.warn(`语义重排失败，回退引擎分顺序: ${String(err)}`);
         ranked = cleaned.slice(0, limit);
+        degraded = true;
       }
+      const mergeMs = performance.now() - tMerge;
 
+      const tRender = performance.now();
       const text = renderSearchMarkdown({
         query: params.query,
         raw: data,
         results: ranked,
         latencyMs,
         skipped: blockedCount > 0 ? blockedCount : undefined,
+      });
+      const renderMs = performance.now() - tRender;
+
+      const totalMs = performance.now() - tStart;
+      emitMetrics({
+        query: params.query,
+        cacheHit: false,
+        totalMs,
+        preMs,
+        upstreamMs,
+        upstreamBatches,
+        upstreamRaw: rawCount,
+        engineCounts,
+        localMs,
+        mergeMs,
+        renderMs,
+        residualMs: totalMs - preMs - upstreamMs - localMs - mergeMs - renderMs,
+        semantic: semanticTimings,
+        degraded,
       });
 
       cache.set(key, text);
