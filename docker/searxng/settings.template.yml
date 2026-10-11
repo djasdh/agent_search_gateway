@@ -1,6 +1,6 @@
 # agent_search_gateway —— searxng 容器配置模板
 #
-# 由 docker/searxng/entrypoint.sh 在启动时用环境变量替换 ${VAR} 后写到
+# 由 docker/searxng/entrypoint.sh 在启动时用环境变量替换 $VAR 后写到
 # /etc/searxng/settings.yml。密钥只经环境变量注入，不进镜像。
 #
 #   ${EXA_API_KEY}        —— exaapi 引擎（上游引擎只认 settings.yml）
