@@ -1,0 +1,70 @@
+# agent_search_gateway —— 一键起停（gateway + searxng + flaresolverr）
+#
+#   cp .env.example .env      # 填密钥
+#   docker compose up -d
+#
+# 镜像来源：
+#   - gateway / searxng：本仓库自建（可用 docker compose build 本地构建，
+#     或改用已推送的 ghcr.io/djasdh/agent-search-* 镜像）
+#   - flaresolverr：上游官方镜像（ghcr 官方镜像）
+#
+# 出口不再经任何代理（API 引擎直连可达；内置通用爬虫已 disabled）。
+
+name: agent-search
+
+x-restart: &restart unless-stopped
+
+services:
+  searxng:
+    build:
+      context: ..
+      dockerfile: docker/searxng/Dockerfile
+    image: ghcr.io/djasdh/agent-search-searxng:latest
+    restart: *restart
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      # 配额台账：与 gateway 共享同一卷、同一路径
+      QUOTA_LEDGER_PATH: /quota/quota.json
+      QUOTA_CONFIG_PATH: /quota/quota.config.json
+    volumes:
+      - quota:/quota
+    expose:
+      - "8080"
+    networks: [agents]
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: *restart
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      LOG_LEVEL: info
+    networks: [agents]
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ghcr.io/djasdh/agent-search-gateway:latest
+    restart: *restart
+    depends_on:
+      - searxng
+      - flaresolverr
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - ./gateway.docker.yaml:/app/gateway.yaml:ro
+      - quota:/quota
+      - corpus:/data
+    ports:
+      # 默认仅本机可访问；公网部署时把 GATEWAY_BIND 设为 0.0.0.0 并配 GATEWAY_TOKEN / 反向代理
+      - "${GATEWAY_BIND:-127.0.0.1}:${GATEWAY_PORT:-3000}:3000"
+    networks: [agents]
+
+networks:
+  agents:
+
+volumes:
+  quota:
+  corpus:

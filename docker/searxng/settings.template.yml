@@ -1,0 +1,133 @@
+# agent_search_gateway —— searxng 容器配置模板
+#
+# 由 docker/searxng/entrypoint.sh 在启动时用环境变量替换 ${VAR} 后写到
+# /etc/searxng/settings.yml。密钥只经环境变量注入，不进镜像。
+#
+#   ${EXA_API_KEY}        —— exaapi 引擎（上游引擎只认 settings.yml）
+#   ${SEARXNG_SECRET_KEY} —— server.secret_key（缺省由 entrypoint 随机生成）
+#
+# tavily / zhihu 引擎改读环境变量（TAVILY_API_KEY / ZHIHU_ACCESS_SECRET），
+# 此处留空即可。
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "agent-search-gateway"
+
+search:
+  safe_search: 1
+  autocomplete: ""
+  default_lang: "zh-HK"
+  formats:
+    - html
+    - json
+
+outgoing:
+  request_timeout: 5.0
+  # 不再走代理：API 引擎直连可达，且内置通用爬虫已整体 disabled。
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "${SEARXNG_SECRET_KEY}"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "POST"
+
+valkey:
+  url: false
+
+ui:
+  default_theme: simple
+
+# plugins 是整体覆盖语义：自定义清单会替换默认清单，故默认插件需一并列出。
+plugins:
+  searx.plugins.calculator.SXNGPlugin:
+    active: true
+  searx.plugins.infinite_scroll.SXNGPlugin:
+    active: false
+  searx.plugins.hash_plugin.SXNGPlugin:
+    active: true
+  searx.plugins.self_info.SXNGPlugin:
+    active: true
+  searx.plugins.unit_converter.SXNGPlugin:
+    active: true
+  searx.plugins.ahmia_filter.SXNGPlugin:
+    active: true
+  searx.plugins.hostnames.SXNGPlugin:
+    active: true
+  searx.plugins.time_zone.SXNGPlugin:
+    active: true
+  searx.plugins.oa_doi_rewrite.SXNGPlugin:
+    active: false
+  searx.plugins.tor_check.SXNGPlugin:
+    active: false
+  searx.plugins.tracker_url_remover.SXNGPlugin:
+    active: true
+  searx.plugins.quota.QuotaPlugin:
+    active: true
+
+engines:
+  # 保留：实测非噪声的垂直源
+  - name: bilibili
+    disabled: false
+    categories: [videos, general]
+  # 9 个通用 keyless 引擎出口 IP 差 → 结果垃圾，整体关闭。
+  - name: google
+    disabled: true
+    inactive: false
+  - name: bing
+    disabled: true
+    base_url: https://cn.bing.com
+  - name: mojeek
+    disabled: true
+  - name: mojeek images
+    disabled: true
+  - name: mojeek news
+    disabled: true
+  - name: marginalia
+    disabled: true
+    inactive: false
+  - name: seznam
+    disabled: true
+  - name: qwant
+    disabled: true
+  - name: yandex
+    disabled: true
+  # 免费 API 引擎
+  - name: exaapi
+    engine: exaapi
+    shortcut: exa
+    api_key: "${EXA_API_KEY}"
+    search_type: instant
+    content_mode: highlights
+    inactive: false
+  - name: tavily
+    engine: tavily
+    shortcut: tvy
+    api_key: ""              # 读环境变量 TAVILY_API_KEY
+    disabled: false
+  - name: youcom
+    engine: youcom
+    shortcut: you
+    disabled: true
+  - name: firecrawl
+    engine: firecrawl
+    shortcut: fc
+    api_key: ""              # 空 = keyless（限速低）；直连即可
+    disabled: false
+  # 知乎官方 API：一个模块两个 scope（站内 / 全网），读 ZHIHU_ACCESS_SECRET
+  - name: zhihu
+    engine: zhihu
+    shortcut: zh
+    scope: zhihu
+    api_key: ""
+    disabled: false
+  - name: zhihu web
+    engine: zhihu
+    shortcut: zhw
+    scope: web
+    api_key: ""
+    disabled: false

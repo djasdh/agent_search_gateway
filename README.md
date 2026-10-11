@@ -11,10 +11,10 @@ Agent（hermes / OpenCode / my-agent-core / 其它 MCP client）
   │  MCP over HTTP
   ▼
 gateway (本服务, :3000/mcp)
-  ├─ search → searxng (:8890) → 清洗/广告过滤/缓存 → 纯 md
+  ├─ search → searxng (:8888) → 清洗/广告过滤/缓存 → 纯 md
   ├─ fetch  → 智能路由：
   │     ① direct（普通站，HTML→md）
-  │     ② FlareSolverr (:8191)（CF 挑战/JS 站渲染）
+  │     ② FlareSolverr (:8192)（CF 挑战/JS 站渲染）
   │     ③ playwright（复杂 SPA 渲染）
   │     fetch 缓存按渲染方式隔离
   ├─ browser_* → 内嵌 playwright（agent 交互：navigate/click/type/scroll/find/screenshot）
@@ -78,6 +78,40 @@ npm run build && npm start   # 编译后跑
 npm test               # vitest
 ```
 
+## Docker 部署（推荐）
+
+一条命令起全栈（gateway + searxng + flaresolverr）：
+
+```bash
+cd docker
+cp .env.example .env       # 填入 EXA / TAVILY / ZHIHU / EMBEDDING 等密钥
+docker compose up -d        # 本地构建；或改用下方已推送的 ghcr 镜像
+docker compose ps
+```
+
+默认暴露 `127.0.0.1:3000/mcp`（仅本机）。公网部署：
+
+```bash
+GATEWAY_BIND=0.0.0.0 GATEWAY_TOKEN=<strong-token> docker compose up -d
+```
+
+镜像来源：
+
+| 镜像 | 来源 |
+|---|---|
+| `ghcr.io/<owner>/agent-search-gateway` | 本仓库 `Dockerfile`，由 `.github/workflows/docker.yml` 在 CI 构建推送（本地也可 `docker compose build`） |
+| `ghcr.io/<owner>/agent-search-searxng` | 本仓库 `docker/searxng/Dockerfile`（官方 searxng 基镜像 + `searxng-ext/` 引擎/插件） |
+| `ghcr.io/flaresolverr/flaresolverr` | 上游官方镜像 |
+| `mcr.microsoft.com/playwright:*` | 网关基镜像（自带 Node + Playwright 浏览器） |
+
+约定：
+
+- **密钥只经 `.env` → 环境变量注入，不进镜像**。searxng 的 `settings.yml` 由容器启动时从 `docker/searxng/settings.template.yml` 渲染。
+- **配额台账共享**：`quota` 卷同时挂进 searxng 与 gateway（同一路径 `/quota/quota.json`）。
+- 语料库 + 广告过滤缓存在 `corpus` 卷（容器内 `/data`）。
+- 容器内网关配置为只读挂载的 `docker/gateway.docker.yaml`；改搜索/重排策略改它即可。
+- **出口不经任何代理**：免费 API 引擎直连可达，内置通用爬虫已整体 disabled。
+
 ## 接入 MCP 客户端
 
 网关地址：`http://<host>:3000/mcp`
@@ -135,13 +169,13 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 | 文件 | 管什么 | 谁读 | 改后生效 |
 |---|---|---|---|
 | `gateway.yaml` 的 `searxng`/`search` 块 | **怎么调 searxng**：连哪个地址（`searxng.url`）、超时、结果数、缓存 | gateway (node) | 重启 gateway |
-| `/etc/agent-search/settings.yml` | **searxng 内部引擎配置**：启哪些引擎（google/bing/ddg/brave）、safesearch、UA | SearXNG 容器启动时 | `docker restart searxng-main` |
+| searxng 的 `settings.yml`（源码运行：`~/Projects/searxng/settings.yml`；Docker：`docker/searxng/settings.template.yml`） | **searxng 内部引擎配置**：启哪些引擎、safesearch、UA | SearXNG 启动时 | 重启 searxng |
 
 要点：
 
-- `gateway.yaml` 的 `searxng.url` 必须指向 searxng 实际端口（本机 `8890`），flaresolverr 同理（`8191`）
-- settings.yml 是独立配置文件，**不要放 `/tmp`**（重启会丢）；本机约定在 `/etc/agent-search/settings.yml`
-- searxng 容器挂载方式：`-v /etc/agent-search/settings.yml:/etc/searxng/settings.yml:ro`
+- `gateway.yaml` 的 `searxng.url` 必须指向 searxng 实际端口（源码运行 `127.0.0.1:8888`；Docker 内为服务名 `http://searxng:8080`），flaresolverr 同理（`8192`／`http://flaresolverr:8191`）
+- settings.yml 是独立配置文件，**不要放 `/tmp`**（重启会丢）
+- Docker 下 `settings.yml` 由 `docker/searxng/entrypoint.sh` 用环境变量渲染，**不要手改容器内文件**
 - 改引擎开关（如启用/禁用某个引擎）只动 settings.yml + 重启 searxng，**不需要动 gateway**
 
 ### 广告过滤（StevenBlack hosts）

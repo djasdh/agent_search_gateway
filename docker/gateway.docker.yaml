@@ -1,0 +1,124 @@
+# agent_search_gateway —— 容器内网关配置
+# compose 将其只读挂载为容器内 /app/gateway.yaml。
+# 与仓库根的 gateway.yaml.example 同构，仅把「本机路径/端口」换成容器内值：
+#   - searxng/flaresolverr 用 compose 服务名
+#   - 配额台账与语料库落在挂载卷上
+# 密钥仍由环境变量注入（EMBEDDING_API_KEY / GATEWAY_TOKEN）。
+
+gateway:
+  host: 0.0.0.0
+  port: 3000
+  token: ""
+
+logging:
+  level: info
+  file: ""
+
+searxng:
+  url: http://searxng:8080
+  timeout_ms: 10000
+
+flaresolverr:
+  url: http://flaresolverr:8191
+  enabled: true
+  timeout_ms: 60000
+  max_concurrent: 2
+  trigger_status: [403, 405, 429]
+  fallback_on_empty: true
+
+search:
+  max_results: 10
+  max_result_chars: 500
+  cache_ttl_ms: 300000
+  cache_max_entries: 200
+  max_concurrent: 2
+  engines:
+    resident: [zhihu, "zhihu web", bilibili]
+    rotating: [exaapi, tavily, firecrawl]
+  fanout_default: 1
+  quota_enabled: true
+  quota_ledger_path: /quota/quota.json
+  quota_tight_threshold: 0.1
+  resident_quota_floor: 0.2
+
+rerank:
+  enabled: true
+  engine_boost:
+    bilibili: 1.0
+  diversity:
+    enabled: true
+    mmr_lambda: 1.0
+    max_per_domain: 3
+  authority:
+    enabled: true
+    weight: 0.5
+
+ad_filter:
+  enabled: true
+  level: ads
+  extra_domains: []
+  hosts_file: /data/adblock/hosts
+  auto_update: true
+  auto_update_interval_ms: 86400000
+  allowlist:
+    - wikipedia.org
+    - github.com
+    - github.io
+    - githubusercontent.com
+    - stackoverflow.com
+    - stackexchange.com
+    - reddit.com
+    - youtube.com
+    - google.com
+    - bing.com
+
+fetch:
+  timeout_ms: 15000
+  max_bytes: 5242880
+  user_agent: ""
+  block_private_ips: true
+  private_ip_exempt_cidrs:
+    - 198.18.0.0/15
+    - fdfe:dcba:9876::/64
+  structural: clean
+  max_output_chars: 20000
+  cache_ttl_ms: 600000
+  cache_max_entries: 200
+
+browser:
+  enabled: true
+  headless: true
+  pool_size: 1
+  idle_ttl_ms: 360000
+  timeout_ms: 30000
+  max_concurrent: 2
+  engine: chromium
+  proxy_server: ""
+  proxy_username: ""
+  proxy_password: ""
+  wait_for_selector: ""
+  screenshot:
+    enabled: true
+    max_size: 512
+    image_type: jpeg
+
+embedding:
+  enabled: true
+  provider: openai
+  base_url: https://api.siliconflow.cn/v1
+  api_key: ""              # 环境变量 EMBEDDING_API_KEY 优先
+  model: BAAI/bge-m3
+  dim: 1024
+  timeout_ms: 5000
+  batch_size: 32
+  concurrency: 4
+  max_input_chars: 2000
+  query_prefix: ""
+  passage_prefix: ""
+
+corpus:
+  enabled: true
+  store_path: /data/corpus/corpus.db
+  ttl_ms: 2592000000
+  recall_k: 10
+  sweep_interval_ms: 3600000

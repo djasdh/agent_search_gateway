@@ -1,0 +1,20 @@
+{
+  "engines": {
+    "youcom": {
+      "type": "daily",
+      "limit": 90
+    },
+    "exaapi": {
+      "type": "monthly",
+      "limit": 2250
+    },
+    "tavily": {
+      "type": "monthly",
+      "limit": 900
+    },
+    "firecrawl": {
+      "type": "monthly",
+      "limit": 450
+    }
+  }
+}

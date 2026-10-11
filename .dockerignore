@@ -1,0 +1,18 @@
+# 两个镜像的构建 context 都是仓库根,故此处只排除与构建无关的大件/敏感项。
+# 注意:不可排除 searxng-ext/ 与 docker/(searxng 镜像的 COPY 源)。
+
+.git
+.gitignore
+node_modules
+dist
+data
+.env
+*.log
+gateway.yaml
+.tmp
+eval
+scripts
+docs
+__tests__
+searxng-tavily
+CONTEXT.md
