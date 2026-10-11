@@ -156,6 +156,48 @@ const configSchema = z.object({
       wait_for_selector: "",
       screenshot: { enabled: true, max_size: 512, image_type: "jpeg" },
     }),
+  embedding: z
+    .object({
+      enabled: z.boolean().default(false),
+      provider: z.enum(["openai", "ollama"]).default("openai"),
+      base_url: z.string().default("http://127.0.0.1:11434/v1"),
+      api_key: z.string().default(""),
+      model: z.string().default(""),
+      dim: z.number().int().nonnegative().default(0),
+      timeout_ms: z.number().int().positive().default(5000),
+      batch_size: z.number().int().positive().default(32),
+      max_input_chars: z.number().int().positive().default(2000),
+      query_prefix: z.string().default(""),
+      passage_prefix: z.string().default(""),
+    })
+    .catch({
+      enabled: false,
+      provider: "openai",
+      base_url: "http://127.0.0.1:11434/v1",
+      api_key: "",
+      model: "",
+      dim: 0,
+      timeout_ms: 5000,
+      batch_size: 32,
+      max_input_chars: 2000,
+      query_prefix: "",
+      passage_prefix: "",
+    }),
+  corpus: z
+    .object({
+      enabled: z.boolean().default(false),
+      store_path: z.string().default("data/corpus/corpus.db"),
+      ttl_ms: z.number().int().positive().default(2592000000),
+      recall_k: z.number().int().positive().max(100).default(10),
+      sweep_interval_ms: z.number().int().positive().default(3600000),
+    })
+    .catch({
+      enabled: false,
+      store_path: "data/corpus/corpus.db",
+      ttl_ms: 2592000000,
+      recall_k: 10,
+      sweep_interval_ms: 3600000,
+    }),
 });
 
 export type AdFilterLevel = "off" | "ads" | "ads+tracking" | "full";
@@ -216,6 +258,22 @@ export interface GatewayConfig {
   browserScreenshotEnabled: boolean;
   browserScreenshotMaxSize: number;
   browserScreenshotImageType: "jpeg" | "png";
+  embeddingEnabled: boolean;
+  embeddingProvider: "openai" | "ollama";
+  embeddingBaseUrl: string;
+  embeddingApiKey: string;
+  embeddingModel: string;
+  embeddingDim: number;
+  embeddingTimeoutMs: number;
+  embeddingBatchSize: number;
+  embeddingMaxInputChars: number;
+  embeddingQueryPrefix: string;
+  embeddingPassagePrefix: string;
+  corpusEnabled: boolean;
+  corpusStorePath: string;
+  corpusTtlMs: number;
+  corpusRecallK: number;
+  corpusSweepIntervalMs: number;
 }
 
 export function defaultConfigPath(): string {
@@ -312,5 +370,21 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     browserScreenshotEnabled: v.browser.screenshot.enabled,
     browserScreenshotMaxSize: v.browser.screenshot.max_size,
     browserScreenshotImageType: v.browser.screenshot.image_type,
+    embeddingEnabled: v.embedding.enabled,
+    embeddingProvider: v.embedding.provider,
+    embeddingBaseUrl: v.embedding.base_url.replace(/\/+$/, ""),
+    embeddingApiKey: process.env.EMBEDDING_API_KEY || v.embedding.api_key,
+    embeddingModel: v.embedding.model,
+    embeddingDim: v.embedding.dim,
+    embeddingTimeoutMs: v.embedding.timeout_ms,
+    embeddingBatchSize: v.embedding.batch_size,
+    embeddingMaxInputChars: v.embedding.max_input_chars,
+    embeddingQueryPrefix: v.embedding.query_prefix,
+    embeddingPassagePrefix: v.embedding.passage_prefix,
+    corpusEnabled: v.corpus.enabled,
+    corpusStorePath: v.corpus.store_path,
+    corpusTtlMs: v.corpus.ttl_ms,
+    corpusRecallK: v.corpus.recall_k,
+    corpusSweepIntervalMs: v.corpus.sweep_interval_ms,
   };
 }

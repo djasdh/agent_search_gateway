@@ -11,6 +11,8 @@ import { createFetchService } from "./fetch/service.js";
 import { getHealth } from "./health.js";
 import type { Logger } from "./logger.js";
 import { createSearchService } from "./search/service.js";
+import { createEmbeddingProvider, type EmbeddingProvider } from "./search/embedding/provider.js";
+import { createCorpusStore, type CorpusStore } from "./search/embedding/store.js";
 import { mcpSessionContext } from "./utils/session-context.js";
 
 export const GATEWAY_VERSION = "0.1.0";
@@ -23,6 +25,105 @@ function getBrowserPool(config: GatewayConfig, logger: Logger): BrowserPool {
     sharedBrowserPool = new BrowserPool(config, logger);
   }
   return sharedBrowserPool;
+}
+
+// 语义层（embedding + 语料库）全局单例：跨 MCP 会话共享，避免每会话各开一个 sqlite 连接
+interface SemanticRuntime {
+  provider: EmbeddingProvider | null;
+  corpus: CorpusStore | null;
+  dim: number;
+}
+
+let sharedSemantic: Promise<SemanticRuntime> | null = null;
+let semanticSweep: ReturnType<typeof setInterval> | null = null;
+let semanticClosed = false;
+
+async function initSemantic(config: GatewayConfig, logger: Logger): Promise<SemanticRuntime> {
+  let provider: EmbeddingProvider | null = null;
+  let dim = 0;
+  if (config.embeddingEnabled && config.embeddingModel) {
+    try {
+      provider = createEmbeddingProvider(
+        {
+          provider: config.embeddingProvider,
+          baseUrl: config.embeddingBaseUrl,
+          apiKey: config.embeddingApiKey,
+          model: config.embeddingModel,
+          dim: config.embeddingDim,
+          timeoutMs: config.embeddingTimeoutMs,
+          batchSize: config.embeddingBatchSize,
+          maxInputChars: config.embeddingMaxInputChars,
+          queryPrefix: config.embeddingQueryPrefix,
+          passagePrefix: config.embeddingPassagePrefix,
+        },
+        logger,
+      );
+      // 无论是否配置 dim，都做一次真实探针：验证可达性 + 维度一致
+      const pr = await provider.probe();
+      if (!pr.ok || !pr.dim || pr.dim <= 0) {
+        throw new Error(pr.detail ?? "embedding 探针失败");
+      }
+      dim = pr.dim;
+      logger.info(`embedding 已启用: ${config.embeddingProvider}:${config.embeddingModel} (dim=${dim})`);
+    } catch (err) {
+      logger.warn(`embedding 探针失败，已禁用语义召回: ${err instanceof Error ? err.message : String(err)}`);
+      provider = null;
+    }
+  }
+
+  let corpus: CorpusStore | null = null;
+  if (provider && config.corpusEnabled) {
+    try {
+      const namespace = `${provider.name}:${provider.model}@${dim}`;
+      corpus = createCorpusStore(
+        { path: config.corpusStorePath, namespace, dim, ttlMs: config.corpusTtlMs },
+        logger,
+      );
+      if (corpus) {
+        logger.info(`语料库已启用: ${namespace} @ ${config.corpusStorePath} (${corpus.stats().entries} 条)`);
+      }
+    } catch (err) {
+      logger.warn(`语料库初始化失败，已禁用: ${err instanceof Error ? err.message : String(err)}`);
+      corpus = null;
+    }
+  }
+
+  if (corpus && !semanticSweep) {
+    semanticSweep = setInterval(() => {
+      try {
+        const removed = corpus!.gc(Date.now());
+        if (removed > 0) logger.debug(`语料库 TTL 清扫: 删除 ${removed} 条`);
+      } catch (err) {
+        logger.warn(`语料库清扫失败: ${String(err)}`);
+      }
+    }, config.corpusSweepIntervalMs);
+    semanticSweep.unref?.();
+  }
+
+  return { provider, corpus, dim };
+}
+
+function getSemanticRuntime(config: GatewayConfig, logger: Logger): Promise<SemanticRuntime> {
+  if (!sharedSemantic) sharedSemantic = initSemantic(config, logger);
+  return sharedSemantic;
+}
+
+function closeSemantic(): void {
+  if (semanticClosed) return;
+  semanticClosed = true;
+  if (semanticSweep) {
+    clearInterval(semanticSweep);
+    semanticSweep = null;
+  }
+  void sharedSemantic
+    ?.then((s) => {
+      try {
+        s.corpus?.close();
+      } catch {
+        /* ignore */
+      }
+    })
+    .catch(() => {});
 }
 
 export async function createServer(config: GatewayConfig, logger: Logger): Promise<McpServer> {
@@ -61,7 +162,12 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
   } else {
     logger.info("广告过滤未启用 (off 或 hosts 文件缺失)");
   }
-  let searchService = createSearchService(config, domainFilter, logger);
+  const semantic = await getSemanticRuntime(config, logger);
+  let searchService = createSearchService(config, domainFilter, logger, {
+    embeddingProvider: semantic.provider,
+    corpus: semantic.corpus,
+    recallK: config.corpusRecallK,
+  });
   const browserPool = getBrowserPool(config, logger);
   const fetchService = createFetchService(config, logger, browserPool);
   const browserTools = new BrowserTools(browserPool, config, logger);
@@ -75,7 +181,11 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
       config.adFilterHostsFile,
       config.adFilterAllowlist,
     );
-    searchService = createSearchService(config, domainFilter, logger);
+    searchService = createSearchService(config, domainFilter, logger, {
+      embeddingProvider: semantic.provider,
+      corpus: semantic.corpus,
+      recallK: config.corpusRecallK,
+    });
     logger.info(`广告过滤已刷新: level=${config.adFilterLevel} 域名数=${domainFilter.count}`);
   };
   const stopScheduler = startAdListScheduler(config, logger, refreshDomainFilter);
@@ -83,10 +193,12 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
   // 优雅关闭时释放浏览器资源 + 停止调度器
   process.on("SIGTERM", () => {
     stopScheduler();
+    closeSemantic();
     void browserPool.closeAll().catch(() => {});
   });
   process.on("SIGINT", () => {
     stopScheduler();
+    closeSemantic();
     void browserPool.closeAll().catch(() => {});
   });
 
@@ -97,7 +209,14 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
         "检查网关与各后端（searxng、FlareSolverr）的连通状态。返回 JSON，包含每个后端的 up/down、延迟和错误信息。",
     },
     async () => {
-      const report = await getHealth(config, startedAt);
+      const report = await getHealth(config, startedAt, {
+        embeddingUp: semantic.provider !== null,
+        model: config.embeddingModel || undefined,
+        dim: semantic.dim || undefined,
+        corpus: semantic.corpus
+          ? { namespace: semantic.corpus.namespace, entries: semantic.corpus.stats().entries }
+          : undefined,
+      });
       logger.debug(`health probe: searxng=${report.searxng.status} flaresolverr=${report.flaresolverr.status}`);
       return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
     },

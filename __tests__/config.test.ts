@@ -109,4 +109,57 @@ ad_filter:
     const p = writeYaml(d, "ad_filter:\n  level: extreme\n");
     expect(() => loadConfig(p)).toThrow(/校验失败/);
   });
+
+  it("embedding/corpus 默认关闭", () => {
+    const d = tempDir();
+    const p = writeYaml(d, "gateway:\n  host: 127.0.0.1\n");
+    const c = loadConfig(p);
+    expect(c.embeddingEnabled).toBe(false);
+    expect(c.corpusEnabled).toBe(false);
+    expect(c.corpusRecallK).toBe(10);
+    expect(c.corpusTtlMs).toBe(2592000000);
+  });
+
+  it("读取 embedding/corpus 配置", () => {
+    const d = tempDir();
+    const p = writeYaml(
+      d,
+      `
+gateway:
+  host: 127.0.0.1
+embedding:
+  enabled: true
+  provider: ollama
+  base_url: http://embed:11434
+  model: bge-m3
+  dim: 1024
+corpus:
+  enabled: true
+  recall_k: 5
+  ttl_ms: 1000
+`,
+    );
+    const c = loadConfig(p);
+    expect(c.embeddingEnabled).toBe(true);
+    expect(c.embeddingProvider).toBe("ollama");
+    expect(c.embeddingBaseUrl).toBe("http://embed:11434");
+    expect(c.embeddingModel).toBe("bge-m3");
+    expect(c.embeddingDim).toBe(1024);
+    expect(c.corpusEnabled).toBe(true);
+    expect(c.corpusRecallK).toBe(5);
+    expect(c.corpusTtlMs).toBe(1000);
+  });
+
+  it("env EMBEDDING_API_KEY 覆盖 yaml api_key", () => {
+    const d = tempDir();
+    const p = writeYaml(d, "gateway:\n  host: 127.0.0.1\nembedding:\n  api_key: from-yaml\n");
+    const old = process.env.EMBEDDING_API_KEY;
+    process.env.EMBEDDING_API_KEY = "from-env";
+    try {
+      expect(loadConfig(p).embeddingApiKey).toBe("from-env");
+    } finally {
+      if (old === undefined) delete process.env.EMBEDDING_API_KEY;
+      else process.env.EMBEDDING_API_KEY = old;
+    }
+  });
 });

@@ -1,7 +1,6 @@
 import type { SearxngResult } from "./searxng.js";
 
 export interface CleanOptions {
-  maxResults?: number;
   maxResultChars?: number;
   minScore?: number;
   /** 域名过滤器：(hostname) => boolean，返回 true 表示"丢弃" */
@@ -16,6 +15,10 @@ export interface CleanedResult {
   publishedDate?: string;
   score?: number;
   category?: string;
+  /** 结果来源：上游或本地语料召回，由语义层标注。 */
+  origin?: "upstream" | "corpus";
+  /** 语料条目的抓取时间（corpus 来源才有）。 */
+  fetchedAt?: number;
 }
 
 /** 规范化 URL 用于去重：去 fragment，去掉常见跟踪参数。 */
@@ -78,7 +81,8 @@ export interface CleanResult {
 /**
  * 清洗链：
  *   过滤空字段/非法 URL → 域名黑名单（shouldBlock）→ 去重 → HTML 实体 → 截断
- *   → min_score 过滤 → num_results 切片。
+ *   → min_score 过滤。
+ * 不再做 num_results 切片——切片由服务层在合并/排序之后统一负责。
  */
 export function cleanResults(results: SearxngResult[], opts: CleanOptions): CleanResult {
   const seen = new Set<string>();
@@ -134,9 +138,6 @@ export function cleanResults(results: SearxngResult[], opts: CleanOptions): Clea
   let filtered = out;
   if (opts.minScore !== undefined) {
     filtered = filtered.filter((r) => (r.score ?? 0) >= (opts.minScore ?? 0));
-  }
-  if (opts.maxResults !== undefined && opts.maxResults > 0) {
-    filtered = filtered.slice(0, opts.maxResults);
   }
   return { results: filtered, blockedCount };
 }

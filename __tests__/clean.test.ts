@@ -51,10 +51,10 @@ describe("cleanResults", () => {
     expect(out.results[0].score).toBe(0.8);
   });
 
-  it("num_results 切片", () => {
+  it("不再切片：返回全部清洗后候选（切片由服务层负责）", () => {
     const items = Array.from({ length: 10 }, (_, i) => r({ url: `https://e.com/${i}` }));
-    const out = cleanResults(items, { maxResults: 3 });
-    expect(out.results).toHaveLength(3);
+    const out = cleanResults(items, {});
+    expect(out.results).toHaveLength(10);
   });
 
   it("shouldBlock 丢弃命中黑名单域名", () => {
