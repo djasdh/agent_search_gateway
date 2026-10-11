@@ -1,3 +1,4 @@
+#!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # 定制 searxng 容器的启动包装：
