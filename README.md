@@ -124,6 +124,8 @@ search:         # max_results/max_result_chars/cache_ttl_ms/cache_max_entries/ma
 fetch:          # timeout_ms/max_bytes/user_agent/block_private_ips/structural/max_output_chars/cache_ttl_ms/cache_max_entries
 ad_filter:      # enabled/level(off|ads|ads+tracking|full)/extra_domains/hosts_file/allowlist
 browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufox预留)/proxy_*/wait_for_selector/screenshot
+embedding:      # enabled/provider(openai|ollama)/base_url/api_key/model/dim/timeout_ms/batch_size/max_input_chars/query_prefix/passage_prefix
+corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 ```
 
 ### searxng 配置分工（gateway.yaml vs settings.yml）
@@ -149,6 +151,15 @@ browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufo
 - **天级自动拉取**：启动时若 hosts 缺失/过期（`auto_update_interval_ms`，默认 24h）自动拉取；进程内定时器周期检查，到点拉取并自动刷新广告过滤集（无需重启）
 - 手动更新：`./scripts/update-adlist.sh [level]`
 - 保白名单 `allowlist` 防误杀（wikipedia/github 等）
+
+### 语义召回与本地语料库（可选）
+
+- 开关：`embedding.enabled` + `corpus.enabled`；都关闭时行为与旧版完全一致。
+- 来源：外部 embedding API（OpenAI 兼容 `/embeddings` 或 Ollama `/api/embed`），**不内置本地模型**；自托管 embedding 可行但非建议（见 `docs/adr/0005`）。
+- 机制：每次搜索把结果写入本地语料库（按 URL 去重、TTL 30 天），并用 query 向量 KNN 召回；召回条目与上游结果按 URL 合并去重后**按纯语义排序**，条目标注「本地缓存 · 抓取于 X」。
+- 降级：embedding 不可用或调用失败时回退为 `score × engine_boost` 排序；上游请求失败时返回错误码并尽量附语料召回结果。
+- 依赖：`sqlite-vec` 随 npm 安装自带平台二进制，无需手动装扩展。
+- 模型切换：命名空间为 `provider:model@dim`；换模型产生新命名空间，旧向量保留但不参与（多命名空间并存，见 `docs/adr/0001`–`0006`）。
 
 ## 管理脚本
 

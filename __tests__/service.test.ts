@@ -5,6 +5,7 @@ import type { GatewayConfig } from "../src/config.js";
 import type { DomainFilter } from "../src/filter/domain-filter.js";
 import type { Logger } from "../src/logger.js";
 import { createSearchService } from "../src/search/service.js";
+import { FakeCorpusStore, FakeEmbeddingProvider } from "./helpers/fakes.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -134,5 +135,43 @@ describe("createSearchService", () => {
     const r = await svc.search({ query: "x" });
     expect(r.ok).toBe(false);
     expect(r.text).toContain("搜索失败");
+  });
+});
+
+describe("createSearchService + 语义语料", () => {
+  it("语料命中并入结果并标注来源", async () => {
+    const provider = new FakeEmbeddingProvider(4);
+    const corpus = new FakeCorpusStore();
+    corpus.put([
+      { url: "https://cache.example/hit", title: "Cached Hit", content: "cached", fetchedAt: Date.now(), vec: provider.vecFor("test query") },
+    ]);
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger, {
+      embeddingProvider: provider,
+      corpus,
+      recallK: 5,
+    });
+    const r = await svc.search({ query: "test query" });
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain("Cached Hit");
+    expect(r.text).toContain("本地缓存");
+  });
+
+  it("上游失败时返回错误码并附语料结果", async () => {
+    const provider = new FakeEmbeddingProvider(4);
+    const corpus = new FakeCorpusStore();
+    corpus.put([
+      { url: "https://cache.example/hit", title: "Cached Hit", content: "cached", fetchedAt: Date.now(), vec: provider.vecFor("x") },
+    ]);
+    const cfg = makeConfig({ searxngUrl: "http://127.0.0.1:1" });
+    const svc = createSearchService(cfg, domainFilter, silentLogger, {
+      embeddingProvider: provider,
+      corpus,
+      recallK: 5,
+    });
+    const r = await svc.search({ query: "x" });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("搜索失败");
+    expect(r.text).toContain("## 结果（本地语料）");
+    expect(r.text).toContain("Cached Hit");
   });
 });

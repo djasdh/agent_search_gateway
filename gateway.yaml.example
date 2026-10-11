@@ -100,3 +100,24 @@ browser:
     enabled: true
     max_size: 512          # 截图最大边长像素（可配）
     image_type: jpeg
+
+embedding:                 # 文本向量来源（外部服务），独立于 searxng
+  enabled: false           # 关闭时：不召回、不语义重排，行为同旧版
+  provider: openai         # openai（POST {base_url}/embeddings）| ollama（POST {base_url}/api/embed）
+  base_url: http://127.0.0.1:11434/v1
+  api_key: ""              # 建议用环境变量 EMBEDDING_API_KEY 注入
+  model: BAAI/bge-m3
+  dim: 0                   # 0=启动探针解析；>0 直接采用
+  timeout_ms: 5000
+  batch_size: 32
+  max_input_chars: 2000
+  # 非空则覆盖内置模型 profile（如 e5 需 query:/passage: 前缀）
+  query_prefix: ""
+  passage_prefix: ""
+
+corpus:                    # 本地语料库（磁盘 sqlite-vec）；每次搜索恒开召回
+  enabled: false
+  store_path: data/corpus/corpus.db
+  ttl_ms: 2592000000       # 30 天
+  recall_k: 10             # KNN 召回上限（与上游按 URL 去重后进排序）
+  sweep_interval_ms: 3600000

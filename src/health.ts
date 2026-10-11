@@ -6,10 +6,19 @@ export interface BackendProbe {
   error?: string;
 }
 
+export interface SemanticHealth {
+  embeddingUp: boolean;
+  model?: string;
+  dim?: number;
+  corpus?: { namespace: string; entries: number };
+}
+
 export interface HealthReport {
   gateway: { version: string; uptimeSec: number };
   searxng: BackendProbe;
   flaresolverr: BackendProbe;
+  embedding?: { status: "up" | "down"; model?: string; dim?: number };
+  corpus?: { namespace: string; entries: number };
 }
 
 async function probe(url: string, timeoutMs = 3000): Promise<BackendProbe> {
@@ -32,12 +41,16 @@ async function probe(url: string, timeoutMs = 3000): Promise<BackendProbe> {
   }
 }
 
-export async function getHealth(config: GatewayConfig, startedAt: number): Promise<HealthReport> {
+export async function getHealth(
+  config: GatewayConfig,
+  startedAt: number,
+  semantic?: SemanticHealth,
+): Promise<HealthReport> {
   const [searxng, flaresolverr] = await Promise.all([
     probe(config.searxngUrl),
     probe(config.flaresolverrUrl),
   ]);
-  return {
+  const report: HealthReport = {
     gateway: {
       version: "0.1.0",
       uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
@@ -45,4 +58,13 @@ export async function getHealth(config: GatewayConfig, startedAt: number): Promi
     searxng,
     flaresolverr,
   };
+  if (config.embeddingEnabled) {
+    report.embedding = {
+      status: semantic?.embeddingUp ? "up" : "down",
+      model: semantic?.model,
+      dim: semantic?.dim,
+    };
+    if (semantic?.corpus) report.corpus = semantic.corpus;
+  }
+  return report;
 }

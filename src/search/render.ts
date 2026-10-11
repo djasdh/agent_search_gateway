@@ -75,13 +75,24 @@ function renderMetadata(data: SearxngResponse): string[] {
   return sections;
 }
 
-function renderResults(results: CleanedResult[]): string {
+function originLabel(r: CleanedResult): string {
+  if (r.origin !== "corpus") return "";
+  if (!r.fetchedAt) return " · 本地缓存";
+  try {
+    return ` · 本地缓存 ${new Date(r.fetchedAt).toISOString().slice(0, 10)}`;
+  } catch {
+    return " · 本地缓存";
+  }
+}
+
+/** 渲染结果列表为 md（导出以便服务层在错误分支复用）。 */
+export function renderResults(results: CleanedResult[]): string {
   if (results.length === 0) {
     return "*没有找到结果。*\n\n可以尝试：\n- 换更短或更宽泛的关键词\n- 去掉时间/语言过滤\n- 检查拼写";
   }
   return results
     .map((r, i) => {
-      const head = `${i + 1}. [${r.title}](${r.url})${engineLabel(r.engines)}${dateLabel(r.publishedDate)}${scoreLabel(r.score)}`;
+      const head = `${i + 1}. [${r.title}](${r.url})${engineLabel(r.engines)}${dateLabel(r.publishedDate)}${scoreLabel(r.score)}${originLabel(r)}`;
       const body = r.content ? `\n   ${r.content}` : "";
       return `${head}${body}`;
     })
