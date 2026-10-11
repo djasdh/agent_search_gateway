@@ -58,8 +58,8 @@ flaresolverr_start() {
     log "flaresolverr 进程已存在 (PID $pid)，尝试探测端口"
   else
     cd "$FLARESOLVERR_DIR"
-    # 需要 conda 的 PATH (Xvfb)，并给独立端口 (Byparr 占 8191)
-    PATH="$CONDA_BIN:$PATH" PORT=$FLARESOLVERR_PORT nohup .venv/bin/python src/flaresolverr.py \
+    # 需要 Xvfb 在 PATH（系统包），并给独立端口 (Byparr 占 8191)
+    PATH="/usr/bin:$PATH" PORT=$FLARESOLVERR_PORT nohup .venv/bin/python src/flaresolverr.py \
       >> "$FLARESOLVERR_DIR/flaresolverr.log" 2>&1 < /dev/null &
     log "flaresolverr 已启动 (PID $!)，日志: $FLARESOLVERR_DIR/flaresolverr.log"
   fi
