@@ -1,0 +1,52 @@
+# searxng settings.yml 片段示例(启用 searxng-ext 的引擎/插件)
+# 把下面内容并入你的 searxng settings.yml 的对应段。
+# 注意:searxng 用 yaml.safe_load,不支持环境变量插值 —— key 请直接写占位或经 env 注入(见各引擎)。
+
+engines:
+  # ── exaapi:searxng 上游自带(零代码;默认 inactive,必须显式 inactive:false)──
+  - name: exaapi
+    engine: exaapi
+    shortcut: exa
+    api_key: "<EXA_API_KEY>"        # 上游引擎只认 settings.yml
+    search_type: instant            # instant 比 auto 便宜 ~43%、快 ~3×
+    content_mode: highlights
+    inactive: false
+
+  # ── tavily:vendored,读 env TAVILY_API_KEY ──
+  - name: tavily
+    engine: tavily
+    shortcut: tvy
+    api_key: ""                     # 空 → os.environ["TAVILY_API_KEY"]
+    disabled: false
+
+  # ── firecrawl:可 keyless;经代理常被 403,故该引擎直连 ──
+  - name: firecrawl
+    engine: firecrawl
+    shortcut: fc
+    api_key: ""                     # 空 → keyless(限速低)
+    proxies: {}
+    disabled: false
+
+  # ── youcom:keyless MCP,不稳定,默认关 ──
+  - name: youcom
+    engine: youcom
+    shortcut: you
+    disabled: true
+
+  # ── zhihu:知乎开放平台,一个模块两个 scope ──
+  - name: zhihu
+    engine: zhihu
+    shortcut: zh
+    scope: zhihu                    # 站内搜索(≤10 条/次)
+    disabled: false
+  - name: zhihu web
+    engine: zhihu
+    shortcut: zhw
+    scope: web                      # 全网搜索(≤20 条/次)
+    disabled: false
+
+# ── 配额台账插件 ──
+# ⚠️ settings.yml 的 plugins 段是"整体覆盖"语义:使用 use_default_settings: true 时,
+#    若自定义本段,需把默认插件一并列出(否则默认插件会丢)。示例仅示扩展项:
+plugins:
+  - searx.plugins.quota.QuotaPlugin
