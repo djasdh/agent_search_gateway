@@ -23,7 +23,6 @@ Optional settings are:
     shortcut: fc
     api_key: ""
     disabled: false
-    proxies: {}
 
 The API wraps its payload in a ``success`` / ``data`` envelope::
 

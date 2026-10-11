@@ -19,12 +19,11 @@ engines:
     api_key: ""                     # 空 → os.environ["TAVILY_API_KEY"]
     disabled: false
 
-  # ── firecrawl:可 keyless;经代理常被 403,故该引擎直连 ──
+  # ── firecrawl:可 keyless(限速低);直连即可 ──
   - name: firecrawl
     engine: firecrawl
     shortcut: fc
     api_key: ""                     # 空 → keyless(限速低)
-    proxies: {}
     disabled: false
 
   # ── youcom:keyless MCP,不稳定,默认关 ──

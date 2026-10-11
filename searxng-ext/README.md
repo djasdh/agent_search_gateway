@@ -20,7 +20,7 @@
 searx/engines/
   zhihu.py       知乎开放平台(站内 / 全网,一个模块两个 scope)
   tavily.py      Tavily(基于上游 PR #6499 的 vendored 代码,改为读环境变量)
-  firecrawl.py   Firecrawl(可 keyless;经代理被 403 时用 proxies: {} 直连)
+  firecrawl.py   Firecrawl(可 keyless)
   youcom.py      You.com keyless MCP(不稳定,默认 disabled)
 searx/plugins/
   quota.py       配额台账插件(pre_search 计数 + 剔除耗尽引擎)
