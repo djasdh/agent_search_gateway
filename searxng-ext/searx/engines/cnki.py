@@ -6,16 +6,20 @@ CNKI 没有公开检索 API，本引擎直接使用 KNS 站内接口。检索本
 以便补全摘要。拿不到票据时仍返回标题/作者/链接（结果降级），因为该权限
 绑定机构出口 IP，离开机构网段时登录必然失败。
 
-Request shape:
+实测结论（2026-10-17，机构出口 IP 下）：
 
-- 检索：``POST /kns8s/brief/grid``，form body 含 ``QueryJson``；响应为 HTML。
-- ``QueryJson`` 需带 ``Classid``（``WD0FTY92`` / ``Resource=CROSSDB``）与
-  ``KuaKuCode``（高级检索页 ``#CheckedDB`` 的值）。
-- ``Operator`` / ``Logic`` 是数字枚举（``TOPRANK=1``、``AND=0``）。
+- 检索：``POST /kns8s/brief/grid``，form body 含 ``QueryJson``；响应是
+  **HTML**。失败也是 200，错误信息写在 ``<p class="no-content" value="...">``。
+- ``QueryJson`` 必须带 ``Classid``（缺了报「没有指定检索分类」），默认
+  ``Classid=WD0FTY92`` / ``Resource=CROSSDB``；``KuaKuCode`` 取高级检索页
+  ``#CheckedDB`` 的值（缺了没有结果）。
+- ``Operator`` / ``Logic`` 是**数字枚举**（``common.min.js``：
+  ``DEFAULT:0, TOPRANK:1, ...``；``AND:0, OR:1, NOT:2``）；传字符串
+  ``"TOPRANK"`` 会得到「非法逻辑操作符」。
 - 结果行是 ``<tr>``：``td.name``（标题 ``a.fz14``）、``td.author``、
   ``td.source``、``td.date``。
-- 摘要正文在 ``#ChDivSummary``；下载（由网关取件插件负责）从摘要页的
-  ``#pdfDown`` / ``#cajDown`` 取。
+- 摘要页 ``#ChDivSummary`` 是摘要正文；下载（由网关取件插件负责）从摘要页的
+  ``#pdfDown`` / ``#cajDown``（``bar.cnki.net/bar/download/order?id=...``）取。
 
 .. _CNKI: https://www.cnki.net/
 
@@ -35,7 +39,7 @@ Configuration
 Optional settings are:
 
 - :py:obj:`page_size` -- 每次请求条数（默认 ``20``）
-- :py:obj:`kuaku_code` -- KNS 全库串（默认取高级检索页 ``#CheckedDB`` 的值）
+- :py:obj:`kuaku_code` -- KNS 全库串（默认取高级检索页 ``#CheckedDB`` 的实测值）
 - :py:obj:`abstract_budget_seconds` -- 串行补摘要的总预算（默认 ``18`` 秒）
 """
 
@@ -85,7 +89,7 @@ _ADVSEARCH_URL = "https://kns.cnki.net/kns8s/AdvSearch"
 _KNS_BASE = "https://kns.cnki.net"
 
 #: ``login.cnki.net`` 前端公开常量（ecpLoginDialogLink.js），不是密钥。
-_LOGIN_FRONTEND_CONST = "t8b52yrsoyx66f35tk0p4nubrmrcglv5"
+_SECRET = "t8b52yrsoyx66f35tk0p4nubrmrcglv5"
 
 #: KNS ``OperatorType`` / ``Logic`` 枚举（common.min.js）。
 _OP_TOPRANK = 1
@@ -95,7 +99,7 @@ page_size = 20
 """每次请求的结果条数。"""
 
 kuaku_code = "YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R"
-"""KNS 全库串；默认值取自高级检索页 ``#CheckedDB``。"""
+"""KNS 全库串；默认值取自高级检索页 ``#CheckedDB``（实测）。"""
 
 abstract_budget_seconds = 18.0
 """串行补摘要的总预算（秒）；超出即返回已得部分。"""
@@ -115,9 +119,6 @@ def request(query: str, params: "OnlineParams") -> None:
     cookies = _flush_session()
     if cookies:
         params["cookies"] = cookies
-        # searxng 的 network 层不会把 cookies 写回 ``resp.request.headers``，
-        # 而 ``response()`` 需要从那里取会话去抓摘要页；这里显式补一份。
-        params["headers"]["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
 
     params["url"] = _GRID_URL
     params["method"] = "POST"
@@ -147,33 +148,26 @@ def response(resp: "SXNG_Response") -> EngineResults:
             raise SearxEngineAPIException(f"CNKI: {error}")
         return res
 
-    # 复用检索请求携带的会话 cookie 抓摘要（见 request() 中显式写入的 Cookie 头）
+    # 复用检索请求携带的会话 cookie 抓摘要（searxng 把 params["cookies"] 合进了请求头）
     cookie = resp.request.headers.get("cookie", "") if resp.request is not None else ""
     deadline = time.monotonic() + abstract_budget_seconds
-    session = _new_http_session()
 
-    try:
-        for row in rows:
-            content = ""
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                content = _fetch_abstract(
-                    session, row["url"], cookie, min(abstract_timeout_seconds, max(0.5, remaining))
-                )
-            res.add(
-                res.types.Paper(
-                    url=row["url"],
-                    title=row["title"],
-                    content=content,
-                    authors=row["authors"],
-                    journal=row["source"],
-                    comments=row["comments"],
-                    publishedDate=row["published"],
-                )
+    for row in rows:
+        content = ""
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            content = _fetch_abstract(row["url"], cookie, min(abstract_timeout_seconds, max(0.5, remaining)))
+        res.add(
+            res.types.Paper(
+                url=row["url"],
+                title=row["title"],
+                content=content,
+                authors=row["authors"],
+                journal=row["source"],
+                comments=row["comments"],
+                publishedDate=row["published"],
             )
-    finally:
-        if session is not None:
-            session.close()
+        )
 
     return res
 
@@ -218,7 +212,7 @@ def _query_json(query: str) -> dict[str, t.Any]:
 
 
 def _js_nonce(timestamp: int) -> str:
-    """模拟前端 ``Math.sin(ts).toString().substr(6)``。"""
+    """模拟前端 ``Math.sin(ts).toString().substr(6)``（实测可用）。"""
 
     return repr(math.sin(timestamp))[6:]
 
@@ -241,7 +235,7 @@ def _flush_session() -> dict[str, str]:
     timestamp = int(time.time() * 1000)
     nonce = _js_nonce(timestamp)
     signature = hashlib.md5(
-        f"{timestamp}{nonce}{_LOGIN_FRONTEND_CONST}{client_id}".encode(), usedforsecurity=False
+        f"{timestamp}{nonce}{_SECRET}{client_id}".encode(), usedforsecurity=False
     ).hexdigest()
 
     try:
@@ -295,7 +289,7 @@ def _parse_date(value: str) -> datetime | None:
 
 
 def _parse_grid(text: str, base_url: str) -> list[dict[str, t.Any]]:
-    """从 KNS ``brief/grid`` 的 HTML 表格里提取结果行（结构见模块 docstring）。"""
+    """从 KNS ``brief/grid`` 的 HTML 表格里提取结果行（实测结构见模块 docstring）。"""
 
     try:
         doc = lxml_html.fromstring(text)
@@ -342,38 +336,17 @@ _ABSTRACT_XPATHS = (
 )
 
 
-def _new_http_session():
-    """摘要页抓取用的独立会话。
-
-    searxng 的 ``searx.network`` 把 ``timeout`` 当成「引擎绝对截止时间」
-    （会再减去引擎已耗时），串行补摘要时第 N 条起只剩负超时，表现为秒级
-    ``Timeout``。这里直接用 searxng 自带的 curl_cffi，并按浏览器 TLS 指纹
-    （知网 WAF 对非浏览器指纹更敏感）。失败时返回 ``None``，回落 ``get()``。
-    """
-
-    try:
-        from curl_cffi import requests as curl_requests  # pylint: disable=import-outside-toplevel
-
-        return curl_requests.Session(impersonate="chrome")
-    except Exception:  # pylint: disable=broad-except
-        logger.debug("CNKI: curl_cffi 不可用，摘要抓取回落 searx.network")
-        return None
-
-
-def _fetch_abstract(session, url: str, cookie: str, timeout: float) -> str:
+def _fetch_abstract(url: str, cookie: str, timeout: float) -> str:
     """抓取摘要页并提取正文；失败返回空串（保留标题/作者/链接）。"""
 
     headers = {"Referer": _ADVSEARCH_URL}
     if cookie:
         headers["Cookie"] = cookie
     try:
-        if session is not None:
-            r = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        else:
-            r = get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        r = get(url, headers=headers, timeout=timeout, allow_redirects=True)
     except Exception:  # pylint: disable=broad-except
         return ""
-    if r.status_code != 200:
+    if not r.ok:
         return ""
     return _parse_abstract(r.text)
 
