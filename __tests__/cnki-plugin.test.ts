@@ -96,7 +96,7 @@ beforeAll(async () => {
     if (path.endsWith("/IpLoginFlushPo")) {
       const cookies = behaviour === "no-lid" ? ["Ecp_ClientId=client-1"] : ["Ecp_ClientId=client-1", "LID=ticket-1"];
       res.writeHead(200, { "Content-Type": "application/json", "Set-Cookie": cookies });
-      // 响应体是带外层括号的非标准 JSON
+      // 实测响应体是带外层括号的非标准 JSON
       res.end('({"IsSuccess":true,"ShowName":"测试机构"})');
       return;
     }

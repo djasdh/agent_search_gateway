@@ -4,14 +4,14 @@
  * 职责（ADR-0007 / ADR-0009 / D22）：插件自管 headers、cookies、会话与逐跳重定向，
  * 完成**全部**网络请求；网关只把返回的 `bytes` 落盘并给出本地路径 + `/files/<id>`。
  *
- * 流程：
- * - 会话每次现开：`GenerateClientID` 拿 clientId → md5 签名 → `IpLoginFlushPo`
- *   拿 `LID`（下载必需）；响应体是 `({...})` 非标准 JSON，本插件只取
- *   `Set-Cookie`，不解析响应体。
+ * 实测要点（见 `docs/cnki-channel.md` §8 与附录，2026-10-17 复验）：
+ * - 会话**每次现开**（§7②）：`GenerateClientID` 拿 clientId → md5 签名 →
+ *   `IpLoginFlushPo` 拿 `LID`（下载必需）；响应体是 `({...})` 非标准 JSON，
+ *   本插件只取 `Set-Cookie`，不解析响应体。
  * - 摘要页的 `#pdfDown` / `#cajDown` 指向 `bar.cnki.net/bar/download/order?id=…`，
  *   跟随重定向最终到 `docdown.cnki.net/docdown/fulltext/download`。
- * - 部分文献没有 PDF 版：`#pdfDown` 会跳到 `bar/htmlread.html`，因此必须按
- *   `%PDF` 魔数判定产物。
+ * - **部分文献没有 PDF 版**：`#pdfDown` 会跳到 `bar/htmlread.html`，因此必须按
+ *   `%PDF` 魔数判定产物，不能只看状态码或 Content-Type。
  */
 import { createHash } from "node:crypto";
 import type { GatewayConfig } from "../../config.js";
@@ -25,8 +25,8 @@ export const endpoints = {
   knsBase: "https://kns.cnki.net",
 };
 
-/** `login.cnki.net` 前端公开常量（ecpLoginDialogLink.js），非账号密钥。 */
-const LOGIN_FRONTEND_CONST = "t8b52yrsoyx66f35tk0p4nubrmrcglv5";
+/** `login.cnki.net` 前端公开常量（ecpLoginDialogLink.js），不是密钥。 */
+const SECRET = "t8b52yrsoyx66f35tk0p4nubrmrcglv5";
 
 const UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -39,7 +39,7 @@ export const policy = {
   cnkiHostSuffix: "cnki.net",
 };
 
-/** 下载允许更慢（大文件下载）；其余请求用网关的 fetch 超时。 */
+/** 下载允许更慢（实测 3MB 文件）；其余请求用网关的 fetch 超时。 */
 const DOWNLOAD_MIN_TIMEOUT_MS = 60_000;
 
 const NOT_SUBSCRIBED_MARKERS = ["未订购", "会员中心", "订购该资源", "尚未订购"];
@@ -73,7 +73,7 @@ function sign(clientId: string): { timestamp: number; nonce: string; signature: 
   const timestamp = Date.now();
   // 前端把 Math.random 改写成 seed => Math.sin(seed).toString().substr(6)
   const nonce = Math.sin(timestamp).toString().substring(6);
-  const raw = `${timestamp}${nonce}${LOGIN_FRONTEND_CONST}${clientId}`.replace(/ /g, "");
+  const raw = `${timestamp}${nonce}${SECRET}${clientId}`.replace(/ /g, "");
   return { timestamp, nonce, signature: createHash("md5").update(raw).digest("hex") };
 }
 
@@ -209,7 +209,7 @@ async function fetchCnki(url: URL, ctx: FetchPluginContext): Promise<FetchPlugin
     };
   }
 
-  // 摘要页 → 先取出下载链接（#pdfDown / #cajDown → bar/download/order?id=…）
+  // 摘要页 → 先取出下载链接（实测 #pdfDown / #cajDown → bar/download/order?id=…）
   let target = url.toString();
   if (url.pathname.includes(ABSTRACT_PATH)) {
     const page = await cnkiFetch(target, jar, config.fetchTimeoutMs);
