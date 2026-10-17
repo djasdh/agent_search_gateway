@@ -16,7 +16,7 @@ logging:
 
 searxng:
   url: http://searxng:8080
-  timeout_ms: 10000
+  timeout_ms: 25000
 
 flaresolverr:
   url: http://flaresolverr:8191
@@ -40,6 +40,9 @@ search:
   quota_ledger_path: /quota/quota.json
   quota_tight_threshold: 0.1
   resident_quota_floor: 0.2
+  # 类别感知超时：命中请求类别时覆盖 searxng.timeout_ms
+  category_timeout_ms:
+    academic: 25000
 
 rerank:
   enabled: true

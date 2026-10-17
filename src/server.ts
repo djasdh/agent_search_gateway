@@ -259,7 +259,7 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
         query: z.string().describe("搜索关键词"),
         language: z.string().optional().describe("语言代码，如 en/zh-CN，默认按 searxng 实例"),
         safesearch: z.enum(["0", "1", "2"]).optional().describe("安全搜索：0 无/1 中/2 严"),
-        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news"),
+        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；academic（科研/知网）"),
         engines: z.string().optional().describe("指定搜索引擎，逗号分隔"),
         min_score: z.number().min(0).max(1).optional().describe("最低相关度分数 0-1"),
         num_results: z.number().int().min(1).max(20).optional().describe("返回结果条数上限"),

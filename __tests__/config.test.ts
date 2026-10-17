@@ -50,6 +50,7 @@ describe("loadConfig (gateway.yaml)", () => {
     expect(c.fetchDownloadTtlMs).toBe(604800000);
     expect(c.fetchDownloadMaxTotalBytes).toBe(4294967296);
     expect(c.fetchFilesRoute).toBe(true);
+    expect(c.searchCategoryTimeoutMs).toEqual({});
   });
 
   it("读取完整配置", () => {

@@ -71,6 +71,8 @@ const configSchema = z.object({
       quota_ledger_path: z.string().default("~/.config/agent-search/quota.json"),
       quota_tight_threshold: z.number().min(0).max(1).default(0.1),
       resident_quota_floor: z.number().min(0).max(1).default(0.2),
+      // 类别感知超时（ADR-0008 / docs/cnki-channel.md D18）：academic 等类别的引擎更慢
+      category_timeout_ms: z.record(z.string(), z.number().int().positive()).default({}),
     })
     .catch({
       max_results: 10,
@@ -84,6 +86,7 @@ const configSchema = z.object({
       quota_ledger_path: "~/.config/agent-search/quota.json",
       quota_tight_threshold: 0.1,
       resident_quota_floor: 0.2,
+      category_timeout_ms: {},
     }),
   rerank: z
     .object({
@@ -275,6 +278,11 @@ export interface GatewayConfig {
   searchQuotaLedgerPath: string;
   searchQuotaTightThreshold: number;
   searchResidentQuotaFloor: number;
+  /**
+   * 类别感知超时（search.category_timeout_ms，如 `{ academic: 25000 }`）。
+   * 命中请求类别时覆盖 searxngTimeoutMs；未命中回落 searxngTimeoutMs。
+   */
+  searchCategoryTimeoutMs: Record<string, number>;
   rerankEnabled: boolean;
   rerankEngineBoost: Record<string, number>;
   /** 多样性重排（MMR + 同注册域上限）；关闭时行为等同纯 cosine 重排。 */
@@ -415,6 +423,7 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     searchQuotaLedgerPath: expandHome(v.search.quota_ledger_path),
     searchQuotaTightThreshold: v.search.quota_tight_threshold,
     searchResidentQuotaFloor: v.search.resident_quota_floor,
+    searchCategoryTimeoutMs: v.search.category_timeout_ms,
     rerankEnabled: v.rerank.enabled,
     rerankEngineBoost: v.rerank.engine_boost,
     rerankDiversityEnabled: v.rerank.diversity.enabled,

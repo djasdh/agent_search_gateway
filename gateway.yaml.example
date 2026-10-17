@@ -15,7 +15,7 @@ logging:
 
 searxng:
   url: http://127.0.0.1:8888
-  timeout_ms: 10000
+  timeout_ms: 25000   # 整次搜索的闸；须 ≥ 类别超时（见 search.category_timeout_ms），否则引擎会被掐死
 
 flaresolverr:
   url: http://127.0.0.1:8192
@@ -44,6 +44,10 @@ search:
   quota_ledger_path: ~/.config/agent-search/quota.json
   quota_tight_threshold: 0.1   # 候选引擎整体剩余占比低于该值 → 扇出压回 1
   resident_quota_floor: 0.2    # resident 引擎剩余占比低于该值 → 从常住档移出
+  # 类别感知超时：命中请求类别时覆盖上面的 searxng.timeout_ms（学术引擎更慢）
+  # 指定非 general 类别时还会抑制 resident/rotating，交 searxng 按类别选引擎（ADR-0008）
+  category_timeout_ms:
+    academic: 25000
 
 rerank:
   enabled: true

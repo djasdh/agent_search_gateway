@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayConfig } from "../src/config.js";
-import { parseQuotaLedger, planEngines, type QuotaLedger } from "../src/search/service.js";
+import { parseQuotaLedger, planEngines, resolveSearxngTimeout, type QuotaLedger } from "../src/search/service.js";
 
 /** planEngines 只读取这几个字段，其余用类型断言兜底。 */
 function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
@@ -155,5 +155,56 @@ describe("planEngines 分档（resident / rotating）", () => {
   it("全程无 resident 且无 rotating → 交给 searxng 默认", () => {
     const cfg = makeConfig({ searchEngines: [], searchEnginesResident: [] });
     expect(planEngines({ query: "q" }, cfg, enabled, undefined)).toEqual([""]);
+  });
+});
+
+describe("planEngines 类别抑制（ADR-0008）", () => {
+  const enabled = new Set(["zhihu", "bilibili", "exaapi", "tavily"]);
+  const cfg = () => makeConfig({ searchEnginesResident: ["zhihu"], searchEngines: ["exaapi", "tavily"] });
+
+  it("指定非 general 类别 → 抑制 resident/rotating，engines 留空交 searxng 按类别选", () => {
+    expect(planEngines({ query: "q", categories: "academic" }, cfg(), enabled, undefined)).toEqual([""]);
+  });
+
+  it("非 general 与 general 混写仍算非 general", () => {
+    expect(planEngines({ query: "q", categories: "general,academic" }, cfg(), enabled, undefined)).toEqual([""]);
+  });
+
+  it("只有 general（或纯空白）→ 不抑制", () => {
+    const expected = ["zhihu,exaapi", "zhihu,tavily"];
+    expect(planEngines({ query: "q", categories: "general" }, cfg(), enabled, undefined)).toEqual(expected);
+    expect(planEngines({ query: "q", categories: "  " }, cfg(), enabled, undefined)).toEqual(expected);
+  });
+
+  it("显式 engines 优先于类别抑制", () => {
+    const batches = planEngines({ query: "q", categories: "academic", engines: "tavily" }, cfg(), enabled, undefined);
+    expect(batches).toEqual(["tavily"]);
+  });
+});
+
+describe("resolveSearxngTimeout（类别感知超时，D18）", () => {
+  it("命中类别 → 用类别超时", () => {
+    const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: { academic: 25000 } });
+    expect(resolveSearxngTimeout({ query: "q", categories: "academic" }, cfg)).toBe(25000);
+  });
+
+  it("未命中 / 未指定类别 → 回落 searxngTimeoutMs", () => {
+    const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: { academic: 25000 } });
+    expect(resolveSearxngTimeout({ query: "q" }, cfg)).toBe(10000);
+    expect(resolveSearxngTimeout({ query: "q", categories: "news" }, cfg)).toBe(10000);
+  });
+
+  it("多类别按顺序取第一个命中", () => {
+    const cfg = makeConfig({
+      searxngTimeoutMs: 10000,
+      searchCategoryTimeoutMs: { academic: 25000, news: 15000 },
+    });
+    expect(resolveSearxngTimeout({ query: "q", categories: "news,academic" }, cfg)).toBe(15000);
+    expect(resolveSearxngTimeout({ query: "q", categories: "academic,news" }, cfg)).toBe(25000);
+  });
+
+  it("未配置 category_timeout_ms → 等同旧行为", () => {
+    const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: {} });
+    expect(resolveSearxngTimeout({ query: "q", categories: "academic" }, cfg)).toBe(10000);
   });
 });

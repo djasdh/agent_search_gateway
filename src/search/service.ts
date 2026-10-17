@@ -134,7 +134,35 @@ export interface EngineBatch {
  * - 跳过 searxng 侧 `enabled:false` 的引擎（如 youcom），使其不占用批次
  * - 有台账时:剔除已耗尽引擎；`fanout>1` 按剩余额度降序取前 N；
  *   整体余额低于 `quota_tight_threshold` 时把扇出压回 1
+ * - **类别抑制**（ADR-0008）：请求类别含 `general` 以外的类别 → 抑制 resident ∪
+ *   rotating，`engines` 留空交 searxng 按类别选引擎；显式 `engines` 不受影响
  */
+
+/** 请求类别是否含 `general` 以外的类别（ADR-0008）。 */
+export function hasNonGeneralCategory(categories: string | undefined): boolean {
+  return (categories ?? "")
+    .split(",")
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0)
+    .some((c) => c !== "general");
+}
+
+/**
+ * 类别感知的 searxng 超时（D18）：按请求类别顺序取第一个命中
+ * `search.category_timeout_ms` 的值；未命中 → `searxngTimeoutMs`。
+ */
+export function resolveSearxngTimeout(params: SearchParams, config: GatewayConfig): number {
+  const cats = (params.categories ?? "")
+    .split(",")
+    .map((c) => c.trim())
+    .filter((c) => c.length > 0);
+  for (const c of cats) {
+    const t = config.searchCategoryTimeoutMs?.[c];
+    if (t !== undefined) return t;
+  }
+  return config.searxngTimeoutMs;
+}
+
 export function planEngineBatches(
   params: SearchParams,
   config: GatewayConfig,
@@ -146,6 +174,12 @@ export function planEngineBatches(
     const usable = quota ? explicit.filter((e) => !isExhausted(quota[e])) : explicit;
     // 显式 engines：单批、无 rotating 子集概念 → 非空即止（旧行为）
     return [{ engines: (usable.length > 0 ? usable : explicit).join(","), rotating: [] }];
+  }
+
+  // ADR-0008：指定了非 general 类别 → 抑制常驻源与轮换源（engines 留空，
+  // 交 searxng 按类别选引擎）。显式 engines 已在上面优先返回，不受此影响。
+  if (hasNonGeneralCategory(params.categories)) {
+    return [{ engines: "", rotating: [] }];
   }
 
   const resident = config.searchEnginesResident ?? [];
@@ -423,6 +457,9 @@ export function createSearchService(
       let upstreamMs = 0;
       let upstreamBatches = 0;
 
+      // 类别感知超时（D18）：academic 等类别的引擎更慢，取该类别配置的超时
+      const searxngTimeoutMs = resolveSearxngTimeout(params, config);
+
       for (const batch of batches) {
         const req: SearchRequest = {
           query: params.query,
@@ -434,7 +471,7 @@ export function createSearchService(
 
         upstreamBatches++;
         const tUp = performance.now();
-        const result = await searchSearxng(config.searxngUrl, config.searxngTimeoutMs, req);
+        const result = await searchSearxng(config.searxngUrl, searxngTimeoutMs, req);
         upstreamMs += performance.now() - tUp;
         if (!result.ok) {
           lastError = result.error;
