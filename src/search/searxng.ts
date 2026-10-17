@@ -7,8 +7,16 @@ export interface SearxngResult {
   category?: string;
   publishedDate?: string | null;
   score?: number;
+  /** 图片结果：图片本身的直链（searxng 图片类结果）。 */
   img_src?: string;
-  thumbnail?: string;
+  /** 图片结果：缩略图直链。 */
+  thumbnail_src?: string;
+  /** 图片结果：分辨率，形如 `1920 x 1080`。 */
+  resolution?: string;
+  /** 图片结果：`img_src` 的格式（png/jpg/...）。 */
+  img_format?: string;
+  /** 图片结果：图片来源标注。 */
+  source?: string;
   [key: string]: unknown;
 }
 

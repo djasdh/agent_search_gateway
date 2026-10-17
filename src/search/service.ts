@@ -8,6 +8,7 @@ import { Semaphore } from "../utils/semaphore.js";
 import { StringCache } from "./cache.js";
 import { cleanResults, type CleanedResult } from "./clean.js";
 import type { EmbeddingProvider } from "./embedding/provider.js";
+import { mmrSelect, registeredDomainOfUrl } from "./embedding/diversity.js";
 import { mergeAndRank, type SemanticTimings } from "./embedding/semantic.js";
 import type { CorpusStore } from "./embedding/store.js";
 import type { EmbedResult } from "./embedding/types.js";
@@ -145,6 +146,36 @@ export function hasNonGeneralCategory(categories: string | undefined): boolean {
     .map((c) => c.trim())
     .filter((c) => c.length > 0)
     .some((c) => c !== "general");
+}
+
+/** 请求是否只要图片（显式 `images` 类别；非 general 类别即「只要这一类」，ADR-0008）。 */
+export function isImageQuery(categories: string | undefined): boolean {
+  return (categories ?? "")
+    .split(",")
+    .map((c) => c.trim())
+    .some((c) => c === "images");
+}
+
+/**
+ * 图片查询的排序：不 embedding、不召回语料。
+ *
+ * 图片结果没有正文（embedding 只能拿标题，收益低），而语料是**文本**库——把图片
+ * 来源页写进语料会污染后续文本召回，反向召回文本条目又只会成为图片查询的噪声。
+ * 因此直接沿用 rerank 的 `score × boost` 顺序；多样性开启时只保留同注册域上限
+ * （λ=1 时 MMR 项失效，行为等于「按分排序 + 同域上限」）。
+ */
+export function selectImageResults(
+  results: CleanedResult[],
+  limit: number,
+  diversity: { enabled: boolean; mmrLambda: number; maxPerDomain: number },
+): CleanedResult[] {
+  if (!diversity.enabled) return results.slice(0, limit);
+  return mmrSelect(
+    results.map((item) => ({ score: item.score ?? 0, item })),
+    limit,
+    { mmrLambda: diversity.mmrLambda, maxPerDomain: diversity.maxPerDomain },
+    (c) => registeredDomainOfUrl(c.item.url),
+  ).map((c) => c.item);
 }
 
 /**
@@ -410,6 +441,7 @@ export function createSearchService(
 
   async function search(params: SearchParams): Promise<SearchOutcome> {
     const tStart = performance.now();
+    const imageQuery = isImageQuery(params.categories);
     const enabled = await getEnabledEngines();
     const quota = await getQuota();
     const batches = planEngineBatches(params, config, enabled, quota);
@@ -440,9 +472,10 @@ export function createSearchService(
     const release = await sem.acquire();
     const preMs = performance.now() - tStart;
     // 语义层：query 向量不依赖候选 → 先起 Promise，与上游 searxng 召回 overlap（省一次串行等待）。
-    // provider/corpus 缺一即无语义层，无需发起；catch 兜底避免未被消费时产生 unhandled rejection。
+    // provider/corpus 缺一即无语义层，无需发起；图片查询不走语义层（见 selectImageResults）；
+    // catch 兜底避免未被消费时产生 unhandled rejection。
     let queryEmbed: Promise<EmbedResult> | undefined;
-    if (provider && corpus) {
+    if (provider && corpus && !imageQuery) {
       queryEmbed = provider.embed([params.query], "query");
       queryEmbed.catch(() => undefined);
     }
@@ -497,11 +530,14 @@ export function createSearchService(
         const errText = `搜索失败（${e.kind}${e.status ? ` ${e.status}` : ""}）：${e.message}\n\n请稍后重试，或更换关键词。`;
 
         let recalled: CleanedResult[] = [];
-        try {
-          const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
-          recalled = r.results;
-        } catch (err) {
-          logger.warn(`语料召回失败: ${String(err)}`);
+        // 图片查询不混文本语料（语料是文本库，召回条目对图片查询只算噪声）
+        if (!imageQuery) {
+          try {
+            const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
+            recalled = r.results;
+          } catch (err) {
+            logger.warn(`语料召回失败: ${String(err)}`);
+          }
         }
         if (recalled.length > 0) {
           return { ok: false, code, text: withCode(code, `${errText}\n\n## 结果（本地语料）\n\n${renderResults(recalled)}`) };
@@ -532,20 +568,26 @@ export function createSearchService(
       });
       const localMs = performance.now() - tLocal;
 
-      // 合并语料召回 + 纯语义排序；失败则回退引擎分顺序
-      let ranked: CleanedResult[] = cleaned;
+      // 合并语料召回 + 纯语义排序；失败则回退引擎分顺序。
+      // 图片查询例外：不 embedding / 不召回 / 不写语料（见 selectImageResults）。
+      let ranked: CleanedResult[];
       let semanticTimings: SemanticTimings | null = null;
       let degraded = false;
       const tMerge = performance.now();
-      try {
-        const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
-        ranked = merged.results;
-        semanticTimings = merged.timings ?? null;
-        degraded = merged.degraded;
-      } catch (err) {
-        logger.warn(`语义重排失败，回退引擎分顺序: ${String(err)}`);
-        ranked = cleaned.slice(0, limit);
-        degraded = true;
+      if (imageQuery) {
+        ranked = selectImageResults(cleaned, limit, diversity);
+      } else {
+        ranked = cleaned;
+        try {
+          const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
+          ranked = merged.results;
+          semanticTimings = merged.timings ?? null;
+          degraded = merged.degraded;
+        } catch (err) {
+          logger.warn(`语义重排失败，回退引擎分顺序: ${String(err)}`);
+          ranked = cleaned.slice(0, limit);
+          degraded = true;
+        }
       }
       const mergeMs = performance.now() - tMerge;
 

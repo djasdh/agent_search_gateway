@@ -46,6 +46,7 @@ search:
 
 rerank:
   enabled: true
+  # 图片搜索（categories=images）也读这里，可按需抬高图片引擎
   engine_boost:
     bilibili: 1.0
   diversity:

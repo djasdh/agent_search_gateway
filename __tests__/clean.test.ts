@@ -71,4 +71,50 @@ describe("cleanResults", () => {
     const out = cleanResults([r({ engine: "google", engines: undefined })], {});
     expect(out.results[0].engines).toEqual(["google"]);
   });
+
+  it("图片字段透传（img_src/thumbnail_src/resolution/img_format/source）", () => {
+    const out = cleanResults(
+      [
+        r({
+          url: "https://page.example/photo",
+          title: "Photo",
+          content: "",
+          category: "images",
+          img_src: "https://img.example/a.jpg",
+          thumbnail_src: "https://img.example/a-thumb.jpg",
+          resolution: "1920 x 1080",
+          img_format: "jpg",
+          source: "Example",
+        }),
+      ],
+      {},
+    );
+    expect(out.results).toHaveLength(1);
+    const [item] = out.results;
+    expect(item.imgSrc).toBe("https://img.example/a.jpg");
+    expect(item.thumbnailSrc).toBe("https://img.example/a-thumb.jpg");
+    expect(item.resolution).toBe("1920 x 1080");
+    expect(item.imgFormat).toBe("jpg");
+    expect(item.imgSource).toBe("Example");
+  });
+
+  it("图片结果无标题仍保留（有直链即可用）；网页结果无标题仍丢弃", () => {
+    const out = cleanResults(
+      [
+        r({ url: "https://page.example/a", title: "", img_src: "https://img.example/a.jpg" }),
+        r({ url: "https://page.example/b", title: "" }),
+      ],
+      {},
+    );
+    expect(out.results).toHaveLength(1);
+    expect(out.results[0].url).toBe("https://page.example/a");
+    expect(out.results[0].title).toBe("");
+  });
+
+  it("非字符串的图片字段按缺失处理", () => {
+    const out = cleanResults([r({ img_src: 123, thumbnail_src: null, resolution: {} })], {});
+    expect(out.results[0].imgSrc).toBeUndefined();
+    expect(out.results[0].thumbnailSrc).toBeUndefined();
+    expect(out.results[0].resolution).toBeUndefined();
+  });
 });

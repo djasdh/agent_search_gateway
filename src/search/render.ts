@@ -1,5 +1,5 @@
 import type { SearxngInfobox, SearxngResponse } from "./searxng.js";
-import type { CleanedResult } from "./clean.js";
+import { isImageResult, type CleanedResult } from "./clean.js";
 
 export interface RenderInput {
   query: string;
@@ -85,6 +85,27 @@ function originLabel(r: CleanedResult): string {
   }
 }
 
+/** markdown 链接/图片题注里需转义的字符（标题可能自带 `[`/`]`）。 */
+function escapeLabel(s: string): string {
+  return s.replace(/[[\]]/g, (m) => `\\${m}`);
+}
+
+/**
+ * 图片结果：以 markdown 图片给出**直链**（agent 可直接展示或交给 fetch 落盘），
+ * 来源页/尺寸/格式/引擎另起一行附注。
+ */
+function renderImageResult(r: CleanedResult, index: number, meta: string): string {
+  const src = r.imgSrc ?? r.thumbnailSrc ?? "";
+  const label = escapeLabel(r.title || "图片");
+  const thumbNote = !r.imgSrc && r.thumbnailSrc ? " · 缩略图" : "";
+  const details: string[] = [`[来源页](${r.url})`];
+  if (r.resolution) details.push(r.resolution);
+  if (r.imgFormat) details.push(r.imgFormat);
+  if (r.imgSource) details.push(r.imgSource);
+  const body = r.content ? `\n   ${r.content}` : "";
+  return `${index + 1}. ![${label}](${src})${thumbNote}\n   ${details.join(" · ")}${meta}${body}`;
+}
+
 /** 渲染结果列表为 md（导出以便服务层在错误分支复用）。 */
 export function renderResults(results: CleanedResult[]): string {
   if (results.length === 0) {
@@ -92,7 +113,10 @@ export function renderResults(results: CleanedResult[]): string {
   }
   return results
     .map((r, i) => {
-      const head = `${i + 1}. [${r.title}](${r.url})${engineLabel(r.engines)}${dateLabel(r.publishedDate)}${scoreLabel(r.score)}${originLabel(r)}`;
+      const meta = `${engineLabel(r.engines)}${dateLabel(r.publishedDate)}${scoreLabel(r.score)}${originLabel(r)}`;
+      const src = r.imgSrc ?? r.thumbnailSrc;
+      if (src && isImageResult(r)) return renderImageResult(r, i, meta);
+      const head = `${i + 1}. [${escapeLabel(r.title)}](${r.url})${meta}`;
       const body = r.content ? `\n   ${r.content}` : "";
       return `${head}${body}`;
     })

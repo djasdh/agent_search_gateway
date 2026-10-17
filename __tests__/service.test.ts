@@ -24,6 +24,43 @@ beforeAll(async () => {
   mockServer = createHttpServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     lastQuery = url.searchParams.get("q") ?? "";
+    if (lastQuery.startsWith("img:")) {
+      const body = {
+        query: lastQuery,
+        results: [
+          {
+            url: "https://photo.example/a",
+            title: "Cat A",
+            content: "",
+            engine: "bing images",
+            engines: ["bing images"],
+            category: "images",
+            img_src: "https://img.example/a.jpg",
+            resolution: "800 x 600",
+            img_format: "jpg",
+            score: 2,
+          },
+          {
+            url: "https://photo.example/b",
+            title: "Cat B",
+            content: "",
+            engine: "duckduckgo images",
+            engines: ["duckduckgo images"],
+            category: "images",
+            img_src: "https://img.example/b.jpg",
+            score: 1,
+          },
+        ],
+        answers: [],
+        corrections: [],
+        suggestions: [],
+        infoboxes: [],
+        unresponsive_engines: [],
+      };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+      return;
+    }
     const body = {
       query: url.searchParams.get("q") ?? "",
       results: [
@@ -174,5 +211,29 @@ describe("createSearchService + 语义语料", () => {
     expect(r.text).toContain("搜索失败");
     expect(r.text).toContain("## 结果（本地语料）");
     expect(r.text).toContain("Cached Hit");
+  });
+
+  it("图片类别：渲染图片直链，且不 embedding / 不写语料 / 不混文本召回", async () => {
+    const provider = new FakeEmbeddingProvider(4);
+    const corpus = new FakeCorpusStore();
+    corpus.put([
+      { url: "https://cache.example/hit", title: "Cached Hit", content: "cached", fetchedAt: Date.now(), vec: provider.vecFor("img:cat") },
+    ]);
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger, {
+      embeddingProvider: provider,
+      corpus,
+      recallK: 5,
+    });
+    const r = await svc.search({ query: "img:cat", categories: "images" });
+    expect(r.ok).toBe(true);
+    // 图片直链以 markdown 图片给出
+    expect(r.text).toContain("![Cat A](https://img.example/a.jpg)");
+    expect(r.text).toContain("[来源页](https://photo.example/a)");
+    expect(r.text).toContain("800 x 600");
+    // 不 embedding（连 query 向量都不发起）
+    expect(provider.calls).toHaveLength(0);
+    // 不写语料（只有预热的那条），也不把文本语料召回进图片结果
+    expect(corpus.stats().entries).toBe(1);
+    expect(r.text).not.toContain("Cached Hit");
   });
 });

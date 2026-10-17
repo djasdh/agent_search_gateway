@@ -55,6 +55,8 @@ rerank:
   # 让被分组算法埋掉的高分结果（如带缩略图的 bilibili 视频）正常入场。
   # key 用 searxng 注册名（JSON engine 字段），非 settings.yml 的 name；
   # 默认 1.0，不配 = 按原始 score 排序。
+  # 提示：图片搜索（categories=images）同样走这里，可按需抬高图片引擎，
+  # 例如 "bing images": 1.2 / "duckduckgo images": 1.1。
   engine_boost:
     bilibili: 1.0
     "google cse": 1.0

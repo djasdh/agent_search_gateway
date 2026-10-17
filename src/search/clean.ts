@@ -15,10 +15,33 @@ export interface CleanedResult {
   publishedDate?: string;
   score?: number;
   category?: string;
+  /** 图片结果：图片直链（searxng `img_src`）。 */
+  imgSrc?: string;
+  /** 图片结果：缩略图直链（searxng `thumbnail_src`）。 */
+  thumbnailSrc?: string;
+  /** 图片结果：分辨率，形如 `1920 x 1080`。 */
+  resolution?: string;
+  /** 图片结果：图片格式（png/jpg/...）。 */
+  imgFormat?: string;
+  /** 图片结果：来源标注（searxng `source`）。 */
+  imgSource?: string;
   /** 结果来源：上游或本地语料召回，由语义层标注。 */
   origin?: "upstream" | "corpus";
   /** 语料条目的抓取时间（corpus 来源才有）。 */
   fetchedAt?: number;
+}
+
+/** 取非空字符串字段（searxng 字段可能缺失或为其它类型）。 */
+function optionalString(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+/**
+ * 是否图片结果：searxng 图片类结果带 `img_src`/`thumbnail_src`（`category=images`）。
+ * 图片结果没有可嵌入的正文，且只属于图片查询——判定用于排序与语料隔离。
+ */
+export function isImageResult(r: Pick<CleanedResult, "imgSrc" | "thumbnailSrc" | "category">): boolean {
+  return !!r.imgSrc || !!r.thumbnailSrc || r.category === "images";
 }
 
 /** 规范化 URL 用于去重：去 fragment，去掉常见跟踪参数。 */
@@ -92,7 +115,9 @@ export function cleanResults(results: SearxngResult[], opts: CleanOptions): Clea
   for (const r of results) {
     const url = r.url ?? "";
     const title = (r.title ?? "").trim();
-    if (!url || !title) continue;
+    const imgSrc = optionalString(r.img_src);
+    // 图片结果可能无标题（有直链即可用）；网页结果仍要求标题
+    if (!url || (!title && !imgSrc)) continue;
 
     let u: URL;
     let host: string | null;
@@ -132,6 +157,11 @@ export function cleanResults(results: SearxngResult[], opts: CleanOptions): Clea
       publishedDate: r.publishedDate ?? undefined,
       score: r.score,
       category: r.category,
+      imgSrc,
+      thumbnailSrc: optionalString(r.thumbnail_src),
+      resolution: optionalString(r.resolution),
+      imgFormat: optionalString(r.img_format),
+      imgSource: optionalString(r.source),
     });
   }
 
