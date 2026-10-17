@@ -41,14 +41,6 @@ searx/plugins/
 然后在 searxng 的 `settings.yml` 里按 [`settings.example.yml`](./settings.example.yml)
 启用相应引擎/插件,并重启 `searxng.service`。
 
-## 测试
-
-解析器的离线回归测试（不联网，用实测抓取的 HTML 裁剪样本；`searx` 被 stub）：
-
-```bash
-python3 -m unittest discover -s searxng-ext/tests
-```
-
 ## 密钥(绝不入库)
 
 - `tavily.py` 读环境变量 `TAVILY_API_KEY`。

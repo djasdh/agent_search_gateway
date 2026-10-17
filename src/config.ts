@@ -71,7 +71,7 @@ const configSchema = z.object({
       quota_ledger_path: z.string().default("~/.config/agent-search/quota.json"),
       quota_tight_threshold: z.number().min(0).max(1).default(0.1),
       resident_quota_floor: z.number().min(0).max(1).default(0.2),
-      // 类别感知超时（ADR-0008 / docs/cnki-channel.md D18）：academic 等类别的引擎更慢
+      // 类别感知超时（ADR-0008）：academic 等类别的引擎更慢
       category_timeout_ms: z.record(z.string(), z.number().int().positive()).default({}),
     })
     .catch({
@@ -144,7 +144,7 @@ const configSchema = z.object({
       max_output_chars: z.number().int().positive().default(20000),
       cache_ttl_ms: z.number().int().positive().default(600000),
       cache_max_entries: z.number().int().positive().default(200),
-      // 非文本产物（PDF/图片/二进制）落盘：见 docs/cnki-channel.md §6
+      // 非文本产物（PDF/图片/二进制）落盘
       max_download_bytes: z.number().int().positive().default(1073741824),
       download_dir: z.string().default("data/downloads"),
       download_ttl_ms: z.number().int().positive().default(604800000),

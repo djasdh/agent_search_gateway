@@ -6,20 +6,16 @@ CNKI 没有公开检索 API，本引擎直接使用 KNS 站内接口。检索本
 以便补全摘要。拿不到票据时仍返回标题/作者/链接（结果降级），因为该权限
 绑定机构出口 IP，离开机构网段时登录必然失败。
 
-实测结论（2026-10-17，机构出口 IP 下）：
+Request shape:
 
-- 检索：``POST /kns8s/brief/grid``，form body 含 ``QueryJson``；响应是
-  **HTML**。失败也是 200，错误信息写在 ``<p class="no-content" value="...">``。
-- ``QueryJson`` 必须带 ``Classid``（缺了报「没有指定检索分类」），默认
-  ``Classid=WD0FTY92`` / ``Resource=CROSSDB``；``KuaKuCode`` 取高级检索页
-  ``#CheckedDB`` 的值（缺了没有结果）。
-- ``Operator`` / ``Logic`` 是**数字枚举**（``common.min.js``：
-  ``DEFAULT:0, TOPRANK:1, ...``；``AND:0, OR:1, NOT:2``）；传字符串
-  ``"TOPRANK"`` 会得到「非法逻辑操作符」。
+- 检索：``POST /kns8s/brief/grid``，form body 含 ``QueryJson``；响应为 HTML。
+- ``QueryJson`` 需带 ``Classid``（``WD0FTY92`` / ``Resource=CROSSDB``）与
+  ``KuaKuCode``（高级检索页 ``#CheckedDB`` 的值）。
+- ``Operator`` / ``Logic`` 是数字枚举（``TOPRANK=1``、``AND=0``）。
 - 结果行是 ``<tr>``：``td.name``（标题 ``a.fz14``）、``td.author``、
   ``td.source``、``td.date``。
-- 摘要页 ``#ChDivSummary`` 是摘要正文；下载（由网关取件插件负责）从摘要页的
-  ``#pdfDown`` / ``#cajDown``（``bar.cnki.net/bar/download/order?id=...``）取。
+- 摘要正文在 ``#ChDivSummary``；下载（由网关取件插件负责）从摘要页的
+  ``#pdfDown`` / ``#cajDown`` 取。
 
 .. _CNKI: https://www.cnki.net/
 
@@ -39,7 +35,7 @@ Configuration
 Optional settings are:
 
 - :py:obj:`page_size` -- 每次请求条数（默认 ``20``）
-- :py:obj:`kuaku_code` -- KNS 全库串（默认取高级检索页 ``#CheckedDB`` 的实测值）
+- :py:obj:`kuaku_code` -- KNS 全库串（默认取高级检索页 ``#CheckedDB`` 的值）
 - :py:obj:`abstract_budget_seconds` -- 串行补摘要的总预算（默认 ``18`` 秒）
 """
 
@@ -89,7 +85,7 @@ _ADVSEARCH_URL = "https://kns.cnki.net/kns8s/AdvSearch"
 _KNS_BASE = "https://kns.cnki.net"
 
 #: ``login.cnki.net`` 前端公开常量（ecpLoginDialogLink.js），不是密钥。
-_SECRET = "t8b52yrsoyx66f35tk0p4nubrmrcglv5"
+_LOGIN_FRONTEND_CONST = "t8b52yrsoyx66f35tk0p4nubrmrcglv5"
 
 #: KNS ``OperatorType`` / ``Logic`` 枚举（common.min.js）。
 _OP_TOPRANK = 1
@@ -99,7 +95,7 @@ page_size = 20
 """每次请求的结果条数。"""
 
 kuaku_code = "YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R"
-"""KNS 全库串；默认值取自高级检索页 ``#CheckedDB``（实测）。"""
+"""KNS 全库串；默认值取自高级检索页 ``#CheckedDB``。"""
 
 abstract_budget_seconds = 18.0
 """串行补摘要的总预算（秒）；超出即返回已得部分。"""
@@ -212,7 +208,7 @@ def _query_json(query: str) -> dict[str, t.Any]:
 
 
 def _js_nonce(timestamp: int) -> str:
-    """模拟前端 ``Math.sin(ts).toString().substr(6)``（实测可用）。"""
+    """模拟前端 ``Math.sin(ts).toString().substr(6)``。"""
 
     return repr(math.sin(timestamp))[6:]
 
@@ -235,7 +231,7 @@ def _flush_session() -> dict[str, str]:
     timestamp = int(time.time() * 1000)
     nonce = _js_nonce(timestamp)
     signature = hashlib.md5(
-        f"{timestamp}{nonce}{_SECRET}{client_id}".encode(), usedforsecurity=False
+        f"{timestamp}{nonce}{_LOGIN_FRONTEND_CONST}{client_id}".encode(), usedforsecurity=False
     ).hexdigest()
 
     try:
@@ -289,7 +285,7 @@ def _parse_date(value: str) -> datetime | None:
 
 
 def _parse_grid(text: str, base_url: str) -> list[dict[str, t.Any]]:
-    """从 KNS ``brief/grid`` 的 HTML 表格里提取结果行（实测结构见模块 docstring）。"""
+    """从 KNS ``brief/grid`` 的 HTML 表格里提取结果行（结构见模块 docstring）。"""
 
     try:
         doc = lxml_html.fromstring(text)

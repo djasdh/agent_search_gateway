@@ -12,6 +12,7 @@
 | @mixmark-io/domino | 2.x | BSD-2-Clause | Node DOM 解析（turndown 用） |
 | yaml | 2.x | ISC | gateway.yaml 解析 |
 | zod | 4.x | MIT | 配置/工具 schema 校验 |
+| unpdf | 1.x | MIT | PDF 正文抽取（fetch 路由 `application/pdf`） |
 
 ## npm 开发依赖（测试工具链，不进生产、不分发）
 
