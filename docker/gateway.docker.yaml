@@ -28,6 +28,8 @@ flaresolverr:
 
 search:
   max_results: 10
+  # num_results 的单一上限：agent 请求超过即按此截断（不报错），末尾附加说明。
+  max_results_cap: 50
   max_result_chars: 500
   cache_ttl_ms: 300000
   cache_max_entries: 200
@@ -41,8 +43,9 @@ search:
   quota_tight_threshold: 0.1
   resident_quota_floor: 0.2
   # 类别感知超时：命中请求类别时覆盖 searxng.timeout_ms
+  # academic: cnki 引擎内翻页后总超时 = 20s × num_pages，网关须留出余量（> 60s）
   category_timeout_ms:
-    academic: 25000
+    academic: 70000
 
 rerank:
   enabled: true

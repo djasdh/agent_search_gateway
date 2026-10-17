@@ -102,6 +102,7 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     flaresolverrTriggerStatus: [403, 405, 429],
     flaresolverrFallbackOnEmpty: true,
     searchMaxResults: 10,
+    searchMaxResultsCap: 50,
     searchMaxResultChars: 500,
     searchCacheTtlMs: 300000,
     searchCacheMaxEntries: 200,
@@ -173,6 +174,37 @@ describe("createSearchService", () => {
     const r = await svc.search({ query: "x" });
     expect(r.ok).toBe(false);
     expect(r.text).toContain("搜索失败");
+  });
+});
+
+describe("createSearchService + 结果上限/截断说明", () => {
+  // mock searxng 返回 4 条：spam.com 被广告过滤、utm 变体被去重 → 2 条有效候选
+  it("num_results 超系统上限：截到上限并在末尾说明", async () => {
+    const svc = createSearchService(makeConfig({ searchMaxResultsCap: 2 }), domainFilter, silentLogger);
+    const r = await svc.search({ query: "cap query", numResults: 10 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.text).toContain("系统上限 2 条");
+    }
+  });
+
+  it("候选多于请求条数：说明已显示 X/Y", async () => {
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: "more query", numResults: 1 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.text).toContain("已显示 1/2 条");
+    }
+  });
+
+  it("未截断时不出现任何截断说明", async () => {
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: "full query", numResults: 10 });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.text).not.toContain("已显示");
+      expect(r.text).not.toContain("系统上限");
+    }
   });
 });
 

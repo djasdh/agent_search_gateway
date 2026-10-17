@@ -262,7 +262,12 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
         categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；images（图片直链）、academic（科研/知网）"),
         engines: z.string().optional().describe("指定搜索引擎，逗号分隔"),
         min_score: z.number().min(0).max(1).optional().describe("最低相关度分数 0-1"),
-        num_results: z.number().int().min(1).max(20).optional().describe("返回结果条数上限"),
+        num_results: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("返回结果条数上限（系统单一上限见 search.max_results_cap；超出按上限截断，不报错）"),
         fanout: z
           .number()
           .int()

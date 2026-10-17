@@ -35,6 +35,7 @@ function makeConfig(port: number, overrides: Partial<GatewayConfig> = {}): Gatew
     flaresolverrTriggerStatus: [403, 405, 429],
     flaresolverrFallbackOnEmpty: true,
     searchMaxResults: 10,
+    searchMaxResultsCap: 50,
     searchMaxResultChars: 500,
     searchCacheTtlMs: 60000,
     searchCacheMaxEntries: 200,

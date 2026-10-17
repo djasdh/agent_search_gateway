@@ -31,7 +31,7 @@ gateway (本服务, :3000/mcp)
 
 | 工具 | 说明 |
 |---|---|
-| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results；`categories=images` 时返回图片直链，`academic` 时走科研/知网 |
+| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results/fanout。`num_results` 上限由 `search.max_results_cap` 决定，超出按上限截断并在结果末尾说明 |
 | `fetch` | 抓取 URL：网页→md；纯文本/JSON/CSV/XML 直接返回；PDF 抽正文；图片等二进制落盘并返回路径与 `/files/<id>` 链接。参数：url/max_chars |
 | `browser_navigate` | 浏览器打开 URL，返回无障碍树快照（省 token） |
 | `browser_snapshot` | 当前页无障碍树快照，可选 target 限定 |
@@ -173,7 +173,7 @@ gateway:        # host/port/token
 logging:        # level/file
 searxng:        # url/timeout_ms
 flaresolverr:   # url/enabled/timeout_ms/max_concurrent/trigger_status/fallback_on_empty
-search:         # max_results/max_result_chars/cache_ttl_ms/cache_max_entries/max_concurrent
+search:         # max_results/max_results_cap/max_result_chars/cache_ttl_ms/cache_max_entries/max_concurrent
 fetch:          # timeout_ms/max_bytes/user_agent/block_private_ips/structural/max_output_chars/cache_ttl_ms/cache_max_entries/max_download_bytes/download_dir/download_ttl_ms/download_max_total_bytes/files_route
 ad_filter:      # enabled/level(off|ads|ads+tracking|full)/extra_domains/hosts_file/allowlist
 browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufox预留)/proxy_*/wait_for_selector/screenshot
@@ -209,18 +209,6 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 二进制结果**不写** fetch 文本缓存，避免文件被 TTL 清走后链接失效。
 - 目录布局：`<download_dir>/<前两位>/<sha256><扩展名>` + 同名 `.json` 侧车。
 
-### 图片搜索（`categories=images`）
-
-`search` 传 `categories=images` 即只走 searxng 的图片引擎（非 general 类别会抑制常驻/轮换源，ADR-0008），返回图片**直链**：
-
-- 结果以 markdown 图片给出：`![标题](图片直链)`，下一行附来源页、分辨率、格式、图片来源与引擎、score；
-- 只有缩略图时会标注「缩略图」并沿用缩略图直链；
-- 拿到直链后可再调 `fetch` 把原图落盘到 `/data/downloads` 并得到 `/files/<id>` 链接；
-- **不走语义层**：不调 embedding、不召回文本语料、不把图片来源页写进语料（图片结果没有正文；图片源页进文本语料会污染后续文本召回）；
-- 排序沿用 `rerank`（`score × engine_boost`）；`rerank.diversity` 开启时按同注册域上限去冗余；
-- 图片引擎在 searxng 的 `settings.yml` 里配置（默认可用 `bing images`、`duckduckgo images`、`openverse`、`wikicommons.images`；国内出口可再加 `baidu images`、`sogou images`）；
-- 图片建议显式传 `safesearch`（searxng 的 `search.safe_search` 默认 1）。
-
 ### searxng 配置分工（gateway.yaml vs settings.yml）
 
 搜索系统的 searxng 相关配置分两层，**各读各的，不重复**：
@@ -249,7 +237,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 - 开关：`embedding.enabled` + `corpus.enabled`；都关闭时行为与旧版完全一致。
 - 来源：外部 embedding API（OpenAI 兼容 `/embeddings` 或 Ollama `/api/embed`），**不内置本地模型**；自托管 embedding 可行但非建议（见 `docs/adr/0005`）。
-- 机制：每次搜索把结果写入本地语料库（按 URL 去重、TTL 30 天），并用 query 向量 KNN 召回；召回条目与上游结果按 URL 合并去重后**按纯语义排序**，条目标注「本地缓存 · 抓取于 X」。图片查询（`categories=images`）是例外：不写语料、不召回、不 embedding。
+- 机制：每次搜索把结果写入本地语料库（按 URL 去重、TTL 30 天），并用 query 向量 KNN 召回；召回条目与上游结果按 URL 合并去重后**按纯语义排序**，条目标注「本地缓存 · 抓取于 X」。
 - 降级：embedding 不可用或调用失败时回退为 `score × engine_boost` 排序；上游请求失败时返回错误码并尽量附语料召回结果。
 - 依赖：`sqlite-vec` 随 npm 安装自带平台二进制，无需手动装扩展。
 - 模型切换：命名空间为 `provider:model@dim`；换模型产生新命名空间，旧向量保留但不参与（多命名空间并存，见 `docs/adr/0001`–`0006`）。
@@ -272,7 +260,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 ## 测试与压测
 
-- `npm test`：256 个测试（30 个测试文件）
+- `npm test`：227 个测试（28 个测试文件）
 - `scripts/bench.sh`：测量各组件内存/延迟，验证 3.8GB 预算
 
 实测（本机模拟）：

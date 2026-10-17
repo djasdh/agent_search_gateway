@@ -14,6 +14,7 @@ describe("mergeAndRank", () => {
     const r = await mergeAndRank("q", upstream, 10, { provider: null, corpus: null, recallK: 5 });
     expect(r.degraded).toBe(true);
     expect(r.results.map((x) => x.url)).toEqual(["a", "b"]);
+    expect(r.total).toBe(2);
   });
 
   it("embedding 失败时降级", async () => {
@@ -34,6 +35,14 @@ describe("mergeAndRank", () => {
     expect(r.results[0].origin).toBe("corpus");
     expect(r.results[0].fetchedAt).toBe(123);
     expect(r.results.find((x) => x.url === "a")!.origin).toBe("upstream");
+  });
+
+  it("total 报告截断前的候选总数", async () => {
+    const provider = new FakeEmbeddingProvider(4);
+    const corpus = new FakeCorpusStore();
+    const r = await mergeAndRank("q", [up("a"), up("b"), up("c")], 2, { provider, corpus, recallK: 5 });
+    expect(r.results).toHaveLength(2);
+    expect(r.total).toBe(3);
   });
 
   it("命中语料的 url 不重复嵌入，复用向量", async () => {

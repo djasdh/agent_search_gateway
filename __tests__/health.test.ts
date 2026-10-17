@@ -45,6 +45,7 @@ function makeConfig(searxngPort: number, fsPort: number): GatewayConfig {
     flaresolverrTriggerStatus: [403, 405, 429],
     flaresolverrFallbackOnEmpty: true,
     searchMaxResults: 10,
+    searchMaxResultsCap: 50,
     searchMaxResultChars: 500,
     searchCacheTtlMs: 300000,
     searchCacheMaxEntries: 200,

@@ -39,7 +39,10 @@ engines:
     engine: cnki
     shortcut: cnki
     categories: [academic]
-    timeout: 20.0
+    # 引擎内翻页：page_size(20) × num_pages(3) ≈ 60 条候选（对 searxng 仍是「一页」）。
+    num_pages: 3
+    # 注意：不要在这里写死 timeout。引擎会按 num_pages 自动放大总超时
+    # （20s × 页数）；手动覆盖会让 searxng watchdog 提前丢弃该引擎的全部结果。
     network:
       proxies: {}
     disabled: false

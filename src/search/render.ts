@@ -7,6 +7,10 @@ export interface RenderInput {
   results: CleanedResult[];
   latencyMs: number;
   skipped?: number; // 被广告过滤丢弃的数量
+  /** 请求条数被系统上限截断时的上限值；有值即说明「已达上限」。 */
+  cappedAt?: number;
+  /** 截断前的候选总数（去重后）；用于说明「还有更多候选」。 */
+  availableCount?: number;
 }
 
 function engineLabel(engines: string[]): string {
@@ -131,7 +135,7 @@ export function renderResults(results: CleanedResult[]): string {
  * 兜底，对用户隐藏（否则会暴露降级过程）。
  */
 export function renderSearchMarkdown(input: RenderInput): string {
-  const { query, raw, results, latencyMs, skipped } = input;
+  const { query, raw, results, latencyMs, skipped, cappedAt, availableCount } = input;
   const lines: string[] = [];
 
   lines.push(`# Search: ${query}`);
@@ -149,6 +153,16 @@ export function renderSearchMarkdown(input: RenderInput): string {
   lines.push("## 结果");
   lines.push("");
   lines.push(renderResults(results));
+
+  // 截断说明：与 skipped（广告过滤）分开表述。
+  // 优先报「已达上限」（请求被 cap 截断）；否则报「还有更多候选」。
+  if (cappedAt !== undefined) {
+    lines.push("");
+    lines.push(`*请求条数已达系统上限 ${cappedAt} 条；如需更精确的结果，可缩小关键词范围。*`);
+  } else if (availableCount !== undefined && availableCount > results.length) {
+    lines.push("");
+    lines.push(`*已显示 ${results.length}/${availableCount} 条，可用更精确的关键词获取其余结果。*`);
+  }
 
   return lines.join("\n");
 }

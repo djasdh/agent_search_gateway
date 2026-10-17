@@ -55,6 +55,8 @@ export interface SemanticResult {
   degraded: boolean;
   /** 分阶段耗时（毫秒）；仅用于打点观测，不影响结果。 */
   timings?: SemanticTimings;
+  /** 截断前的候选总数（上游 + 召回，按 URL 去重后）；供上层判断是否发生截断。 */
+  total: number;
 }
 
 /**
@@ -146,6 +148,7 @@ export async function mergeAndRank(
     finish({
       results: upstream.slice(0, limit).map((r) => ({ ...r, origin: "upstream" as const })),
       degraded: true,
+      total: upstream.length,
     });
   const { provider, corpus } = opts;
   if (!provider || !corpus) return fallback();
@@ -258,8 +261,12 @@ export async function mergeAndRank(
       (s) => registeredDomainOfUrl(s.item.url),
     );
     t.mmrMs = performance.now() - p;
-    return finish({ results: chosen.map((s) => s.item), degraded: false });
+    return finish({ results: chosen.map((s) => s.item), degraded: false, total: ranked.length });
   }
 
-  return finish({ results: ranked.slice(0, limit).map((s) => s.item), degraded: false });
+  return finish({
+    results: ranked.slice(0, limit).map((s) => s.item),
+    degraded: false,
+    total: ranked.length,
+  });
 }

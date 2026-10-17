@@ -61,6 +61,8 @@ const configSchema = z.object({
   search: z
     .object({
       max_results: z.number().int().positive().max(50).default(10),
+      // num_results 的单一上限：agent 请求超过即按此截断（不报错），末尾附加说明
+      max_results_cap: z.number().int().positive().max(1000).default(50),
       max_result_chars: z.number().int().positive().default(500),
       cache_ttl_ms: z.number().int().positive().default(300000),
       cache_max_entries: z.number().int().positive().default(200),
@@ -76,6 +78,7 @@ const configSchema = z.object({
     })
     .catch({
       max_results: 10,
+      max_results_cap: 50,
       max_result_chars: 500,
       cache_ttl_ms: 300000,
       cache_max_entries: 200,
@@ -265,6 +268,11 @@ export interface GatewayConfig {
   flaresolverrTriggerStatus: number[];
   flaresolverrFallbackOnEmpty: boolean;
   searchMaxResults: number;
+  /**
+   * `num_results` 的单一上限：agent 请求超过即按此截断（不报错），
+   * 并在结果末尾附加说明。见 search.max_results_cap。
+   */
+  searchMaxResultsCap: number;
   searchMaxResultChars: number;
   searchCacheTtlMs: number;
   searchCacheMaxEntries: number;
@@ -412,6 +420,7 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     flaresolverrTriggerStatus: v.flaresolverr.trigger_status,
     flaresolverrFallbackOnEmpty: v.flaresolverr.fallback_on_empty,
     searchMaxResults: v.search.max_results,
+    searchMaxResultsCap: v.search.max_results_cap,
     searchMaxResultChars: v.search.max_result_chars,
     searchCacheTtlMs: v.search.cache_ttl_ms,
     searchCacheMaxEntries: v.search.cache_max_entries,

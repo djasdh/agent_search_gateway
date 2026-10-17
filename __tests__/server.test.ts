@@ -39,6 +39,7 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     flaresolverrTriggerStatus: [403, 405, 429],
     flaresolverrFallbackOnEmpty: true,
     searchMaxResults: 10,
+    searchMaxResultsCap: 50,
     searchMaxResultChars: 500,
     searchCacheTtlMs: 300000,
     searchCacheMaxEntries: 200,
@@ -134,6 +135,27 @@ describe("MCP HTTP server", () => {
     );
     expect(text).toContain("searxng");
     expect(text).toContain("flaresolverr");
+  });
+
+  it("tools/call search 的 num_results 超过旧上限 20 不再被参数校验拒绝", async () => {
+    const init = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } },
+      }),
+    });
+    const sessionId = init.headers.get("mcp-session-id")!;
+    const { text } = await mcpRequest(
+      base,
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "search", arguments: { query: "x", num_results: 999 } } },
+      { sessionId },
+    );
+    // 参数通过校验并走到服务层：searxng 不可达 → 返回「搜索失败」而非参数校验错误
+    expect(text).toContain("搜索失败");
   });
 
   it("GET /files/<id> 返回产物，未知 id 404", async () => {
