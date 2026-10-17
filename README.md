@@ -115,6 +115,21 @@ GATEWAY_BIND=0.0.0.0 GATEWAY_TOKEN=<strong-token> docker compose up -d
 - **fetch 产物**（图片/PDF 等非文本文件）落在 `corpus` 卷的 `/data/downloads`（`docker/gateway.docker.yaml` 已指向该路径），容器重建不丢。
 - 容器内网关配置为只读挂载的 `docker/gateway.docker.yaml`；改搜索/重排策略改它即可。
 - **出口不经任何代理**：免费 API 引擎直连可达，内置通用爬虫已整体 disabled。
+- **知网学术检索**（`categories=academic`）：检索匿名可用；**摘要与取件需要容器出口在机构网段**（会话票据 `LID`），否则只返回标题、取件报 `CNKI_NO_SESSION`。
+
+### 更新
+
+```bash
+cd docker
+git pull                 # 更新 compose 与 gateway.docker.yaml（配置不在镜像里）
+docker compose pull      # 拉取最新 ghcr 镜像（CI 在 master 推送后自动构建）
+docker compose up -d     # 重建容器；quota / corpus 卷保留
+```
+
+- 本地构建：`docker compose build && docker compose up -d`。
+- 只改 `docker/gateway.docker.yaml` 时不必重建镜像，`docker compose up -d` 即可（文件挂载进容器）。
+- searxng 的引擎清单来自镜像内的 `settings.template.yml`，改动需重新构建/拉取 searxng 镜像。
+- `corpus` 卷内含 `fetch` 产物（`/data/downloads`），容器重建不丢。
 
 ## 接入 MCP 客户端
 
