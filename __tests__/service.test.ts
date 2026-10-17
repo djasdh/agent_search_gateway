@@ -184,7 +184,7 @@ describe("createSearchService + 结果上限/截断说明", () => {
     const r = await svc.search({ query: "cap query", numResults: 10 });
     expect(r.ok).toBe(true);
     if (r.ok) {
-      expect(r.text).toContain("系统上限 2 条");
+      expect(r.text).toContain("已按 2 条处理");
     }
   });
 

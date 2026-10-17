@@ -154,14 +154,18 @@ export function renderSearchMarkdown(input: RenderInput): string {
   lines.push("");
   lines.push(renderResults(results));
 
-  // 截断说明：与 skipped（广告过滤）分开表述。
-  // 优先报「已达上限」（请求被 cap 截断）；否则报「还有更多候选」。
+  // 截断说明（与 skipped 广告过滤分开表述）；两种原因可同时成立：
+  //   ① 请求条数被系统单一上限截断   ② 候选数多于实际显示条数
+  const notes: string[] = [];
   if (cappedAt !== undefined) {
+    notes.push(`请求条数超过系统上限，已按 ${cappedAt} 条处理。`);
+  }
+  if (availableCount !== undefined && availableCount > results.length) {
+    notes.push(`已显示 ${results.length}/${availableCount} 条，可用更精确的关键词获取其余结果。`);
+  }
+  if (notes.length > 0) {
     lines.push("");
-    lines.push(`*请求条数已达系统上限 ${cappedAt} 条；如需更精确的结果，可缩小关键词范围。*`);
-  } else if (availableCount !== undefined && availableCount > results.length) {
-    lines.push("");
-    lines.push(`*已显示 ${results.length}/${availableCount} 条，可用更精确的关键词获取其余结果。*`);
+    for (const note of notes) lines.push(`*${note}*`);
   }
 
   return lines.join("\n");
