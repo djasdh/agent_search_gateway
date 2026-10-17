@@ -142,6 +142,6 @@ engines:
     page_size: 50
     # 引擎内翻页：默认 1 = 关闭（实测 pageNum>1 返回验证码页、且易触发 403）。
     num_pages: 1
-    # 不要写死 timeout：引擎按 num_pages 自动算总超时（20s × 页数），
-    # 手动覆盖会让 searxng watchdog 提前丢弃该引擎的全部结果。
+    # 不要写 timeout：引擎在 init() 里按 page_size × num_pages 自算总超时并
+    # 汇报给 searxng；手写会盖掉它。
     disabled: false

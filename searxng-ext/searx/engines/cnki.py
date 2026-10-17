@@ -38,10 +38,13 @@ Configuration
 
 Optional settings are:
 
-- :py:obj:`page_size` -- 单页条数（默认 ``20``，上限 ``50``）
-- :py:obj:`num_pages` -- 引擎内翻页数（默认 ``3``）；总条数 ≈ ``page_size × num_pages``
+- :py:obj:`page_size` -- 单页条数（默认 ``50``；实测 CNKI 上限就是 50）
+- :py:obj:`num_pages` -- 引擎内翻页数（默认 ``1`` = 关闭）
 - :py:obj:`kuaku_code` -- KNS 全库串（默认取高级检索页 ``#CheckedDB`` 的实测值）
-- :py:obj:`abstract_budget_seconds` -- 补摘要总预算（默认 ``18 × num_pages`` 秒）
+
+``timeout`` 与 :py:obj:`abstract_budget_seconds` **不需要手配**：``init()`` 会按
+``page_size × num_pages`` 用引擎自己的耗时模型算出，并把 ``timeout`` 汇报给
+searxng。**不要在 settings.yml 里覆盖 ``timeout``**，那会盖掉引擎算出的值。
 """
 
 import hashlib
@@ -94,11 +97,31 @@ num_pages = 1
 若要试验翻页，需自行承担反爬风险（见 docs/cnki-channel.md D23）。
 """
 
-_page_timeout_seconds = 20.0
-"""单页请求超时（秒）。"""
+# ---------------------------------------------------------------------------
+# 耗时模型：引擎自己按条数估算时间，并在 init() 里汇报给 searxng
+# （engine.timeout）。searxng 取所有选中引擎的 max 作为 watchdog 的绝对截止
+# 时间，超时会丢弃该引擎的全部结果（searx/search/__init__.py 的 actual_timeout
+# 与 processors/abstract.py 的 _timeout）。单位成本为实测值；调整 page_size /
+# num_pages 时无需改算式。
+# ---------------------------------------------------------------------------
 
-timeout = _page_timeout_seconds * num_pages
-"""引擎总超时 = 单页超时 × 页数。"""
+_search_seconds = 2.0
+"""每次检索往返的耗时估算（秒）。"""
+
+_result_seconds = 0.5
+"""每条结果的耗时估算（秒，含串行补摘要）。"""
+
+_timeout_margin = 3.0
+"""超时余量（秒）。"""
+
+_http_timeout_seconds = 20.0
+"""单次 HTTP 请求超时（秒）；防挂死，与上面的总耗时估算无关。"""
+
+timeout = 20.0
+"""引擎总超时（秒）；由 init() 按 ``page_size × num_pages`` 重算后汇报给 searxng。"""
+
+abstract_budget_seconds = 0.0
+"""补摘要的内部预算（秒）；由 init() 按条数重算，超出即返回已得部分。"""
 
 #: CNKI 绑定机构出口 IP；默认绕开本地代理。settings.yml 的 ``network`` 可覆盖。
 network = {"proxies": {}}
@@ -119,18 +142,28 @@ _LOGIC_AND = 0
 kuaku_code = "YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R"
 """KNS 全库串；默认值取自高级检索页 ``#CheckedDB``（实测）。"""
 
-abstract_budget_seconds = 18.0 * num_pages
-"""补摘要的总预算（秒）= 单页预算 ``18`` × 页数；超出即返回已得部分。"""
-
 abstract_timeout_seconds = 3.0
 """单条摘要请求的超时上限（秒）。"""
 
 
 def init(_):
+    """校验配置，并按条数算出本引擎的时间预算后汇报给 searxng。
+
+    settings.yml 的覆盖在模块加载**之后**、init **之前**生效（searx/engines/
+    ``__init__.py`` 的 setattr），所以耗时必须在 init 里重算，才能用上被覆盖的
+    ``page_size`` / ``num_pages``。
+    """
+
+    global timeout, abstract_budget_seconds
+
     if not 1 <= page_size <= 50:
         raise ValueError("page_size must be between 1 and 50")
     if not 1 <= num_pages <= 10:
         raise ValueError("num_pages must be between 1 and 10")
+
+    results = page_size * num_pages
+    abstract_budget_seconds = _result_seconds * results
+    timeout = _search_seconds * num_pages + abstract_budget_seconds + _timeout_margin
 
 
 def request(query: str, params: "OnlineParams") -> None:
@@ -414,8 +447,8 @@ def _page_request(session, url: str, data: dict[str, str], headers: dict[str, st
     """发一次 KNS 检索请求；有独立会话用独立会话，否则回落 ``searx.network``。"""
 
     if session is not None:
-        return session.post(url, data=data, headers=headers, timeout=_page_timeout_seconds)
-    return post(url, data=data, headers=headers, timeout=_page_timeout_seconds)
+        return session.post(url, data=data, headers=headers, timeout=_http_timeout_seconds)
+    return post(url, data=data, headers=headers, timeout=_http_timeout_seconds)
 
 
 _ABSTRACT_XPATHS = (

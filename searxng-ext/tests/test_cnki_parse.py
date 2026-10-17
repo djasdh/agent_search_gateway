@@ -66,8 +66,6 @@ class TestModuleContract(unittest.TestCase):
     def test_engine_metadata(self):
         self.assertEqual(engine.categories, ["academic"])
         self.assertEqual(engine.paging, False)
-        # 超时按页数乘法放大（searxng 用它作为本引擎的绝对截止时间）
-        self.assertEqual(engine.timeout, engine._page_timeout_seconds * engine.num_pages)
         self.assertEqual(engine.about["results"], "HTML")
         self.assertFalse(engine.about["use_official_api"])
 
@@ -77,12 +75,23 @@ class TestModuleContract(unittest.TestCase):
     def test_paging_constants(self):
         # 单页上限（实测：50 可用，100 报「字段 pageSize 校验失败」）
         self.assertEqual(engine.page_size, 50)
-        self.assertGreaterEqual(engine.num_pages, 1)
-        self.assertEqual(engine.abstract_budget_seconds, 18.0 * engine.num_pages)
 
     def test_paging_disabled_by_default(self):
         # 默认关闭翻页：实测 CNKI 的 pageNum>1 返回验证码页，拿不到数据
         self.assertEqual(engine.num_pages, 1)
+
+    def test_init_reports_timeout_and_budget(self):
+        """init() 按条数自算时间，并把 timeout 汇报给 searxng。"""
+
+        engine.init(None)
+        results = engine.page_size * engine.num_pages
+        self.assertEqual(engine.abstract_budget_seconds, engine._result_seconds * results)
+        self.assertEqual(
+            engine.timeout,
+            engine._search_seconds * engine.num_pages
+            + engine.abstract_budget_seconds
+            + engine._timeout_margin,
+        )
 
 
 class TestQueryJson(unittest.TestCase):

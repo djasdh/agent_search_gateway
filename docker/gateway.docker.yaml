@@ -43,9 +43,9 @@ search:
   quota_tight_threshold: 0.1
   resident_quota_floor: 0.2
   # 类别感知超时：命中请求类别时覆盖 searxng.timeout_ms
-  # academic: cnki 引擎内翻页后总超时 = 20s × num_pages，网关须留出余量（> 60s）
+  # 须 ≥ 引擎自报的 timeout：cnki 按 page_size × num_pages 自算（默认 50 条 → 30s）
   category_timeout_ms:
-    academic: 70000
+    academic: 40000
 
 rerank:
   enabled: true
