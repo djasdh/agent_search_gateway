@@ -84,6 +84,12 @@ fetch:
   max_output_chars: 20000
   cache_ttl_ms: 600000
   cache_max_entries: 200
+  # 产物落盘与下载：compose 把 corpus 卷挂在 /data，故与语料库同卷
+  max_download_bytes: 1073741824
+  download_dir: /data/downloads
+  download_ttl_ms: 604800000
+  download_max_total_bytes: 4294967296
+  files_route: true
 
 browser:
   enabled: true

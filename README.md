@@ -12,10 +12,11 @@ Agent（hermes / OpenCode / my-agent-core / 其它 MCP client）
   ▼
 gateway (本服务, :3000/mcp)
   ├─ search → searxng (:8888) → 清洗/广告过滤/缓存 → 纯 md
-  ├─ fetch  → 智能路由：
-  │     ① direct（普通站，HTML→md）
-  │     ② FlareSolverr (:8192)（CF 挑战/JS 站渲染）
-  │     ③ playwright（复杂 SPA 渲染）
+  ├─ fetch  → 按 Content-Type 分派：
+  │     网页 HTML→md；文本类直出/轻转换（JSON/CSV/XML）
+  │     PDF → 抽正文（unpdf）
+  │     图片等二进制 → 落盘 data/downloads + /files/<id> 链接
+  │     网页自动路由 direct → FlareSolverr (:8192) → playwright
   │     fetch 缓存按渲染方式隔离
   ├─ browser_* → 内嵌 playwright（agent 交互：navigate/click/type/scroll/find/screenshot）
   └─ health → 各后端连通状态
@@ -31,7 +32,7 @@ gateway (本服务, :3000/mcp)
 | 工具 | 说明 |
 |---|---|
 | `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results |
-| `fetch` | 抓取 URL → md。自动路由 direct/FlareSolverr/playwright。参数：url/max_chars |
+| `fetch` | 抓取 URL：网页→md；纯文本/JSON/CSV/XML 直接返回；PDF 抽正文；图片等二进制落盘并返回路径与 `/files/<id>` 链接。参数：url/max_chars |
 | `browser_navigate` | 浏览器打开 URL，返回无障碍树快照（省 token） |
 | `browser_snapshot` | 当前页无障碍树快照，可选 target 限定 |
 | `browser_take_screenshot` | 截图返回 base64（开关/尺寸可配） |
@@ -51,7 +52,9 @@ gateway (本服务, :3000/mcp)
 | `SEARCH_INVALID` | searxng 返回异常 | 放弃 |
 | `FETCH_TIMEOUT` | 目标站超时 | 可重试 |
 | `FETCH_BLOCKED` | 反爬/SSRF 阻断 | 放弃或换源 |
-| `FETCH_NOT_HTML` | 非网页内容 | 放弃 |
+| `FETCH_NOT_HTML` | 非网页内容（历史错误码；现已按类型分派，不再返回） | 放弃 |
+| `FETCH_UNSUPPORTED_TYPE` | 产物无法处理（如未启用落盘又拿到二进制） | 放弃 |
+| `FETCH_TOO_LARGE` | 文件超过 `fetch.max_download_bytes`（默认 1GB） | 调大上限或放弃 |
 | `FETCH_RENDER_FAIL` | 浏览器渲染失败 | 可重试 |
 | `FETCH_NETWORK` | 网络错误 | 可重试 |
 | `FETCH_INVALID_URL` | 非法 URL | 放弃 |
@@ -109,6 +112,7 @@ GATEWAY_BIND=0.0.0.0 GATEWAY_TOKEN=<strong-token> docker compose up -d
 - **密钥只经 `.env` → 环境变量注入，不进镜像**。searxng 的 `settings.yml` 由容器启动时从 `docker/searxng/settings.template.yml` 渲染。
 - **配额台账共享**：`quota` 卷同时挂进 searxng 与 gateway（同一路径 `/quota/quota.json`）。
 - 语料库 + 广告过滤缓存在 `corpus` 卷（容器内 `/data`）。
+- **fetch 产物**（图片/PDF 等非文本文件）落在 `corpus` 卷的 `/data/downloads`（`docker/gateway.docker.yaml` 已指向该路径），容器重建不丢。
 - 容器内网关配置为只读挂载的 `docker/gateway.docker.yaml`；改搜索/重排策略改它即可。
 - **出口不经任何代理**：免费 API 引擎直连可达，内置通用爬虫已整体 disabled。
 
@@ -155,12 +159,38 @@ logging:        # level/file
 searxng:        # url/timeout_ms
 flaresolverr:   # url/enabled/timeout_ms/max_concurrent/trigger_status/fallback_on_empty
 search:         # max_results/max_result_chars/cache_ttl_ms/cache_max_entries/max_concurrent
-fetch:          # timeout_ms/max_bytes/user_agent/block_private_ips/structural/max_output_chars/cache_ttl_ms/cache_max_entries
+fetch:          # timeout_ms/max_bytes/user_agent/block_private_ips/structural/max_output_chars/cache_ttl_ms/cache_max_entries/max_download_bytes/download_dir/download_ttl_ms/download_max_total_bytes/files_route
 ad_filter:      # enabled/level(off|ads|ads+tracking|full)/extra_domains/hosts_file/allowlist
 browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufox预留)/proxy_*/wait_for_selector/screenshot
 embedding:      # enabled/provider(openai|ollama)/base_url/api_key/model/dim/timeout_ms/batch_size/max_input_chars/query_prefix/passage_prefix
 corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 ```
+
+### fetch 全类型与产物落盘
+
+`fetch` 按响应的 `Content-Type` 分派，不再只认网页：
+
+| 响应类型 | 处理 |
+|---|---|
+| `text/html`、`application/xhtml+xml` | 转 markdown（可选清理导航/广告），反爬时自动升级浏览器渲染 |
+| `text/*`、`application/json`、`application/xml` 等 | 直接返回；JSON 美化、CSV/TSV 转 markdown 表格、XML 包代码块 |
+| `application/pdf` | `unpdf` 抽正文（含页数标注）；扫描件无文本层则落盘 |
+| 图片 / 压缩包 / 其它二进制 | 落盘，返回**本地路径 + `/files/<id>` 链接 + 大小 + sha256**，正文不注入上下文 |
+
+产物相关配置（`fetch` 块）：
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `max_download_bytes` | 1073741824（1GB） | 非文本单文件上限；服务端给 `Content-Length` 时**下载前预检**，超出报 `[FETCH_TOO_LARGE]` |
+| `download_dir` | `data/downloads` | 落盘目录（Docker 内为 `/data/downloads`） |
+| `download_ttl_ms` | 604800000（7 天） | 产物保留时长 |
+| `download_max_total_bytes` | 4294967296（4GB） | 总量配额，超出按最旧优先清理 |
+| `files_route` | true | 是否提供 `GET /files/<id>` |
+
+- 单文件上限 `fetch.max_download_bytes`（默认 1GB）：服务端返回 `Content-Length` 时在**下载前**预检，超限立即返回 `[FETCH_TOO_LARGE]`（不下载 body、不占用连接）；无该头时读到上限才中止。
+- `id` = 文件内容 sha256（同内容幂等去重）；链接公开、不可猜（见 `docs/adr/0009`）。
+- 二进制结果**不写** fetch 文本缓存，避免文件被 TTL 清走后链接失效。
+- 目录布局：`<download_dir>/<前两位>/<sha256><扩展名>` + 同名 `.json` 侧车。
 
 ### searxng 配置分工（gateway.yaml vs settings.yml）
 

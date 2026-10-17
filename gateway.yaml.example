@@ -111,6 +111,11 @@ fetch:
   max_output_chars: 20000  # 输出 md 上限
   cache_ttl_ms: 600000     # fetch 结果缓存 10 分钟
   cache_max_entries: 200
+  max_download_bytes: 1073741824  # 非文本产物单文件上限 1GB（有 Content-Length 时下载前预检，超出报 FETCH_TOO_LARGE）
+  download_dir: data/downloads  # 产物落盘目录（容器内建议 /data/downloads）
+  download_ttl_ms: 604800000    # 产物 TTL 7 天
+  download_max_total_bytes: 4294967296  # 产物总量配额 4GB（超出按最旧优先清理）
+  files_route: true             # 提供 GET /files/<id> 下载链接（id = 内容 sha256）
 
 browser:
   enabled: true            # 浏览器能力（fetch 路由③ + browser_* 工具）
