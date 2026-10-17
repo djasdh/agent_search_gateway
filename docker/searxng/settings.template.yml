@@ -131,3 +131,12 @@ engines:
     scope: web
     api_key: ""
     disabled: false
+
+  # 知网学术检索：检索匿名可用；摘要/下载需要机构出口 IP（会话票据 LID）。
+  # 容器内无代理，network 用默认即可；若部署在机构出口之外，只会返回标题。
+  - name: cnki
+    engine: cnki
+    shortcut: cnki
+    categories: [academic]
+    timeout: 20.0
+    disabled: false
