@@ -32,6 +32,18 @@ engines:
     shortcut: you
     disabled: true
 
+  # ── cnki:知网学术检索(KNS 站内接口,零凭据)──
+  # 权限绑定机构出口 IP;全局配了代理时默认绕开(network.proxies 置空)。
+  # 若代理本身就在机构出口,删掉 network 即可。
+  - name: cnki
+    engine: cnki
+    shortcut: cnki
+    categories: [academic]
+    timeout: 20.0
+    network:
+      proxies: {}
+    disabled: false
+
   # ── zhihu:知乎开放平台,一个模块两个 scope ──
   - name: zhihu
     engine: zhihu

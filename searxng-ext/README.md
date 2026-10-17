@@ -22,6 +22,7 @@ searx/engines/
   tavily.py      Tavily(基于上游 PR #6499 的 vendored 代码,改为读环境变量)
   firecrawl.py   Firecrawl(可 keyless)
   youcom.py      You.com keyless MCP(不稳定,默认 disabled)
+  cnki.py        知网学术检索(KNS 站内接口,零凭据;默认绕开代理)
 searx/plugins/
   quota.py       配额台账插件(pre_search 计数 + 剔除耗尽引擎)
 ```
@@ -39,6 +40,14 @@ searx/plugins/
 
 然后在 searxng 的 `settings.yml` 里按 [`settings.example.yml`](./settings.example.yml)
 启用相应引擎/插件,并重启 `searxng.service`。
+
+## 测试
+
+解析器的离线回归测试（不联网，用实测抓取的 HTML 裁剪样本；`searx` 被 stub）：
+
+```bash
+python3 -m unittest discover -s searxng-ext/tests
+```
 
 ## 密钥(绝不入库)
 
