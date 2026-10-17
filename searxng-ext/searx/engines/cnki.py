@@ -83,11 +83,16 @@ paging = False
 #: ``pageNum=1..num_pages`` 抓完再返回。searxng 用 :py:obj:`timeout` 作为本引擎
 #: 的**绝对截止时间**，超时会丢弃该引擎的全部结果（见 ``searx/search/__init__.py``
 #: 的 watchdog），故超时按页数乘法放大。
-page_size = 20
-"""单页结果条数（1-50）。"""
+page_size = 50
+"""单页结果条数（1-50）。实测 50 为 CNKI 上限；100 会报「字段【pageSize】校验失败」。"""
 
-num_pages = 3
-"""引擎内翻页数；实际请求 ``pageNum=1..num_pages``，总条数 ≈ ``page_size × num_pages``。"""
+num_pages = 1
+"""引擎内翻页数（默认 1 = 关闭翻页）。
+
+实测 CNKI 的 ``pageNum>1`` 会返回**验证码页**（``vericodeForm``），翻页拿不到
+数据；且多次请求易触发 403 频率风控。故默认只用单页 + 大 ``page_size``。
+若要试验翻页，需自行承担反爬风险（见 docs/cnki-channel.md D23）。
+"""
 
 _page_timeout_seconds = 20.0
 """单页请求超时（秒）。"""

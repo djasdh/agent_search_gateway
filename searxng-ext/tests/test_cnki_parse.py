@@ -74,6 +74,16 @@ class TestModuleContract(unittest.TestCase):
     def test_network_bypasses_proxy_by_default(self):
         self.assertEqual(engine.network, {"proxies": {}})
 
+    def test_paging_constants(self):
+        # 单页上限（实测：50 可用，100 报「字段 pageSize 校验失败」）
+        self.assertEqual(engine.page_size, 50)
+        self.assertGreaterEqual(engine.num_pages, 1)
+        self.assertEqual(engine.abstract_budget_seconds, 18.0 * engine.num_pages)
+
+    def test_paging_disabled_by_default(self):
+        # 默认关闭翻页：实测 CNKI 的 pageNum>1 返回验证码页，拿不到数据
+        self.assertEqual(engine.num_pages, 1)
+
 
 class TestQueryJson(unittest.TestCase):
     def setUp(self):
@@ -165,20 +175,16 @@ def _ids(rows):
 
 
 class TestPaging(unittest.TestCase):
-    def test_paging_constants(self):
-        self.assertEqual(engine.page_size, 20)
-        self.assertGreaterEqual(engine.num_pages, 1)
-        # 超时/预算都按页数乘法放大，避免 searxng watchdog 丢弃全部结果
-        self.assertEqual(engine.timeout, engine._page_timeout_seconds * engine.num_pages)
-        self.assertEqual(engine.abstract_budget_seconds, 18.0 * engine.num_pages)
-
     def setUp(self):
         self._orig_post = engine.post
+        self._orig_pages = engine.num_pages
+        engine.num_pages = 3  # 强制走翻页路径（默认已改为 1）
         self.first = engine._parse_grid(_grid_html(["a", "b"]), GRID_BASE)
         self.resp = _FakeResp(search_params={"data": {"pageNum": "1"}, "headers": {}})
 
     def tearDown(self):
         engine.post = self._orig_post
+        engine.num_pages = self._orig_pages
 
     def test_merges_and_dedupes_across_pages(self):
         pages = {"2": _grid_html(["b", "c"]), "3": _grid_html(["d"])}

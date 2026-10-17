@@ -39,9 +39,12 @@ engines:
     engine: cnki
     shortcut: cnki
     categories: [academic]
-    # 引擎内翻页：page_size(20) × num_pages(3) ≈ 60 条候选（对 searxng 仍是「一页」）。
-    num_pages: 3
-    # 注意：不要在这里写死 timeout。引擎会按 num_pages 自动放大总超时
+    # 单页条数（CNKI 上限 50）：一次检索即取 50 条候选，实测无验证码、无风控。
+    page_size: 50
+    # 引擎内翻页：默认 1 = 关闭。实测 pageNum>1 会返回验证码页（拿不到数据），
+    # 且多次请求易触发 403；如需试验可调大，但须同步放大 timeout。
+    num_pages: 1
+    # 注意：不要在这里写死 timeout。引擎按 num_pages 自动算总超时
     # （20s × 页数）；手动覆盖会让 searxng watchdog 提前丢弃该引擎的全部结果。
     network:
       proxies: {}
