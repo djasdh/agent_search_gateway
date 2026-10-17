@@ -65,7 +65,7 @@ def setUpModule():  # noqa: N802 (unittest hook)
 
 class TestModuleContract(unittest.TestCase):
     def test_engine_metadata(self):
-        self.assertEqual(engine.categories, ["academic"])
+        self.assertEqual(engine.categories, ["science"])
         self.assertEqual(engine.paging, False)
         self.assertEqual(engine.about["results"], "HTML")
         self.assertFalse(engine.about["use_official_api"])

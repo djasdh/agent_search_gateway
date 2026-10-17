@@ -45,7 +45,7 @@ search:
   # 类别感知超时：命中请求类别时覆盖 searxng.timeout_ms
   # 须 ≥ 引擎自报的 timeout：cnki 按 page_size × num_pages 自算（默认 50 条 → 30s）
   category_timeout_ms:
-    academic: 40000
+    science: 40000
 
 rerank:
   enabled: true

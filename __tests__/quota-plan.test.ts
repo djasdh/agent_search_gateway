@@ -163,11 +163,11 @@ describe("planEngines 类别抑制（ADR-0008）", () => {
   const cfg = () => makeConfig({ searchEnginesResident: ["zhihu"], searchEngines: ["exaapi", "tavily"] });
 
   it("指定非 general 类别 → 抑制 resident/rotating，engines 留空交 searxng 按类别选", () => {
-    expect(planEngines({ query: "q", categories: "academic" }, cfg(), enabled, undefined)).toEqual([""]);
+    expect(planEngines({ query: "q", categories: "science" }, cfg(), enabled, undefined)).toEqual([""]);
   });
 
   it("非 general 与 general 混写仍算非 general", () => {
-    expect(planEngines({ query: "q", categories: "general,academic" }, cfg(), enabled, undefined)).toEqual([""]);
+    expect(planEngines({ query: "q", categories: "general,science" }, cfg(), enabled, undefined)).toEqual([""]);
   });
 
   it("只有 general（或纯空白）→ 不抑制", () => {
@@ -177,19 +177,19 @@ describe("planEngines 类别抑制（ADR-0008）", () => {
   });
 
   it("显式 engines 优先于类别抑制", () => {
-    const batches = planEngines({ query: "q", categories: "academic", engines: "tavily" }, cfg(), enabled, undefined);
+    const batches = planEngines({ query: "q", categories: "science", engines: "tavily" }, cfg(), enabled, undefined);
     expect(batches).toEqual(["tavily"]);
   });
 });
 
 describe("resolveSearxngTimeout（类别感知超时，D18）", () => {
   it("命中类别 → 用类别超时", () => {
-    const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: { academic: 25000 } });
-    expect(resolveSearxngTimeout({ query: "q", categories: "academic" }, cfg)).toBe(25000);
+    const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: { science: 25000 } });
+    expect(resolveSearxngTimeout({ query: "q", categories: "science" }, cfg)).toBe(25000);
   });
 
   it("未命中 / 未指定类别 → 回落 searxngTimeoutMs", () => {
-    const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: { academic: 25000 } });
+    const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: { science: 25000 } });
     expect(resolveSearxngTimeout({ query: "q" }, cfg)).toBe(10000);
     expect(resolveSearxngTimeout({ query: "q", categories: "news" }, cfg)).toBe(10000);
   });
@@ -197,14 +197,14 @@ describe("resolveSearxngTimeout（类别感知超时，D18）", () => {
   it("多类别按顺序取第一个命中", () => {
     const cfg = makeConfig({
       searxngTimeoutMs: 10000,
-      searchCategoryTimeoutMs: { academic: 25000, news: 15000 },
+      searchCategoryTimeoutMs: { science: 25000, news: 15000 },
     });
-    expect(resolveSearxngTimeout({ query: "q", categories: "news,academic" }, cfg)).toBe(15000);
-    expect(resolveSearxngTimeout({ query: "q", categories: "academic,news" }, cfg)).toBe(25000);
+    expect(resolveSearxngTimeout({ query: "q", categories: "news,science" }, cfg)).toBe(15000);
+    expect(resolveSearxngTimeout({ query: "q", categories: "science,news" }, cfg)).toBe(25000);
   });
 
   it("未配置 category_timeout_ms → 等同旧行为", () => {
     const cfg = makeConfig({ searxngTimeoutMs: 10000, searchCategoryTimeoutMs: {} });
-    expect(resolveSearxngTimeout({ query: "q", categories: "academic" }, cfg)).toBe(10000);
+    expect(resolveSearxngTimeout({ query: "q", categories: "science" }, cfg)).toBe(10000);
   });
 });

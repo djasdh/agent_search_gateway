@@ -137,7 +137,7 @@ engines:
   - name: cnki
     engine: cnki
     shortcut: cnki
-    categories: [academic]
+    categories: [science]
     # 单页条数（CNKI 上限 50）：一次检索即取 50 条候选，实测无验证码、无风控。
     page_size: 50
     # 引擎内翻页：默认 1 = 关闭（实测 pageNum>1 返回验证码页、且易触发 403）。

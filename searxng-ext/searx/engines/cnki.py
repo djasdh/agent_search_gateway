@@ -89,7 +89,7 @@ about = {
     "results": "HTML",
 }
 
-categories = ["academic"]
+categories = ["science"]
 paging = False
 
 #: 引擎内翻页：对 searxng 仍是「一页」（``paging = False``），所以必须自己把
