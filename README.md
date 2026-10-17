@@ -243,7 +243,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 ## 测试与压测
 
-- `npm test`：107 个测试（17 个测试文件）
+- `npm test`：227 个测试（28 个测试文件）
 - `scripts/bench.sh`：测量各组件内存/延迟，验证 3.8GB 预算
 
 实测（本机模拟）：
