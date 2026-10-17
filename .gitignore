@@ -4,6 +4,7 @@ dist/
 *.log
 data/adblock/hosts
 data/corpus/
+data/downloads/
 # 实例配置（含环境相关项，不入库；模板见 gateway.yaml.example）
 gateway.yaml
 .tmp/

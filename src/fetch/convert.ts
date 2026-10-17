@@ -76,6 +76,20 @@ export function extForContentType(ct: string | undefined): string {
   return EXT_BY_TYPE[baseContentType(ct)] ?? ".bin";
 }
 
+/** 人类可读的字节数（KB/MB/GB，一位小数）；用于错误文案与日志。 */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return `${bytes} 字节`;
+  if (bytes < 1024) return `${bytes} 字节`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = bytes / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(1)}${units[i]}`;
+}
+
 export interface RenderedText {
   text: string;
   truncated: boolean;

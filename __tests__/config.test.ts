@@ -45,6 +45,11 @@ describe("loadConfig (gateway.yaml)", () => {
     expect(c.searchMaxResults).toBe(10);
     expect(c.adFilterLevel).toBe("ads");
     expect(c.adFilterEnabled).toBe(true);
+    expect(c.fetchMaxDownloadBytes).toBe(1073741824);
+    expect(c.fetchDownloadDir).toBe("data/downloads");
+    expect(c.fetchDownloadTtlMs).toBe(604800000);
+    expect(c.fetchDownloadMaxTotalBytes).toBe(4294967296);
+    expect(c.fetchFilesRoute).toBe(true);
   });
 
   it("读取完整配置", () => {

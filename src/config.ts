@@ -142,7 +142,7 @@ const configSchema = z.object({
       cache_ttl_ms: z.number().int().positive().default(600000),
       cache_max_entries: z.number().int().positive().default(200),
       // 非文本产物（PDF/图片/二进制）落盘：见 docs/cnki-channel.md §6
-      max_download_bytes: z.number().int().positive().default(52428800),
+      max_download_bytes: z.number().int().positive().default(1073741824),
       download_dir: z.string().default("data/downloads"),
       download_ttl_ms: z.number().int().positive().default(604800000),
       download_max_total_bytes: z.number().int().positive().default(4294967296),
@@ -158,7 +158,7 @@ const configSchema = z.object({
       max_output_chars: 20000,
       cache_ttl_ms: 600000,
       cache_max_entries: 200,
-      max_download_bytes: 52428800,
+      max_download_bytes: 1073741824,
       download_dir: "data/downloads",
       download_ttl_ms: 604800000,
       download_max_total_bytes: 4294967296,
@@ -303,7 +303,7 @@ export interface GatewayConfig {
   fetchMaxOutputChars: number;
   fetchCacheTtlMs: number;
   fetchCacheMaxEntries: number;
-  /** 非文本产物单文件上限（max_download_bytes）。 */
+  /** 非文本产物单文件上限（max_download_bytes，默认 1GB）；有 Content-Length 时在下载前预检。 */
   fetchMaxDownloadBytes: number;
   /** 产物落盘目录（相对路径相对进程工作目录）。 */
   fetchDownloadDir: string;

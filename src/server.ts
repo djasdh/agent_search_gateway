@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
@@ -8,6 +9,7 @@ import type { GatewayConfig } from "./config.js";
 import { fetchAdList, isAdListStale, startAdListScheduler } from "./filter/adlist.js";
 import { buildDomainFilter } from "./filter/domain-filter.js";
 import { createFetchService } from "./fetch/service.js";
+import { FetchStore } from "./fetch/store.js";
 import { getHealth } from "./health.js";
 import type { Logger } from "./logger.js";
 import { createSearchService } from "./search/service.js";
@@ -25,6 +27,30 @@ function getBrowserPool(config: GatewayConfig, logger: Logger): BrowserPool {
     sharedBrowserPool = new BrowserPool(config, logger);
   }
   return sharedBrowserPool;
+}
+
+// fetch 产物存储全局单例（跨 MCP 会话共享；落盘目录与配额是进程级资源）
+let sharedFetchStore: FetchStore | null = null;
+let fetchStoreSweep: ReturnType<typeof setInterval> | null = null;
+
+/** 产物 TTL/配额清扫周期（与语料库清扫同节奏）。 */
+const FETCH_STORE_SWEEP_INTERVAL_MS = 3600000;
+
+export function getFetchStore(config: GatewayConfig, logger: Logger): FetchStore {
+  if (!sharedFetchStore) {
+    const dir = resolve(config.fetchDownloadDir);
+    sharedFetchStore = new FetchStore(dir, config.fetchDownloadTtlMs, config.fetchDownloadMaxTotalBytes, logger);
+    fetchStoreSweep = setInterval(() => {
+      try {
+        sharedFetchStore?.gc(Date.now());
+      } catch (err) {
+        logger.warn(`fetch 产物清扫失败: ${String(err)}`);
+      }
+    }, FETCH_STORE_SWEEP_INTERVAL_MS);
+    fetchStoreSweep.unref?.();
+    logger.info(`fetch 产物目录: ${dir} (TTL ${Math.round(config.fetchDownloadTtlMs / 86400000)}d, 配额 ${Math.round(config.fetchDownloadMaxTotalBytes / 1024 / 1024)}MB)`);
+  }
+  return sharedFetchStore;
 }
 
 // 语义层（embedding + 语料库）全局单例：跨 MCP 会话共享，避免每会话各开一个 sqlite 连接
@@ -170,7 +196,8 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
     recallK: config.corpusRecallK,
   });
   const browserPool = getBrowserPool(config, logger);
-  const fetchService = createFetchService(config, logger, browserPool);
+  const fetchStore = getFetchStore(config, logger);
+  const fetchService = createFetchService(config, logger, browserPool, fetchStore);
   const browserTools = new BrowserTools(browserPool, config, logger);
 
   // adlist 定期刷新：拉取成功后重建广告过滤集 + 搜索服务
@@ -264,7 +291,7 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
     "fetch",
     {
       description:
-        "抓取一个网页 URL 并转换为 markdown。返回页面标题和正文的 markdown 文本，默认清理导航/广告，可保留链接/表格/代码块。",
+        "抓取一个 URL。网页（HTML）转 markdown；纯文本/JSON/CSV/XML 直接返回；PDF 抽取正文；图片等二进制文件落盘并返回本地路径与 /files/<id> 下载链接（正文不注入上下文）。网页遇到反爬会自动升级浏览器渲染。",
       inputSchema: {
         url: z.string().url().describe("要抓取的网页 URL"),
         max_chars: z
@@ -459,6 +486,32 @@ export async function startHttpServer(
     if (url.pathname === "/health" && req.method === "GET") {
       const report = await getHealth(config, Date.now());
       writeJson(res, 200, report);
+      return;
+    }
+
+    // 产物下载端点（公开：id 是内容 sha256，不可猜；见 docs/cnki-channel.md §6 / ADR-0009）
+    if (config.fetchFilesRoute && req.method === "GET" && url.pathname.startsWith("/files/")) {
+      const id = decodeURIComponent(url.pathname.slice("/files/".length));
+      const store = getFetchStore(config, logger);
+      const ref = store.get(id);
+      const stream = ref ? store.openReadStream(id) : undefined;
+      if (!ref || !stream) {
+        writeJson(res, 404, { error: "not found" });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": ref.contentType,
+        "Content-Length": String(ref.size),
+        "Cache-Control": "private, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": `inline; filename="${ref.id}${ref.ext}"`,
+      });
+      stream.on("error", (err) => {
+        logger.warn(`/files 读取失败: ${id} ${String(err)}`);
+        if (!res.headersSent) writeJson(res, 500, { error: "read error" });
+        else res.end();
+      });
+      stream.pipe(res);
       return;
     }
 

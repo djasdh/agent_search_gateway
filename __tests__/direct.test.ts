@@ -50,7 +50,7 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     fetchMaxOutputChars: 20000,
     fetchCacheTtlMs: 600000,
     fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 52428800,
+    fetchMaxDownloadBytes: 1073741824,
     fetchDownloadDir: "data/downloads",
     fetchDownloadTtlMs: 604800000,
     fetchDownloadMaxTotalBytes: 4294967296,
@@ -94,6 +94,10 @@ beforeAll(async () => {
     } else if (url.pathname === "/bigbin") {
       res.writeHead(200, { "Content-Type": "application/octet-stream" });
       res.end(Buffer.alloc(4096, 1));
+    } else if (url.pathname === "/declared-big") {
+      // 声明超大 Content-Length 但只发少量字节且不结束：验证预检不读 body、不阻塞
+      res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": "999999999" });
+      res.write(Buffer.alloc(64, 1));
     } else if (url.pathname === "/large") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html><body>" + "x".repeat(200000) + "</body></html>");
@@ -160,6 +164,25 @@ describe("directFetch", () => {
     const r = await directFetch(makeConfig({ fetchMaxDownloadBytes: 1024 }), `${base}/bigbin`);
     expect(r.ok).toBe(false);
     expect(r.errorKind).toBe("too_large");
+  });
+
+  it("Content-Length 预检：超上限立即返回，不等 body 也不阻塞", async () => {
+    const cfg = makeConfig({ fetchMaxDownloadBytes: 1024, fetchTimeoutMs: 3000 });
+    const t0 = Date.now();
+    const r = await directFetch(cfg, `${base}/declared-big`);
+    const cost = Date.now() - t0;
+
+    expect(r.ok).toBe(false);
+    expect(r.errorKind).toBe("too_large");
+    expect(r.errorMessage).toContain("超过上限");
+    // 未走预检的话会一直等 body，直到 fetchTimeoutMs(3000ms) 才超时
+    expect(cost).toBeLessThan(1000);
+  });
+
+  it("超限文案按量级显示（1.0KB）", async () => {
+    const r = await directFetch(makeConfig({ fetchMaxDownloadBytes: 1024 }), `${base}/bigbin`);
+    expect(r.ok).toBe(false);
+    expect(r.errorMessage).toContain("1.0KB");
   });
 
   it("HTTP 错误返回 http", async () => {

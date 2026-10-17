@@ -48,7 +48,7 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     fetchMaxOutputChars: 20000,
     fetchCacheTtlMs: 600000,
     fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 52428800,
+    fetchMaxDownloadBytes: 1073741824,
     fetchDownloadDir: "data/downloads",
     fetchDownloadTtlMs: 604800000,
     fetchDownloadMaxTotalBytes: 4294967296,

@@ -1,6 +1,6 @@
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { baseContentType, classifyContentType } from "./convert.js";
+import { baseContentType, classifyContentType, formatBytes } from "./convert.js";
 import { findPlugin } from "./plugins/index.js";
 import type { FetchPluginResult } from "./plugins/types.js";
 import { isPrivateHost } from "./ssrf.js";
@@ -312,6 +312,23 @@ export async function directFetch(
       const isTextual = categorized === "html" || categorized === "text";
       const limit = isTextual ? config.fetchMaxBytes : config.fetchMaxDownloadBytes;
 
+      // 二进制/PDF：有 Content-Length 时先预检，超上限直接拒绝（不下载、不占连接）
+      if (!isTextual) {
+        const rawLen = res.headers.get("content-length");
+        const declaredLen = rawLen === null ? Number.NaN : Number(rawLen);
+        if (Number.isFinite(declaredLen) && declaredLen > config.fetchMaxDownloadBytes) {
+          await res.body?.cancel().catch(() => {});
+          return {
+            ok: false,
+            errorKind: "too_large",
+            status,
+            contentType,
+            finalUrl: currentUrl.toString(),
+            errorMessage: `文件约 ${formatBytes(declaredLen)}，超过上限 ${formatBytes(config.fetchMaxDownloadBytes)}（max_download_bytes）`,
+          };
+        }
+      }
+
       const reader = res.body?.getReader();
       if (!reader) {
         return { ok: false, errorKind: "empty", errorMessage: "响应无内容" };
@@ -320,7 +337,7 @@ export async function directFetch(
       await reader.cancel().catch(() => {});
       truncated = wasTruncated;
 
-      // 二进制超上限：截断的文件是残片，直接报错不落盘
+      // 二进制超上限（无 Content-Length 的兜底路径）：截断的文件是残片，直接报错不落盘
       if (!isTextual && truncated) {
         return {
           ok: false,
@@ -328,7 +345,7 @@ export async function directFetch(
           status,
           contentType,
           finalUrl: currentUrl.toString(),
-          errorMessage: `文件超过 ${(config.fetchMaxDownloadBytes / 1024 / 1024).toFixed(1)}MB 上限（max_download_bytes）`,
+          errorMessage: `文件超过 ${formatBytes(config.fetchMaxDownloadBytes)} 上限（max_download_bytes）`,
         };
       }
 

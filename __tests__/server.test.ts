@@ -1,9 +1,19 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { GatewayConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
-import { startHttpServer } from "../src/server.js";
+import { getFetchStore, startHttpServer } from "../src/server.js";
 import { createServer } from "../src/server.js";
+
+/** 产物落盘目录：测试统一用临时目录，避免污染仓库 data/。 */
+const DOWNLOAD_DIR = mkdtempSync(join(tmpdir(), "gw-files-"));
+
+afterAll(() => {
+  rmSync(DOWNLOAD_DIR, { recursive: true, force: true });
+});
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -40,6 +50,11 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     adFilterAllowlist: [],
     adFilterAutoUpdate: false,
     adFilterAutoUpdateIntervalMs: 86400000,
+    fetchMaxDownloadBytes: 1073741824,
+    fetchDownloadDir: DOWNLOAD_DIR,
+    fetchDownloadTtlMs: 604800000,
+    fetchDownloadMaxTotalBytes: 4294967296,
+    fetchFilesRoute: true,
     ...overrides,
   };
 }
@@ -119,6 +134,25 @@ describe("MCP HTTP server", () => {
     );
     expect(text).toContain("searxng");
     expect(text).toContain("flaresolverr");
+  });
+
+  it("GET /files/<id> 返回产物，未知 id 404", async () => {
+    const store = getFetchStore(makeConfig(), silentLogger);
+    const f = store.put(Buffer.from("file-body"), {
+      contentType: "text/plain",
+      sourceUrl: "https://example.com/a.txt",
+    });
+
+    const ok = await fetch(`${base}/files/${f.id}`);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toBe("text/plain");
+    expect(await ok.text()).toBe("file-body");
+
+    const miss = await fetch(`${base}/files/${"0".repeat(64)}`);
+    expect(miss.status).toBe(404);
+
+    const traversal = await fetch(`${base}/files/..%2F..%2Fetc%2Fpasswd`);
+    expect(traversal.status).toBe(404);
   });
 });
 
