@@ -152,10 +152,12 @@ GRID_BASE = "https://kns.cnki.net/kns8s/brief/grid"
 class _FakeResp:
     """模拟 searxng 的 SXNG_Response（翻页只用 text/url/search_params）。"""
 
-    def __init__(self, text="", url=GRID_BASE, search_params=None):
+    def __init__(self, text="", url=GRID_BASE, search_params=None, request=None, cookies=None):
         self.text = text
         self.url = url
         self.search_params = search_params if search_params is not None else {}
+        self.request = request
+        self.cookies = cookies
 
 
 class _FakeHttpResp:
@@ -256,6 +258,109 @@ class TestPaging(unittest.TestCase):
         self.resp.search_params = {}
         rows = engine._fetch_more_pages(None, self.resp, self.first)
         self.assertEqual(_ids(rows), ["a", "b"])
+
+
+class _StubResults:
+    """``EngineResults`` 的最小替身（``response()`` 只用到 add/types.Paper）。"""
+
+    def __init__(self):
+        self.items = []
+        self.types = self
+
+    def add(self, item):
+        self.items.append(item)
+
+    @staticmethod
+    def Paper(**kwargs):
+        return types.SimpleNamespace(**kwargs)
+
+
+class _StubSession:
+    def close(self):
+        pass
+
+
+class TestAbstractBudget(unittest.TestCase):
+    """摘要预算必须夹在 searxng 的 watchdog 之前。
+
+    引擎的 ``timeout`` 就是 searxng 的绝对截止时间；撞上它会让
+    ``processors/abstract.py`` 把这批结果**整批丢弃**（连标题都没有）。所以
+    ``response()`` 里补摘要的 deadline 不能被 ``abstract_budget_seconds`` 单独
+    决定，必须再夹到 ``started + timeout - margin`` 以内。
+    """
+
+    def setUp(self):
+        self._saved = {
+            "time": engine.time,
+            "timeout": engine.timeout,
+            "budget": engine.abstract_budget_seconds,
+            "session": engine._new_http_session,
+            "fetch": engine._fetch_abstract,
+            "results": engine.EngineResults,
+            "num_pages": engine.num_pages,
+            "started": getattr(engine._TLS, "started", None),
+        }
+        self.now = [1000.0]
+        engine.time = types.SimpleNamespace(monotonic=lambda: self.now[0])
+        engine.timeout = 30.0
+        engine.abstract_budget_seconds = 25.0
+        engine.num_pages = 1
+        engine.EngineResults = _StubResults
+        engine._new_http_session = _StubSession
+
+    def tearDown(self):
+        engine.time = self._saved["time"]
+        engine.timeout = self._saved["timeout"]
+        engine.abstract_budget_seconds = self._saved["budget"]
+        engine.num_pages = self._saved["num_pages"]
+        engine.EngineResults = self._saved["results"]
+        engine._new_http_session = self._saved["session"]
+        engine._fetch_abstract = self._saved["fetch"]
+        if self._saved["started"] is None:
+            engine._TLS.__dict__.pop("started", None)
+        else:
+            engine._TLS.started = self._saved["started"]
+
+    def _run(self, rows=50, per_abstract=5.0, started_offset=0.0):
+        calls = []
+
+        def fake_fetch(session, url, cookie, timeout):
+            calls.append(self.now[0])
+            self.now[0] += per_abstract
+            return f"摘要{len(calls)}"
+
+        engine._fetch_abstract = fake_fetch
+        engine._TLS.started = self.now[0] - started_offset
+        resp = _FakeResp(text=_grid_html(range(rows)))
+        res = engine.response(resp)
+        return res, calls
+
+    def test_keeps_all_rows_even_when_budget_runs_out(self):
+        res, calls = self._run()
+        # 预算用尽只是少补摘要，标题/链接一条都不能少
+        self.assertEqual(len(res.items), 50)
+        # 25s 预算 / 每条 5s → 5 条（第 6 条时 remaining <= 0）
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(all(item.content for item in res.items[:5]))
+        self.assertFalse(any(item.content for item in res.items[5:]))
+
+    def test_budget_wins_when_it_is_the_smaller_limit(self):
+        engine.abstract_budget_seconds = 8.0
+        _, calls = self._run()
+        self.assertEqual(len(calls), 2)
+
+    def test_clamp_keeps_run_inside_the_watchdog(self):
+        # 检索已经耗掉 26s：预算还剩 25s，但 watchdog 只剩 30-3=27s（即再过 1s）
+        _, calls = self._run(started_offset=26.0)
+        self.assertEqual(len(calls), 1)
+        # 每次摘要「开始」都必须落在 watchdog 的余量线以内
+        self.assertLessEqual(calls[-1], engine._TLS.started + engine.timeout - engine._timeout_margin)
+
+    def test_skips_abstracts_when_watchdog_is_already_spent(self):
+        # 检索把时间用光（started + timeout - margin 已过）→ 一条摘要都不补，但结果保留
+        res, calls = self._run(started_offset=30.0)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(res.items), 50)
 
 
 if __name__ == "__main__":

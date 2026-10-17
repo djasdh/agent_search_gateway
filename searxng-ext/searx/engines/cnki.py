@@ -45,12 +45,20 @@ Optional settings are:
 ``timeout`` 与 :py:obj:`abstract_budget_seconds` **不需要手配**：``init()`` 会按
 ``page_size × num_pages`` 用引擎自己的耗时模型算出，并把 ``timeout`` 汇报给
 searxng。**不要在 settings.yml 里覆盖 ``timeout``**，那会盖掉引擎算出的值。
+
+补摘要走**独立 HTTP 客户端**（curl_cffi，缺失时回落 httpx），不经
+``searx.network``——后者把 ``timeout`` 当作引擎的绝对截止时间，会让串行补摘要
+从第 N 条起全部瞬间超时。补摘要的预算还会再夹到「本次检索起点 + ``timeout`` -
+余量」以内，确保它永远不会撞上 searxng 的 watchdog：撞上会让这批结果被**整批
+丢弃**（连标题都没有）。
 """
 
 import hashlib
 import json
 import math
+import os
 import re
+import threading
 import time
 import typing as t
 from datetime import datetime
@@ -135,6 +143,12 @@ _KNS_BASE = "https://kns.cnki.net"
 #: ``login.cnki.net`` 前端公开常量（ecpLoginDialogLink.js），不是密钥。
 _SECRET = "t8b52yrsoyx66f35tk0p4nubrmrcglv5"
 
+#: 摘要抓取用的浏览器 UA（独立客户端不再有 searxng 注入的 User-Agent）。
+_BROWSER_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
 #: KNS ``OperatorType`` / ``Logic`` 枚举（common.min.js）。
 _OP_TOPRANK = 1
 _LOGIC_AND = 0
@@ -142,8 +156,12 @@ _LOGIC_AND = 0
 kuaku_code = "YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R"
 """KNS 全库串；默认值取自高级检索页 ``#CheckedDB``（实测）。"""
 
-abstract_timeout_seconds = 3.0
-"""单条摘要请求的超时上限（秒）。"""
+abstract_timeout_seconds = 10.0
+"""单条摘要请求的超时上限（秒）。要容忍经代理/隧道的慢路径（实测直连 ~0.25s、经隧道 ~5s）。"""
+
+#: 记录本次检索的起始时刻：``request()`` 与 ``response()`` 在同一 processor 线程，
+#: 用 thread-local 传递（引擎是全局单例，不并发共享）。
+_TLS = threading.local()
 
 
 def init(_):
@@ -168,6 +186,8 @@ def init(_):
 
 def request(query: str, params: "OnlineParams") -> None:
     """构造 KNS 检索请求；会话票据失败时降级为匿名检索。"""
+
+    _TLS.started = time.monotonic()
 
     cookies = _flush_session()
     if cookies:
@@ -204,8 +224,18 @@ def response(resp: "SXNG_Response") -> EngineResults:
             raise SearxEngineAPIException(f"CNKI: {error}")
         return res
 
-    # 复用检索请求携带的会话 cookie 抓摘要（见 request() 中显式写入的 Cookie 头）
+    # 复用检索请求携带的会话 cookie 抓摘要（见 request() 中显式写入的 Cookie 头），
+    # 并合并 brief/grid 响应下发的 cookie（如 ``SID_kns_new``）——摘要页会校验它，
+    # 缺失时会被重定向到 ``/verify/`` 验证码页，表现为摘要全空。
     cookie = resp.request.headers.get("cookie", "") if resp.request is not None else ""
+    cookies = getattr(resp, "cookies", None)
+    if cookies is not None:
+        try:
+            extra = "; ".join(f"{k}={v}" for k, v in cookies.items())
+            if extra:
+                cookie = f"{cookie}; {extra}" if cookie else extra
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("CNKI: 合并检索响应 cookie 失败，仅用会话 cookie")
     session = _new_http_session()
 
     try:
@@ -215,6 +245,12 @@ def response(resp: "SXNG_Response") -> EngineResults:
             rows = _fetch_more_pages(session, resp, rows)
 
         deadline = time.monotonic() + abstract_budget_seconds
+        # 摘要绝不能越过 searxng 的 watchdog：一旦超时，``processors/abstract.py``
+        # 会把这批结果**整批丢弃**（连标题都没有）。所以把预算再夹到
+        # 「本次检索起点 + timeout - margin」以内，宁可少补几条摘要也要保住结果。
+        started = getattr(_TLS, "started", None)
+        if started is not None:
+            deadline = min(deadline, started + timeout - _timeout_margin)
         for row in rows:
             content = ""
             remaining = deadline - time.monotonic()
@@ -461,10 +497,13 @@ _ABSTRACT_XPATHS = (
 def _new_http_session():
     """摘要页抓取用的独立会话。
 
-    searxng 的 ``searx.network`` 把 ``timeout`` 当成「引擎绝对截止时间」
-    （会再减去引擎已耗时），串行补摘要时第 N 条起只剩负超时，表现为秒级
-    ``Timeout``。这里直接用 searxng 自带的 curl_cffi，并按浏览器 TLS 指纹
-    （知网 WAF 对非浏览器指纹更敏感）。失败时返回 ``None``，回落 ``get()``。
+    **必须绕开 ``searx.network``**：它把 ``timeout`` 当成「引擎绝对截止时间」
+    （每次再减去引擎已耗时），串行补摘要时从第 N 条起剩余超时为负，表现为
+    整批请求同一时刻 ``Timeout``（摘要全空）。
+
+    优先 curl_cffi（浏览器 TLS 指纹，知网 WAF 对指纹敏感）；不可用时回落
+    ``httpx``（独立客户端，同样不经 ``searx.network``）。两者都不可用才返回
+    ``None``，此时摘要放弃（保留标题）。
     """
 
     try:
@@ -472,7 +511,22 @@ def _new_http_session():
 
         return curl_requests.Session(impersonate="chrome")
     except Exception:  # pylint: disable=broad-except
-        logger.debug("CNKI: curl_cffi 不可用，摘要抓取回落 searx.network")
+        logger.debug("CNKI: curl_cffi 不可用，摘要抓取回落 httpx")
+    try:
+        import httpx  # pylint: disable=import-outside-toplevel
+
+        # 显式传 proxy=：httpx 对 HTTPS_PROXY 环境变量的处理不可靠
+        # （实测可能绕过代理走本机 IPv6）；引擎的 network.proxies 也不在环境里。
+        # 必须自带浏览器 UA：独立客户端不再有 searxng 注入的 User-Agent，
+        # 缺失时摘要页会被知网以 403 拒绝。
+        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None
+        return httpx.Client(
+            proxy=proxy,
+            follow_redirects=True,
+            headers={"User-Agent": _BROWSER_UA, "Accept-Language": "zh-CN,zh;q=0.9"},
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("CNKI: httpx 会话创建失败: %s", exc)
         return None
 
 
@@ -482,16 +536,25 @@ def _fetch_abstract(session, url: str, cookie: str, timeout: float) -> str:
     headers = {"Referer": _ADVSEARCH_URL}
     if cookie:
         headers["Cookie"] = cookie
+    if session is None:
+        return ""
     try:
-        if session is not None:
-            r = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        else:
-            r = get(url, headers=headers, timeout=timeout, allow_redirects=True)
-    except Exception:  # pylint: disable=broad-except
+        r = session.get(url, headers=headers, timeout=timeout)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.debug("CNKI 摘要页请求异常: %s", exc)
         return ""
     if r.status_code != 200:
+        logger.debug("CNKI 摘要页 HTTP %s", r.status_code)
         return ""
-    return _parse_abstract(r.text)
+    txt = _parse_abstract(r.text)
+    if not txt:
+        logger.debug(
+            "CNKI 摘要页无正文 len=%d final=%s head=%s",
+            len(r.text),
+            str(getattr(r, "url", ""))[:80],
+            r.text[:110].replace("\n", " "),
+        )
+    return txt
 
 
 def _parse_abstract(text: str) -> str:
