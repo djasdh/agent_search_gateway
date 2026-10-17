@@ -44,7 +44,9 @@ Optional settings are:
 
 ``timeout`` 与 :py:obj:`abstract_budget_seconds` **不需要手配**：``init()`` 会按
 ``page_size × num_pages`` 用引擎自己的耗时模型算出，并把 ``timeout`` 汇报给
-searxng。**不要在 settings.yml 里覆盖 ``timeout``**，那会盖掉引擎算出的值。
+searxng。settings.yml 里写 ``timeout`` 也没用——searxng 先应用 settings、后调
+``init()``，所以引擎算出的值总是最后生效（实测：settings 写 ``20.0``，
+``/config`` 仍报引擎算出的 ``30.0``）。写它只会误导，建议别写。
 
 补摘要走**独立 HTTP 客户端**（curl_cffi，缺失时回落 httpx），不经
 ``searx.network``——后者把 ``timeout`` 当作引擎的绝对截止时间，会让串行补摘要
