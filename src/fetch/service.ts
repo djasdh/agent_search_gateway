@@ -115,7 +115,8 @@ export function createFetchService(
     const base = baseContentType(contentType);
     const bytes = direct.bytes ?? Buffer.alloc(0);
 
-    if (base === "application/pdf") {
+    // 取件插件产物 = 明确的「取件」语义：不抽正文，直接落盘给链接（D16 / D22）
+    if (base === "application/pdf" && direct.plugin === undefined) {
       const pdf = await pdfToText(bytes);
       if (pdf.ok) {
         const body = pdf.text.trim();

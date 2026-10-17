@@ -177,6 +177,8 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 | `application/pdf` | `unpdf` 抽正文（含页数标注）；扫描件无文本层则落盘 |
 | 图片 / 压缩包 / 其它二进制 | 落盘，返回**本地路径 + `/files/<id>` 链接 + 大小 + sha256**，正文不注入上下文 |
 
+站点专用取件走**取件插件**（`src/fetch/plugins/`）：插件按 host 自报匹配、自管会话与逐跳重定向并完成全部下载，`fetch` 只落盘并给出路径/链接（ADR-0007 / 0009）。当前注册 **CNKI**：知网摘要页 → `#pdfDown` → 跟随 302 链取 `%PDF` 落盘（不在机构网段、未订购、或该文献只有 HTML 阅读版都会给出可读错误）。
+
 产物相关配置（`fetch` 块）：
 
 | 配置 | 默认 | 说明 |

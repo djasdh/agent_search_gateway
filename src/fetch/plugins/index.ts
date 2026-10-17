@@ -2,16 +2,15 @@
  * 取件插件注册表。
  *
  * `directFetch` 入口先查此表：命中即交给插件（跳过 SSRF 与 generic 重定向链），
- * 未命中才走通用抓取。**当前为空**——CNKI 取件插件在 S7 加入
- * （见 docs/cnki-channel.md §5 改动点 8）。
- *
- * 新增插件时只在这里注册，核心路径不改。
+ * 未命中才走通用抓取。新增插件时只在这里注册，核心路径不改。
+ * 当前注册：`cnki`（知网取件，见 docs/cnki-channel.md §5 改动点 8）。
  */
+import { cnkiPlugin } from "./cnki.js";
 import type { FetchPlugin } from "./types.js";
 
 export type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./types.js";
 
-const plugins: FetchPlugin[] = [];
+const plugins: FetchPlugin[] = [cnkiPlugin];
 
 /** 返回接管该 URL 的插件（按注册顺序取第一个命中者）。 */
 export function findPlugin(url: URL): FetchPlugin | undefined {
