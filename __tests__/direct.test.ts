@@ -50,6 +50,11 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     fetchMaxOutputChars: 20000,
     fetchCacheTtlMs: 600000,
     fetchCacheMaxEntries: 200,
+    fetchMaxDownloadBytes: 52428800,
+    fetchDownloadDir: "data/downloads",
+    fetchDownloadTtlMs: 604800000,
+    fetchDownloadMaxTotalBytes: 4294967296,
+    fetchFilesRoute: true,
     browserEnabled: true,
     browserHeadless: true,
     browserPoolSize: 1,
@@ -83,6 +88,12 @@ beforeAll(async () => {
     } else if (url.pathname === "/pdf") {
       res.writeHead(200, { "Content-Type": "application/pdf" });
       res.end("%PDF-1.4 fake");
+    } else if (url.pathname === "/plain") {
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("纯文本");
+    } else if (url.pathname === "/bigbin") {
+      res.writeHead(200, { "Content-Type": "application/octet-stream" });
+      res.end(Buffer.alloc(4096, 1));
     } else if (url.pathname === "/large") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html><body>" + "x".repeat(200000) + "</body></html>");
@@ -130,10 +141,25 @@ describe("directFetch", () => {
     expect(r.finalUrl).toBe(`${base}/html`);
   });
 
-  it("非 HTML 内容返回 not_html", async () => {
+  it("PDF 内容按 binary 返回（不再报 not_html）", async () => {
     const r = await directFetch(makeConfig(), `${base}/pdf`);
+    expect(r.ok).toBe(true);
+    expect(r.kind).toBe("binary");
+    expect(r.contentType).toBe("application/pdf");
+    expect(r.bytes?.length).toBeGreaterThan(0);
+  });
+
+  it("text/plain 按 text 返回", async () => {
+    const r = await directFetch(makeConfig(), `${base}/plain`);
+    expect(r.ok).toBe(true);
+    expect(r.kind).toBe("text");
+    expect(r.text).toBe("纯文本");
+  });
+
+  it("二进制超 max_download_bytes 返回 too_large", async () => {
+    const r = await directFetch(makeConfig({ fetchMaxDownloadBytes: 1024 }), `${base}/bigbin`);
     expect(r.ok).toBe(false);
-    expect(r.errorKind).toBe("not_html");
+    expect(r.errorKind).toBe("too_large");
   });
 
   it("HTTP 错误返回 http", async () => {

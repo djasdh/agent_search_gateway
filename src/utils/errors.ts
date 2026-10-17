@@ -8,7 +8,12 @@ export const ErrorCodes = {
   // fetch
   FETCH_TIMEOUT: "FETCH_TIMEOUT",
   FETCH_BLOCKED: "FETCH_BLOCKED",
+  /** 保留：早期"只支持网页"时代的错误；现在非 HTML 会按类型分派，不再产生。 */
   FETCH_NOT_HTML: "FETCH_NOT_HTML",
+  /** 产物无法处理（如插件返回不可识别内容）。 */
+  FETCH_UNSUPPORTED_TYPE: "FETCH_UNSUPPORTED_TYPE",
+  /** 文件超过 fetch.max_download_bytes 上限。 */
+  FETCH_TOO_LARGE: "FETCH_TOO_LARGE",
   FETCH_RENDER_FAIL: "FETCH_RENDER_FAIL",
   FETCH_NETWORK: "FETCH_NETWORK",
   FETCH_INVALID_URL: "FETCH_INVALID_URL",

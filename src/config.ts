@@ -141,6 +141,12 @@ const configSchema = z.object({
       max_output_chars: z.number().int().positive().default(20000),
       cache_ttl_ms: z.number().int().positive().default(600000),
       cache_max_entries: z.number().int().positive().default(200),
+      // 非文本产物（PDF/图片/二进制）落盘：见 docs/cnki-channel.md §6
+      max_download_bytes: z.number().int().positive().default(52428800),
+      download_dir: z.string().default("data/downloads"),
+      download_ttl_ms: z.number().int().positive().default(604800000),
+      download_max_total_bytes: z.number().int().positive().default(4294967296),
+      files_route: z.boolean().default(true),
     })
     .catch({
       timeout_ms: 15000,
@@ -152,6 +158,11 @@ const configSchema = z.object({
       max_output_chars: 20000,
       cache_ttl_ms: 600000,
       cache_max_entries: 200,
+      max_download_bytes: 52428800,
+      download_dir: "data/downloads",
+      download_ttl_ms: 604800000,
+      download_max_total_bytes: 4294967296,
+      files_route: true,
     }),
   browser: z
     .object({
@@ -292,6 +303,16 @@ export interface GatewayConfig {
   fetchMaxOutputChars: number;
   fetchCacheTtlMs: number;
   fetchCacheMaxEntries: number;
+  /** 非文本产物单文件上限（max_download_bytes）。 */
+  fetchMaxDownloadBytes: number;
+  /** 产物落盘目录（相对路径相对进程工作目录）。 */
+  fetchDownloadDir: string;
+  /** 产物 TTL（download_ttl_ms）。 */
+  fetchDownloadTtlMs: number;
+  /** 产物总量配额（download_max_total_bytes）。 */
+  fetchDownloadMaxTotalBytes: number;
+  /** 是否提供 GET /files/<id>。 */
+  fetchFilesRoute: boolean;
   browserEnabled: boolean;
   browserHeadless: boolean;
   browserPoolSize: number;
@@ -417,6 +438,11 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     fetchMaxOutputChars: v.fetch.max_output_chars,
     fetchCacheTtlMs: v.fetch.cache_ttl_ms,
     fetchCacheMaxEntries: v.fetch.cache_max_entries,
+    fetchMaxDownloadBytes: v.fetch.max_download_bytes,
+    fetchDownloadDir: v.fetch.download_dir,
+    fetchDownloadTtlMs: v.fetch.download_ttl_ms,
+    fetchDownloadMaxTotalBytes: v.fetch.download_max_total_bytes,
+    fetchFilesRoute: v.fetch.files_route,
     browserEnabled: v.browser.enabled,
     browserHeadless: v.browser.headless,
     browserPoolSize: v.browser.pool_size,
