@@ -115,6 +115,9 @@ def request(query: str, params: "OnlineParams") -> None:
     cookies = _flush_session()
     if cookies:
         params["cookies"] = cookies
+        # searxng 的 network 层不会把 cookies 写回 ``resp.request.headers``，
+        # 而 ``response()`` 需要从那里取会话去抓摘要页；这里显式补一份。
+        params["headers"]["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
 
     params["url"] = _GRID_URL
     params["method"] = "POST"
@@ -144,26 +147,33 @@ def response(resp: "SXNG_Response") -> EngineResults:
             raise SearxEngineAPIException(f"CNKI: {error}")
         return res
 
-    # 复用检索请求携带的会话 cookie 抓摘要（searxng 把 params["cookies"] 合进了请求头）
+    # 复用检索请求携带的会话 cookie 抓摘要（见 request() 中显式写入的 Cookie 头）
     cookie = resp.request.headers.get("cookie", "") if resp.request is not None else ""
     deadline = time.monotonic() + abstract_budget_seconds
+    session = _new_http_session()
 
-    for row in rows:
-        content = ""
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
-            content = _fetch_abstract(row["url"], cookie, min(abstract_timeout_seconds, max(0.5, remaining)))
-        res.add(
-            res.types.Paper(
-                url=row["url"],
-                title=row["title"],
-                content=content,
-                authors=row["authors"],
-                journal=row["source"],
-                comments=row["comments"],
-                publishedDate=row["published"],
+    try:
+        for row in rows:
+            content = ""
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                content = _fetch_abstract(
+                    session, row["url"], cookie, min(abstract_timeout_seconds, max(0.5, remaining))
+                )
+            res.add(
+                res.types.Paper(
+                    url=row["url"],
+                    title=row["title"],
+                    content=content,
+                    authors=row["authors"],
+                    journal=row["source"],
+                    comments=row["comments"],
+                    publishedDate=row["published"],
+                )
             )
-        )
+    finally:
+        if session is not None:
+            session.close()
 
     return res
 
@@ -332,17 +342,38 @@ _ABSTRACT_XPATHS = (
 )
 
 
-def _fetch_abstract(url: str, cookie: str, timeout: float) -> str:
+def _new_http_session():
+    """摘要页抓取用的独立会话。
+
+    searxng 的 ``searx.network`` 把 ``timeout`` 当成「引擎绝对截止时间」
+    （会再减去引擎已耗时），串行补摘要时第 N 条起只剩负超时，表现为秒级
+    ``Timeout``。这里直接用 searxng 自带的 curl_cffi，并按浏览器 TLS 指纹
+    （知网 WAF 对非浏览器指纹更敏感）。失败时返回 ``None``，回落 ``get()``。
+    """
+
+    try:
+        from curl_cffi import requests as curl_requests  # pylint: disable=import-outside-toplevel
+
+        return curl_requests.Session(impersonate="chrome")
+    except Exception:  # pylint: disable=broad-except
+        logger.debug("CNKI: curl_cffi 不可用，摘要抓取回落 searx.network")
+        return None
+
+
+def _fetch_abstract(session, url: str, cookie: str, timeout: float) -> str:
     """抓取摘要页并提取正文；失败返回空串（保留标题/作者/链接）。"""
 
     headers = {"Referer": _ADVSEARCH_URL}
     if cookie:
         headers["Cookie"] = cookie
     try:
-        r = get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if session is not None:
+            r = session.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        else:
+            r = get(url, headers=headers, timeout=timeout, allow_redirects=True)
     except Exception:  # pylint: disable=broad-except
         return ""
-    if not r.ok:
+    if r.status_code != 200:
         return ""
     return _parse_abstract(r.text)
 
