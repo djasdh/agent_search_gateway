@@ -494,6 +494,26 @@ _ABSTRACT_XPATHS = (
 )
 
 
+def _configured_proxy() -> "str | None":
+    """独立摘要客户端要用的代理 URL。
+
+    优先读引擎自己的 ``network.proxies``（settings.yml 里写在 ``engines.cnki``
+    下的那份配置，searxng 原样留在模块属性上）；没有时再退回 ``HTTPS_PROXY``
+    环境变量。两者都没有就直连。
+    """
+
+    proxies = network.get("proxies") if isinstance(network, dict) else None
+    if isinstance(proxies, dict):
+        for value in proxies.values():
+            if isinstance(value, str) and value:
+                return value
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    if isinstance(item, str) and item:
+                        return item
+    return os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None
+
+
 def _new_http_session():
     """摘要页抓取用的独立会话。
 
@@ -519,7 +539,7 @@ def _new_http_session():
         # （实测可能绕过代理走本机 IPv6）；引擎的 network.proxies 也不在环境里。
         # 必须自带浏览器 UA：独立客户端不再有 searxng 注入的 User-Agent，
         # 缺失时摘要页会被知网以 403 拒绝。
-        proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or None
+        proxy = _configured_proxy()
         return httpx.Client(
             proxy=proxy,
             follow_redirects=True,

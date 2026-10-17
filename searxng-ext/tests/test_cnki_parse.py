@@ -19,6 +19,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 ENGINE = HERE.parent / "searx" / "engines" / "cnki.py"
@@ -92,6 +93,34 @@ class TestModuleContract(unittest.TestCase):
             + engine.abstract_budget_seconds
             + engine._timeout_margin,
         )
+
+
+class TestConfiguredProxy(unittest.TestCase):
+    """独立摘要客户端的代理来源：引擎 network.proxies 优先，其次 HTTPS_PROXY。"""
+
+    def setUp(self):
+        self._saved = engine.network
+
+    def tearDown(self):
+        engine.network = self._saved
+
+    def test_reads_engine_network_proxies(self):
+        engine.network = {"proxies": {"all://": ["http://127.0.0.1:18888"]}}
+        self.assertEqual(engine._configured_proxy(), "http://127.0.0.1:18888")
+
+    def test_accepts_plain_string_proxy(self):
+        engine.network = {"proxies": {"https://kns.cnki.net": "socks5://127.0.0.1:1080"}}
+        self.assertEqual(engine._configured_proxy(), "socks5://127.0.0.1:1080")
+
+    def test_falls_back_to_env(self):
+        engine.network = {"proxies": {}}
+        with mock.patch.dict(engine.os.environ, {"HTTPS_PROXY": "http://env:1"}, clear=True):
+            self.assertEqual(engine._configured_proxy(), "http://env:1")
+
+    def test_direct_when_nothing_configured(self):
+        engine.network = {"proxies": {}}
+        with mock.patch.dict(engine.os.environ, {}, clear=True):
+            self.assertIsNone(engine._configured_proxy())
 
 
 class TestQueryJson(unittest.TestCase):
