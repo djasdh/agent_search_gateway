@@ -3,7 +3,7 @@
  *
  * `directFetch` 入口先查此表：命中即交给插件（跳过 SSRF 与 generic 重定向链），
  * 未命中才走通用抓取。新增插件时只在这里注册，核心路径不改。
- * 当前注册：`cnki`（知网取件，见 docs/cnki-channel.md §5 改动点 8）。
+ * 当前注册：`cnki`（知网取件，见 ADR-0009）。
  */
 import { cnkiPlugin } from "./cnki.js";
 import type { FetchPlugin } from "./types.js";

@@ -4,7 +4,7 @@
  * 职责（ADR-0007 / ADR-0009 / D22）：插件自管 headers、cookies、会话与逐跳重定向，
  * 完成**全部**网络请求；网关只把返回的 `bytes` 落盘并给出本地路径 + `/files/<id>`。
  *
- * 实测要点（见 `docs/cnki-channel.md` §8 与附录，2026-10-17 复验）：
+ * 实测要点（2026-10-17 在机构出口复验）：
  * - 会话**每次现开**（§7②）：`GenerateClientID` 拿 clientId → md5 签名 →
  *   `IpLoginFlushPo` 拿 `LID`（下载必需）；响应体是 `({...})` 非标准 JSON，
  *   本插件只取 `Set-Cookie`，不解析响应体。

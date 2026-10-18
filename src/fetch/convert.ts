@@ -1,7 +1,7 @@
 /**
  * Content-Type → 处理类别 + 文本类轻转换。
  *
- * fetch 从"仅 HTML"扩展为按类型分派（TODO.md「fetch 全类型文件拉取」）：
+ * fetch 从"仅 HTML"扩展为按类型分派：
  *   html   → html2md（既有路径）
  *   text   → 轻转换（JSON 美化 / CSV 转表格 / XML 包代码块 / 其余直出）
  *   pdf    → 抽正文（见 pdf.ts）

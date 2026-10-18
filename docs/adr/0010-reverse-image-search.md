@@ -21,7 +21,7 @@
 
 - 网关出现**第二个检索出口**（trace.moe），这是 ADR-0006「searxng 单一上游」的**第一条例外**。例外边界刻意收窄：附加源**必须由类别触发**、只产出候选、不参与源级路由、不改变排序政策；`CONTEXT.md` 的「上游」「检索」定义随之修订。
 - 图片查询仍走 `selectImageResults`：不 embedding、不召回文本语料、不写语料。此时**没有文本 query 向量**，排序 = `score × boost` +（可选）authority + MMR 同域上限；trace.moe 的 `similarity` 与 searxng 的 `score` 同为 0..1，直接混排。**不做源内 min-max 归一化**——两家分数量纲相近，归一化属于阶段 2 的可选项。
-- **不支持本地图片文件**。要支持得加一个新输入字段 + 上传通道，且 tineye 那一半仍然无解（除非自建公网可达的图床）。记在 `TODO.md`。
+- **不支持本地图片文件**。要支持得加一个新输入字段 + 上传通道，且 tineye 那一半仍然无解（除非自建公网可达的图床）。这一部分后来由 ADR-0011 / ADR-0012 补齐。
 - trace.moe 免 key，按 IP 计 100 次/日、并发 1、ToS 禁商用转售。网关**不建配额台账**，只在失败/无匹配时给一条提示；真正耗尽的表现是"该源无结果"。
 - searxng 若**没有**声明该类别，`parse_category_form` 会把它静默过滤掉、请求回落成 `general` 搜索 —— 不报错。部署检查项：`GET /config` 里必须能看到 `search_by_image`（README 已写）。
 - 类别名按**字面**匹配（`categ in categories`）。网关侧比较大小写不敏感，并在转发前把命中项归一成配置里的规范名（`search.reverse_image.category`），因此 `Search_By_Image` 与 `search_by_image` 都能用。

@@ -502,7 +502,7 @@ export async function startHttpServer(
       return;
     }
 
-    // 产物下载端点（公开：id 是内容 sha256，不可猜；见 docs/cnki-channel.md §6 / ADR-0009）
+    // 产物下载端点（公开：id 是内容 sha256，不可猜；见 ADR-0009）
     if (config.fetchFilesRoute && req.method === "GET" && url.pathname.startsWith("/files/")) {
       const id = decodeURIComponent(url.pathname.slice("/files/".length));
       const store = getFetchStore(config, logger);

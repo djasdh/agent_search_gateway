@@ -1,6 +1,6 @@
 # CNKI 并入 science 类别，移除 academic
 
-原先 CNKI 使用自定义类别 `academic`（见 `docs/cnki-channel.md` D21）。现决定将 CNKI 引擎的 `categories` 由 `["academic"]` 改为 `["science"]`，即并入 searxng 官方的 `science` 类别，使 `science` 成为一个**统一的学术搜索类别**（国际来源 + 中文知网）；`academic` 类别随之移除，不再作为独立类别存在。
+原先 CNKI 使用自定义类别 `academic`（原决策编号 D21）。现决定将 CNKI 引擎的 `categories` 由 `["academic"]` 改为 `["science"]`，即并入 searxng 官方的 `science` 类别，使 `science` 成为一个**统一的学术搜索类别**（国际来源 + 中文知网）；`academic` 类别随之移除，不再作为独立类别存在。
 
 为容纳 CNKI 引擎内较慢的串行补摘要（引擎在 `init()` 里按 `page_size × num_pages` 自算 `timeout`，单页 50 条 → 30s），类别感知超时（ADR-0008 / D18）由 `academic: 25000` 改为 `science: 40000`。
 
