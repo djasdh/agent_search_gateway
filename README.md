@@ -31,7 +31,7 @@ gateway (本服务, :3000/mcp)
 
 | 工具 | 说明 |
 |---|---|
-| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results；`categories=images` 时返回图片直链，`academic` 时走科研/知网，`search_by_image` 时以图搜图（query 给图片 URL，或 image_path 给本地图片） |
+| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results/fanout；`categories=images` 时返回图片直链，`science` 时走学术/知网，`search_by_image` 时以图搜图（query 给图片 URL，或 image_path 给本地图片）。`num_results` 上限由 `search.max_results_cap` 决定，超出按上限截断并在结果末尾说明 |
 | `fetch` | 抓取 URL：网页→md；纯文本/JSON/CSV/XML 直接返回；PDF 抽正文；图片等二进制落盘并返回路径与 `/files/<id>` 链接。参数：url/max_chars |
 | `browser_navigate` | 浏览器打开 URL，返回无障碍树快照（省 token） |
 | `browser_snapshot` | 当前页无障碍树快照，可选 target 限定 |
@@ -173,7 +173,7 @@ gateway:        # host/port/token
 logging:        # level/file
 searxng:        # url/timeout_ms
 flaresolverr:   # url/enabled/timeout_ms/max_concurrent/trigger_status/fallback_on_empty
-search:         # max_results/max_result_chars/cache_ttl_ms/cache_max_entries/max_concurrent
+search:         # max_results/max_results_cap/max_result_chars/cache_ttl_ms/cache_max_entries/max_concurrent
 fetch:          # timeout_ms/max_bytes/user_agent/block_private_ips/structural/max_output_chars/cache_ttl_ms/cache_max_entries/max_download_bytes/download_dir/download_ttl_ms/download_max_total_bytes/files_route
 ad_filter:      # enabled/level(off|ads|ads+tracking|full)/extra_domains/hosts_file/allowlist
 browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufox预留)/proxy_*/wait_for_selector/screenshot

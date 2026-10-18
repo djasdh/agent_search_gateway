@@ -254,12 +254,19 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
     "search",
     {
       description:
-        "搜索网页，返回 markdown 文本结果。查询会聚合多个搜索引擎（searxng），自动过滤广告/垃圾域名，并置顶直接回答/建议等元数据。",
+        "搜索网页，返回 markdown 文本结果。查询会聚合多个搜索引擎（searxng），自动过滤广告/垃圾域名，并置顶直接回答/建议等元数据。指定 categories 非 general 类别（如 images、academic）时只走该类别的引擎；images 类别返回图片直链（markdown 图片），可再交给 fetch 落盘。以图搜图用 categories=search_by_image：query 给图片 URL，或改用 image_path 给本地图片路径；会并发走 searxng 的 tineye 与网关侧附加源（trace.moe 动画截图、SauceNAO 插画出处、百度识图中文图），候选按 URL 合并去重。本地图会发布到公网图床以喂 tineye，见 README。",
       inputSchema: {
-        query: z.string().describe("搜索关键词"),
+        query: z
+          .string()
+          .optional()
+          .describe("搜索关键词；以图搜图时可直接给图片 URL（http/https），与 image_path 二选一"),
+        image_path: z
+          .string()
+          .optional()
+          .describe("以图搜图：本地图片路径（网关可读），与 query 里的图片 URL 二选一；需配合 categories=search_by_image"),
         language: z.string().optional().describe("语言代码，如 en/zh-CN，默认按 searxng 实例"),
         safesearch: z.enum(["0", "1", "2"]).optional().describe("安全搜索：0 无/1 中/2 严"),
-        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；science（学术/知网）"),
+        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；images（图片直链）、science（学术/知网）、search_by_image（以图搜图）"),
         engines: z.string().optional().describe("指定搜索引擎，逗号分隔"),
         min_score: z.number().min(0).max(1).optional().describe("最低相关度分数 0-1"),
         num_results: z
@@ -279,7 +286,8 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
     },
     async (args) => {
       const result = await searchService.search({
-        query: args.query,
+        query: args.query ?? "",
+        imagePath: args.image_path,
         language: args.language,
         safeSearch: args.safesearch,
         categories: args.categories,

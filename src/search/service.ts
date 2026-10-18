@@ -6,13 +6,24 @@ import type { Logger } from "../logger.js";
 import { ErrorCodes, withCode } from "../utils/errors.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { StringCache } from "./cache.js";
-import { cleanResults, type CleanedResult } from "./clean.js";
+import { cleanResults, resultEngines, type CleanedResult } from "./clean.js";
 import type { EmbeddingProvider } from "./embedding/provider.js";
+import { mmrSelect, registeredDomainOfUrl } from "./embedding/diversity.js";
 import { mergeAndRank, type SemanticTimings } from "./embedding/semantic.js";
 import type { CorpusStore } from "./embedding/store.js";
 import type { EmbedResult } from "./embedding/types.js";
+import { loadLocalImage, publishImage, type LocalImage, type PublishResult } from "./image-publish.js";
 import { renderResults, renderSearchMarkdown } from "./render.js";
 import { rerankResults } from "./rerank.js";
+import { searchBaiduReverse } from "./baidu-reverse.js";
+import {
+  extractImageUrl,
+  searchTraceMoe,
+  searchTraceMoeUpload,
+  unionResults,
+} from "./reverse-image.js";
+import { searchSaucenao } from "./saucenao.js";
+import type { ImageInput, SourceCall } from "./sources.js";
 import {
   searchSearxng,
   type SearchCallError,
@@ -30,6 +41,8 @@ export interface SearchParams {
   fanout?: number;
   minScore?: number;
   numResults?: number;
+  /** 反向图搜（ADR-0011）：本地图片路径；与 query 里的图片 URL 互斥。 */
+  imagePath?: string;
 }
 
 export interface SearchOutcome {
@@ -147,6 +160,67 @@ export function hasNonGeneralCategory(categories: string | undefined): boolean {
     .some((c) => c !== "general");
 }
 
+/** 请求是否只要图片（显式 `images` 类别；非 general 类别即「只要这一类」，ADR-0008）。 */
+export function isImageQuery(categories: string | undefined, extra: string[] = []): boolean {
+  const want = new Set(["images", ...extra.map((c) => c.trim().toLowerCase()).filter((c) => c.length > 0)]);
+  return (categories ?? "")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .some((c) => want.has(c));
+}
+
+/**
+ * 反向图搜触发判定（ADR-0010）：请求类别里出现配置的类别名（大小写不敏感）。
+ * 「图就是 query」——类别只是开关，图片本身是以 URL 形式写在 query 里。
+ */
+export function isReverseImageQuery(categories: string | undefined, canonical: string): boolean {
+  const want = (canonical ?? "").trim().toLowerCase();
+  if (!want) return false;
+  return (categories ?? "")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .some((c) => c === want);
+}
+
+/**
+ * 把请求类别里的配置类别名（大小写变体）归一成规范名后转发。
+ *
+ * searxng 按**字面**匹配类别（`categ in categories`），声明与请求必须同字串；
+ * 这里只在该类别确实出现时改写，未命中的请求逐字不动（保证既有行为零变化）。
+ */
+export function canonicalizeCategories(categories: string | undefined, canonical: string): string | undefined {
+  if (!categories || !canonical) return categories;
+  const want = canonical.toLowerCase();
+  const parts = categories.split(",").map((c) => c.trim());
+  if (!parts.some((c) => c.toLowerCase() === want)) return categories;
+  return parts
+    .filter((c) => c.length > 0)
+    .map((c) => (c.toLowerCase() === want ? canonical : c))
+    .join(",");
+}
+
+/**
+ * 图片查询的排序：不 embedding、不召回语料。
+ *
+ * 图片结果没有正文（embedding 只能拿标题，收益低），而语料是**文本**库——把图片
+ * 来源页写进语料会污染后续文本召回，反向召回文本条目又只会成为图片查询的噪声。
+ * 因此直接沿用 rerank 的 `score × boost` 顺序；多样性开启时只保留同注册域上限
+ * （λ=1 时 MMR 项失效，行为等于「按分排序 + 同域上限」）。
+ */
+export function selectImageResults(
+  results: CleanedResult[],
+  limit: number,
+  diversity: { enabled: boolean; mmrLambda: number; maxPerDomain: number },
+): CleanedResult[] {
+  if (!diversity.enabled) return results.slice(0, limit);
+  return mmrSelect(
+    results.map((item) => ({ score: item.score ?? 0, item })),
+    limit,
+    { mmrLambda: diversity.mmrLambda, maxPerDomain: diversity.maxPerDomain },
+    (c) => registeredDomainOfUrl(c.item.url),
+  ).map((c) => c.item);
+}
+
 /**
  * 类别感知的 searxng 超时（D18）：按请求类别顺序取第一个命中
  * `search.category_timeout_ms` 的值；未命中 → `searxngTimeoutMs`。
@@ -245,16 +319,6 @@ export function planEngines(
   return planEngineBatches(params, config, enabled, quota).map((b) => b.engines);
 }
 
-/** 取单条结果归属的引擎名（searxng 单引擎用 `engine`，多引擎合并用 `engines[]`）。 */
-function resultEngines(r: SearxngResult): string[] {
-  const out: string[] = [];
-  if (typeof r.engine === "string" && r.engine.length > 0) out.push(r.engine);
-  if (Array.isArray(r.engines)) {
-    for (const e of r.engines) if (typeof e === "string" && e.length > 0) out.push(e);
-  }
-  return out;
-}
-
 /**
  * 本批结果里是否有 rotating 候选贡献（用结果的 `engine` 字段判定）。
  * rotating 为空 → 视为贡献（该批没有 rotating 候选，回退旧语义）。
@@ -305,6 +369,16 @@ export interface SearchMetrics {
   semantic: SemanticTimings | null;
   /** 语义层是否降级（embedding/语料不可用或失败）。 */
   degraded: boolean;
+  /** 反向图搜（ADR-0010/0012）：各附加源的调用结果；未触发为 undefined。 */
+  reverseImage?: {
+    /** 逐源结果（并发扇出，顺序即 sources 顺序）。 */
+    sources: Array<{ name: string; ok: boolean; results: number; ms: number; error?: string }>;
+    /** 等待所有附加源的整体墙钟。 */
+    ms: number;
+    /** 本地图是否成功发布到公网图床（非本地图请求为 undefined） */
+    published?: boolean;
+    publishMs?: number;
+  };
 }
 
 /** 构造稳定缓存键（搜索参数 + 选中引擎批次 + 语料命名空间一致）。 */
@@ -410,15 +484,45 @@ export function createSearchService(
 
   async function search(params: SearchParams): Promise<SearchOutcome> {
     const tStart = performance.now();
+    // 反向图搜（ADR-0010）：类别命中才拉起网关侧附加源。命中时把类别名归一成
+    // 规范写法再转发（searxng 按字面匹配类别）；未命中则参数逐字不变。
+    const reverseCategory = config.searchReverseImageCategory;
+    const reverseImage =
+      config.searchReverseImageEnabled && isReverseImageQuery(params.categories, reverseCategory);
+    const categories = reverseImage ? canonicalizeCategories(params.categories, reverseCategory) : params.categories;
+    const effParams: SearchParams = categories === params.categories ? params : { ...params, categories };
+    const imageQuery = isImageQuery(effParams.categories, reverseImage ? [reverseCategory] : []);
+    // 反向图搜：图来自 query 里的 URL，或来自本地文件（image_path）；两者互斥
+    const imageUrl = reverseImage ? extractImageUrl(effParams.query) : undefined;
+    const imagePath = reverseImage ? effParams.imagePath : undefined;
+    if (reverseImage && imageUrl && imagePath) {
+      return {
+        ok: false,
+        code: ErrorCodes.SEARCH_INVALID,
+        text: withCode(ErrorCodes.SEARCH_INVALID, "反向图搜：query 里的图片 URL 与 image_path 只能给一个。"),
+      };
+    }
+    if (effParams.imagePath && !reverseImage) {
+      return {
+        ok: false,
+        code: ErrorCodes.SEARCH_INVALID,
+        text: withCode(
+          ErrorCodes.SEARCH_INVALID,
+          `image_path 只在以图搜图时可用：请在 categories 里加上 ${reverseCategory || "search_by_image"}（当前该能力可能未启用）。`,
+        ),
+      };
+    }
     const enabled = await getEnabledEngines();
     const quota = await getQuota();
-    const batches = planEngineBatches(params, config, enabled, quota);
+    const batches = planEngineBatches(effParams, config, enabled, quota);
     // 单一上限（search.max_results_cap）：agent 请求超过即按上限截断，不报错；
     // 渲染时据 cappedAt/availableCount 在末尾附加说明。
     const requested = params.numResults ?? config.searchMaxResults;
     const limit = Math.min(requested, config.searchMaxResultsCap);
-    const key = cacheKey(params, batches.map((b) => b.engines), corpus?.namespace ?? "");
-    const cached = cache.get(key);
+    // 本地图请求绕开搜索缓存：同一路径的文件内容随时会变，缓存会给出错的结果
+    const cacheable = !effParams.imagePath;
+    const key = cacheKey(effParams, batches.map((b) => b.engines), corpus?.namespace ?? "");
+    const cached = cacheable ? cache.get(key) : undefined;
     if (cached !== undefined) {
       logger.debug(`search cache hit: "${params.query}"`);
       emitMetrics({
@@ -440,14 +544,114 @@ export function createSearchService(
       return { ok: true, text: cached, cacheHit: true };
     }
 
+    // 本地图片：读取 + 三重校验（常规文件 / 大小 / magic bytes 是图片），
+    // 失败直接返回明确错误，不进后续流程（ADR-0011）
+    let localImage: LocalImage | undefined;
+    if (imagePath) {
+      const loaded = await loadLocalImage(imagePath, config.searchReverseImageLocalMaxBytes);
+      if (!loaded.ok) {
+        const errText = `反向图搜：本地图片不可用（${loaded.error.kind}）——${loaded.error.message}`;
+        logger.debug(errText);
+        return { ok: false, code: ErrorCodes.SEARCH_INVALID, text: withCode(ErrorCodes.SEARCH_INVALID, errText) };
+      }
+      localImage = loaded.image;
+      logger.debug(`反向图搜：本地图片 ${localImage.filename} ${localImage.mime} ${localImage.size}B`);
+    }
+
     const release = await sem.acquire();
     const preMs = performance.now() - tStart;
     // 语义层：query 向量不依赖候选 → 先起 Promise，与上游 searxng 召回 overlap（省一次串行等待）。
-    // provider/corpus 缺一即无语义层，无需发起；catch 兜底避免未被消费时产生 unhandled rejection。
+    // provider/corpus 缺一即无语义层，无需发起；图片查询不走语义层（见 selectImageResults）；
+    // catch 兜底避免未被消费时产生 unhandled rejection。
     let queryEmbed: Promise<EmbedResult> | undefined;
-    if (provider && corpus) {
+    if (provider && corpus && !imageQuery) {
       queryEmbed = provider.embed([params.query], "query");
       queryEmbed.catch(() => undefined);
+    }
+    // 反向图搜（ADR-0010/0012）：网关侧附加源与 searxng 并发。
+    // 图有两个来源：query 里的图片 URL（URL 输入），或本地文件 image_path。
+    // 本地文件走 multipart 直传（图不外流）；要让 searxng 的 tineye 参与，
+    // 还得多一步「发布到公网图床」——TinEye 是从它自己的服务器拉图的。
+    const tReverse = performance.now();
+    const imageInput: ImageInput | undefined = localImage
+      ? { kind: "bytes", bytes: localImage.bytes, filename: localImage.filename, mime: localImage.mime }
+      : imageUrl
+        ? { kind: "url", url: imageUrl }
+        : undefined;
+    // 按 sources 清单并发扇出；未知 / 未启用的源直接忽略，每个源内部都不抛裸异常
+    const sourceTasks: Array<{ name: string; promise: Promise<SourceCall> }> = [];
+    if (reverseImage && imageInput) {
+      for (const name of config.searchReverseImageSources) {
+        if (name === "tracemoe") {
+          const promise =
+            imageInput.kind === "bytes"
+              ? searchTraceMoeUpload(
+                  config.searchTraceMoeUrl,
+                  config.searchTraceMoeTimeoutMs,
+                  imageInput.bytes,
+                  imageInput.filename,
+                  imageInput.mime,
+                  config.searchTraceMoeMaxResults,
+                )
+              : searchTraceMoe(
+                  config.searchTraceMoeUrl,
+                  config.searchTraceMoeTimeoutMs,
+                  imageInput.url,
+                  config.searchTraceMoeMaxResults,
+                );
+          sourceTasks.push({ name, promise });
+        } else if (name === "saucenao") {
+          if (!config.searchSaucenaoApiKey) {
+            logger.debug("反向图搜：saucenao 未配置 api_key，跳过该源");
+            continue;
+          }
+          sourceTasks.push({
+            name,
+            promise: searchSaucenao(
+              {
+                apiKey: config.searchSaucenaoApiKey,
+                baseUrl: config.searchSaucenaoUrl,
+                timeoutMs: config.searchSaucenaoTimeoutMs,
+                maxResults: config.searchSaucenaoMaxResults,
+                minsim: config.searchSaucenaoMinsim,
+              },
+              imageInput,
+            ),
+          });
+        } else if (name === "baidu") {
+          if (!config.searchBaiduReverseEnabled) {
+            logger.debug("反向图搜：baidu 未启用，跳过该源");
+            continue;
+          }
+          sourceTasks.push({
+            name,
+            promise: searchBaiduReverse(
+              {
+                baseUrl: config.searchBaiduReverseUrl,
+                timeoutMs: config.searchBaiduReverseTimeoutMs,
+                maxResults: config.searchBaiduReverseMaxResults,
+                maxBytes: config.searchReverseImageLocalMaxBytes,
+              },
+              imageInput,
+            ),
+          });
+        }
+      }
+      for (const t of sourceTasks) t.promise.catch(() => undefined);
+    }
+    let publish: PublishResult | undefined;
+    let publishMs = 0;
+    if (localImage && config.searchReverseImagePublishEnabled) {
+      const tPublish = performance.now();
+      publish = await publishImage(config.searchReverseImagePublishEndpoint, config.searchReverseImagePublishTimeoutMs, localImage);
+      publishMs = performance.now() - tPublish;
+      logger.debug(`反向图搜：图床发布 ${publish.ok ? "成功" : `失败(${publish.error.kind})`} (${Math.round(publishMs)}ms)`);
+    }
+    // 发给 searxng 的 query：URL 输入用它自己；本地图用发布到的公网 URL；
+    // 本地图且没发布成功 → 没有可给 TinEye 的公网 URL，searxng 这一半跳过。
+    const upstreamQuery = localImage ? (publish?.ok ? publish.url : undefined) : effParams.query;
+    if (upstreamQuery === undefined) {
+      logger.debug("反向图搜：本地图未获得公网 URL，跳过 searxng（tineye 不参与）");
     }
     try {
       // 静默降级：按批次依次查询。**以「本批 rotating 候选是否产出结果」判定成功**：
@@ -461,67 +665,129 @@ export function createSearchService(
       let upstreamBatches = 0;
 
       // 类别感知超时（D18）：science 等类别的引擎更慢，取该类别配置的超时
-      const searxngTimeoutMs = resolveSearxngTimeout(params, config);
+      const searxngTimeoutMs = resolveSearxngTimeout(effParams, config);
 
-      for (const batch of batches) {
-        const req: SearchRequest = {
-          query: params.query,
-          language: params.language,
-          safeSearch: params.safeSearch,
-          categories: params.categories,
-          engines: batch.engines || undefined,
-        };
+      if (upstreamQuery !== undefined) {
+        for (const batch of batches) {
+          const req: SearchRequest = {
+            query: upstreamQuery,
+            language: effParams.language,
+            safeSearch: effParams.safeSearch,
+            categories: effParams.categories,
+            engines: batch.engines || undefined,
+          };
 
-        upstreamBatches++;
-        const tUp = performance.now();
-        const result = await searchSearxng(config.searxngUrl, searxngTimeoutMs, req);
-        upstreamMs += performance.now() - tUp;
-        if (!result.ok) {
-          lastError = result.error;
-          logger.debug(`search engine batch "${batch.engines}" failed (${result.error.kind}), trying next`);
-          continue;
+          upstreamBatches++;
+          const tUp = performance.now();
+          const result = await searchSearxng(config.searxngUrl, searxngTimeoutMs, req);
+          upstreamMs += performance.now() - tUp;
+          if (!result.ok) {
+            lastError = result.error;
+            logger.debug(`search engine batch "${batch.engines}" failed (${result.error.kind}), trying next`);
+            continue;
+          }
+
+          latencyMs += result.latencyMs;
+          lastData = result.data;
+          if (result.data.results.length === 0) continue;
+          if (rotatingContributed(result.data.results, batch.rotating)) break;
+          logger.debug(
+            `rotating candidate "${batch.rotating.join(",")}" produced no results, trying next batch`,
+          );
         }
-
-        latencyMs += result.latencyMs;
-        lastData = result.data;
-        if (result.data.results.length === 0) continue;
-        if (rotatingContributed(result.data.results, batch.rotating)) break;
-        logger.debug(
-          `rotating candidate "${batch.rotating.join(",")}" produced no results, trying next batch`,
-        );
       }
 
-      if (!lastData) {
+      // 反向图搜：等所有附加源（与上面的 searxng 批次并发），逐源汇总提示
+      const sourceResults = await Promise.all(
+        sourceTasks.map(async (t) => ({ name: t.name, result: await t.promise })),
+      );
+      const reverseMs = performance.now() - tReverse;
+      const reverseCount = sourceResults.reduce((n, s) => n + (s.result.ok ? s.result.results.length : 0), 0);
+      const notes: string[] = [];
+      if (reverseImage && localImage) {
+        if (!config.searchReverseImagePublishEnabled) {
+          notes.push(
+            "反向图搜：publish 未启用，本地图只走直传的附加源 —— tineye 需要公网可达的图片 URL，未参与。",
+          );
+        } else if (publish && !publish.ok) {
+          notes.push(
+            `反向图搜：图床发布失败（${publish.error.kind}），tineye 未参与 —— ${publish.error.message}`,
+          );
+        } else if (publish?.ok) {
+          notes.push(
+            `反向图搜：本地图已发布到公网图床（${publish.url}，公网可见、到期由对方删除）。`,
+          );
+        }
+      } else if (reverseImage && !imageUrl) {
+        notes.push(
+          "反向图搜：query 里没有图片 URL（http/https），且未提供 image_path，已跳过图源；searxng 也只在 query 含图片 URL 时触发 tineye。",
+        );
+      }
+      for (const { name, result } of sourceResults) {
+        if (!result.ok) {
+          notes.push(`反向图搜：网关侧图源 ${name} 不可用（${result.error.kind}）——${result.error.message}`);
+          continue;
+        }
+        if (result.results.length === 0) {
+          const quota =
+            result.quotaUsed !== undefined && result.quota !== undefined
+              ? `（配额 ${result.quotaUsed}/${result.quota}）`
+              : "";
+          const rem = result.remaining;
+          const remaining =
+            rem && (rem.short !== undefined || rem.long !== undefined)
+              ? `（剩余 ${rem.short ?? "?"}/30s、${rem.long ?? "?"}/天）`
+              : "";
+          notes.push(`反向图搜：网关侧图源 ${name} 无匹配${quota}${remaining}。`);
+        }
+      }
+
+      if (!lastData && reverseCount === 0) {
         // 上游失败：报错但尽量附语料召回结果
         const e = lastError ?? { kind: "network" as const, message: "no engine available" };
         let code: SearchOutcome["code"] = ErrorCodes.SEARCH_UPSTREAM;
         if (e.kind === "timeout") code = ErrorCodes.SEARCH_TIMEOUT;
         else if (e.kind === "invalid_json") code = ErrorCodes.SEARCH_INVALID;
         const errText = `搜索失败（${e.kind}${e.status ? ` ${e.status}` : ""}）：${e.message}\n\n请稍后重试，或更换关键词。`;
+        const noteText = notes.length > 0 ? `\n\n${notes.map((n) => `> ${n}`).join("\n>\n")}` : "";
 
         let recalled: CleanedResult[] = [];
-        try {
-          const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
-          recalled = r.results;
-        } catch (err) {
-          logger.warn(`语料召回失败: ${String(err)}`);
+        // 图片查询不混文本语料（语料是文本库，召回条目对图片查询只算噪声）
+        if (!imageQuery) {
+          try {
+            const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
+            recalled = r.results;
+          } catch (err) {
+            logger.warn(`语料召回失败: ${String(err)}`);
+          }
         }
         if (recalled.length > 0) {
-          return { ok: false, code, text: withCode(code, `${errText}\n\n## 结果（本地语料）\n\n${renderResults(recalled)}`) };
+          return {
+            ok: false,
+            code,
+            text: withCode(code, `${errText}${noteText}\n\n## 结果（本地语料）\n\n${renderResults(recalled)}`),
+          };
         }
-        return { ok: false, code, text: withCode(code, errText) };
+        return { ok: false, code, text: withCode(code, `${errText}${noteText}`) };
       }
 
-      const data = lastData;
-      const rawCount = data.results.length;
+      // searxng 失败但网关侧图源有结果 → 降级为部分成功（不报错）
+      const data: SearxngResponse = lastData ?? { query: upstreamQuery ?? effParams.query, results: [] };
+      if (!lastData && upstreamBatches > 0) notes.push("searxng 未返回结果，以下仅来自网关侧图源。");
+      // 多源候选合并：按 URL 去重、引擎归属取并集（ADR-0010/0012）
+      let candidates = data.results;
+      for (const { result } of sourceResults) {
+        if (result.ok && result.results.length > 0) candidates = unionResults(candidates, result.results);
+      }
+      const rawCount = candidates.length;
       const engineCounts: Record<string, number> = {};
-      for (const r of data.results) {
+      for (const r of candidates) {
         for (const e of resultEngines(r)) engineCounts[e] = (engineCounts[e] ?? 0) + 1;
       }
 
       // 轻量重排：绕过 searxng category 分组排序，按 score × boost 降序（语义不可用时的回退顺序）
       const tLocal = performance.now();
-      const reranked = rerankResults(data.results, {
+      const reranked = rerankResults(candidates, {
         enabled: config.rerankEnabled,
         engineBoost: config.rerankEngineBoost,
       });
@@ -535,29 +801,37 @@ export function createSearchService(
       });
       const localMs = performance.now() - tLocal;
 
-      // 合并语料召回 + 纯语义排序；失败则回退引擎分顺序
-      let ranked: CleanedResult[] = cleaned;
+      // 合并语料召回 + 纯语义排序；失败则回退引擎分顺序。
+      // 图片查询例外：不 embedding / 不召回 / 不写语料（见 selectImageResults）。
+      let ranked: CleanedResult[];
       let semanticTimings: SemanticTimings | null = null;
       let degraded = false;
       // 截断前的候选总数（默认=清洗后候选；语义层返回合并去重后的总数）
       let candidateCount = cleaned.length;
       const tMerge = performance.now();
-      try {
-        const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
-        ranked = merged.results;
-        semanticTimings = merged.timings ?? null;
-        degraded = merged.degraded;
-        candidateCount = merged.total;
-      } catch (err) {
-        logger.warn(`语义重排失败，回退引擎分顺序: ${String(err)}`);
-        ranked = cleaned.slice(0, limit);
-        degraded = true;
+      if (imageQuery) {
+        ranked = selectImageResults(cleaned, limit, diversity);
+      } else {
+        ranked = cleaned;
+        try {
+          const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
+          ranked = merged.results;
+          semanticTimings = merged.timings ?? null;
+          degraded = merged.degraded;
+          candidateCount = merged.total;
+        } catch (err) {
+          logger.warn(`语义重排失败，回退引擎分顺序: ${String(err)}`);
+          ranked = cleaned.slice(0, limit);
+          degraded = true;
+        }
       }
       const mergeMs = performance.now() - tMerge;
 
       const tRender = performance.now();
-      const text = renderSearchMarkdown({
-        query: params.query,
+      // 本地图请求没有 query 文本，标题用文件名代替（避免渲染出空的 `# Search: `）
+      const displayQuery = localImage ? `本地图片 ${localImage.filename}` : effParams.query;
+      const rendered = renderSearchMarkdown({
+        query: displayQuery,
         raw: data,
         results: ranked,
         latencyMs,
@@ -565,6 +839,8 @@ export function createSearchService(
         cappedAt: requested > limit ? limit : undefined,
         availableCount: candidateCount,
       });
+      // 反向图搜的降级/无匹配提示（只在该路径下出现，正常搜索逐字不变）
+      const text = notes.length > 0 ? `${rendered}\n\n${notes.map((n) => `> ${n}`).join("\n>\n")}` : rendered;
       const renderMs = performance.now() - tRender;
 
       const totalMs = performance.now() - tStart;
@@ -583,10 +859,25 @@ export function createSearchService(
         residualMs: totalMs - preMs - upstreamMs - localMs - mergeMs - renderMs,
         semantic: semanticTimings,
         degraded,
+        reverseImage:
+          sourceResults.length > 0
+            ? {
+                sources: sourceResults.map(({ name, result }) => ({
+                  name,
+                  ok: result.ok,
+                  results: result.ok ? result.results.length : 0,
+                  ms: result.ok ? result.latencyMs : 0,
+                  error: result.ok ? undefined : result.error.kind,
+                })),
+                ms: reverseMs,
+                published: publish ? publish.ok : undefined,
+                publishMs: localImage && config.searchReverseImagePublishEnabled ? publishMs : undefined,
+              }
+            : undefined,
       });
 
-      cache.set(key, text);
-      logger.debug(`search done: "${params.query}" (${ranked.length}/${rawCount} results, ${blockedCount} blocked)`);
+      if (cacheable) cache.set(key, text);
+      logger.debug(`search done: "${displayQuery}" (${ranked.length}/${rawCount} results, ${blockedCount} blocked)`);
       return { ok: true, text, cacheHit: false };
     } finally {
       release();
