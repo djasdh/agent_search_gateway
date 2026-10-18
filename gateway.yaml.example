@@ -57,8 +57,8 @@ search:
     enabled: true
     category: search_by_image    # 触发类别（网关侧大小写不敏感，转发时用此规范名）
     # 网关侧附加源：tracemoe（动画）/ saucenao（插画，需 api_key）/ baidu（中文图）；
-    # 置空 = 只走 searxng 的 tineye。默认保持 [tracemoe]，加新源需显式列出。
-    sources: [tracemoe]
+    # 置空 = 只走 searxng 的 tineye。三者默认全开（saucenao 未配 api_key 时自动跳过）。
+    sources: [tracemoe, saucenao, baidu]
     tracemoe_url: https://api.trace.moe
     tracemoe_timeout_ms: 15000
     tracemoe_max_results: 8      # 附加源候选上限（合并前）

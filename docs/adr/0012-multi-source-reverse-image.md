@@ -22,7 +22,7 @@ type ImageInput =
   | { kind: "bytes"; bytes: Uint8Array; filename: string; mime: string };
 ```
 
-service 按 `reverse_image.sources` 清单**并发**扇出（每个源内部都不抛裸异常），逐源降级：单源失败/超时不影响其它源，只在结果尾部加一条提示。`sources` 默认仍是 `["tracemoe"]`（升级后行为不变）；`saucenao` 需配置 `api_key` 才会真正发起；`baidu` 由 `baidu.enabled` 控制。
+service 按 `reverse_image.sources` 清单**并发**扇出（每个源内部都不抛裸异常），逐源降级：单源失败/超时不影响其它源，只在结果尾部加一条提示。`sources` **默认三源全开** `["tracemoe", "saucenao", "baidu"]`；`saucenao` 未配置 `api_key` 时自动跳过（不报错），`baidu` 由 `baidu.enabled` 控制。
 
 ## 为什么走网关侧附加源，而不是写成 searxng 引擎
 

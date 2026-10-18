@@ -82,7 +82,7 @@ const configSchema = z.object({
         .object({
           enabled: z.boolean().default(true),
           category: z.string().default("search_by_image"),
-          sources: z.array(z.enum(["tracemoe", "saucenao", "baidu"])).default(["tracemoe"]),
+          sources: z.array(z.enum(["tracemoe", "saucenao", "baidu"])).default(["tracemoe", "saucenao", "baidu"]),
           tracemoe_url: z.string().url().default("https://api.trace.moe"),
           tracemoe_timeout_ms: z.number().int().positive().default(15000),
           tracemoe_max_results: z.number().int().positive().max(20).default(8),
@@ -124,7 +124,7 @@ const configSchema = z.object({
         .catch({
           enabled: true,
           category: "search_by_image",
-          sources: ["tracemoe"],
+          sources: ["tracemoe", "saucenao", "baidu"],
           tracemoe_url: "https://api.trace.moe",
           tracemoe_timeout_ms: 15000,
           tracemoe_max_results: 8,
@@ -155,7 +155,7 @@ const configSchema = z.object({
       reverse_image: {
         enabled: true,
         category: "search_by_image",
-        sources: ["tracemoe"],
+        sources: ["tracemoe", "saucenao", "baidu"],
         tracemoe_url: "https://api.trace.moe",
         tracemoe_timeout_ms: 15000,
         tracemoe_max_results: 8,

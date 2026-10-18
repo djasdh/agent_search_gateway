@@ -51,6 +51,7 @@ describe("loadConfig (gateway.yaml)", () => {
     expect(c.fetchDownloadMaxTotalBytes).toBe(4294967296);
     expect(c.fetchFilesRoute).toBe(true);
     expect(c.searchCategoryTimeoutMs).toEqual({});
+    expect(c.searchReverseImageSources).toEqual(["tracemoe", "saucenao", "baidu"]);
   });
 
   it("读取完整配置", () => {
