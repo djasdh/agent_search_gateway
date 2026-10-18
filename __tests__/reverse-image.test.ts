@@ -308,6 +308,7 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     searxngUrl: `http://127.0.0.1:${searxPort}`,
     searxngTimeoutMs: 5000,
     searchMaxResults: 10,
+    searchMaxResultsCap: 50,
     searchMaxResultChars: 500,
     searchCacheTtlMs: 0,
     searchCacheMaxEntries: 0,
