@@ -56,7 +56,9 @@ search:
   reverse_image:
     enabled: true
     category: search_by_image    # 触发类别（网关侧大小写不敏感，转发时用此规范名）
-    sources: [tracemoe]          # 网关侧附加源；置空 = 只走 searxng 的 tineye
+    # 网关侧附加源：tracemoe（动画）/ saucenao（插画，需 api_key）/ baidu（中文图）；
+    # 置空 = 只走 searxng 的 tineye。默认保持 [tracemoe]，加新源需显式列出。
+    sources: [tracemoe]
     tracemoe_url: https://api.trace.moe
     tracemoe_timeout_ms: 15000
     tracemoe_max_results: 8      # 附加源候选上限（合并前）
@@ -69,6 +71,19 @@ search:
       enabled: true
       endpoint: https://uguu.se/upload?output=json   # 也可指向自建 pomf/uguu 实例
       timeout_ms: 20000
+    # SauceNAO：插画/同人图出处。api_key 为空 = 该源不启用（免费注册；150 次/天、4 次/30 秒）
+    saucenao:
+      api_key: ""
+      url: https://saucenao.com
+      timeout_ms: 15000
+      max_results: 8
+      minsim: 30                   # 相似度下限 0-100（挡低分噪音）
+    # 百度识图：中文/国内图（抓网页，无 key、有风控；本机 IPv6 出口会被拒，网关 fetch 走 IPv4）
+    baidu:
+      enabled: true
+      url: https://graph.baidu.com
+      timeout_ms: 15000
+      max_results: 8
 
 rerank:
   enabled: true

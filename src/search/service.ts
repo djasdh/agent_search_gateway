@@ -15,13 +15,15 @@ import type { EmbedResult } from "./embedding/types.js";
 import { loadLocalImage, publishImage, type LocalImage, type PublishResult } from "./image-publish.js";
 import { renderResults, renderSearchMarkdown } from "./render.js";
 import { rerankResults } from "./rerank.js";
+import { searchBaiduReverse } from "./baidu-reverse.js";
 import {
   extractImageUrl,
   searchTraceMoe,
   searchTraceMoeUpload,
   unionResults,
-  type TraceMoeCall,
 } from "./reverse-image.js";
+import { searchSaucenao } from "./saucenao.js";
+import type { ImageInput, SourceCall } from "./sources.js";
 import {
   searchSearxng,
   type SearchCallError,
@@ -367,13 +369,12 @@ export interface SearchMetrics {
   semantic: SemanticTimings | null;
   /** 语义层是否降级（embedding/语料不可用或失败）。 */
   degraded: boolean;
-  /** 反向图搜（ADR-0010/0011）：网关侧附加源的调用结果；未触发为 undefined。 */
+  /** 反向图搜（ADR-0010/0012）：各附加源的调用结果；未触发为 undefined。 */
   reverseImage?: {
-    source: string;
-    ok: boolean;
-    results: number;
+    /** 逐源结果（并发扇出，顺序即 sources 顺序）。 */
+    sources: Array<{ name: string; ok: boolean; results: number; ms: number; error?: string }>;
+    /** 等待所有附加源的整体墙钟。 */
     ms: number;
-    error?: string;
     /** 本地图是否成功发布到公网图床（非本地图请求为 undefined） */
     published?: boolean;
     publishMs?: number;
@@ -564,31 +565,76 @@ export function createSearchService(
       queryEmbed = provider.embed([params.query], "query");
       queryEmbed.catch(() => undefined);
     }
-    // 反向图搜（ADR-0010/0011）：网关侧附加源 trace.moe 与 searxng 并发。
+    // 反向图搜（ADR-0010/0012）：网关侧附加源与 searxng 并发。
     // 图有两个来源：query 里的图片 URL（URL 输入），或本地文件 image_path。
-    // 本地文件时 trace.moe 走 multipart 直传（图不外流）；要让 searxng 的 tineye
-    // 参与，还得多一步「发布到公网图床」——TinEye 是从它自己的服务器拉图的。
+    // 本地文件走 multipart 直传（图不外流）；要让 searxng 的 tineye 参与，
+    // 还得多一步「发布到公网图床」——TinEye 是从它自己的服务器拉图的。
     const tReverse = performance.now();
-    let traceMoePromise: Promise<TraceMoeCall> | undefined;
-    if (reverseImage && config.searchReverseImageSources.includes("tracemoe")) {
-      if (localImage) {
-        traceMoePromise = searchTraceMoeUpload(
-          config.searchTraceMoeUrl,
-          config.searchTraceMoeTimeoutMs,
-          localImage.bytes,
-          localImage.filename,
-          localImage.mime,
-          config.searchTraceMoeMaxResults,
-        );
-      } else if (imageUrl) {
-        traceMoePromise = searchTraceMoe(
-          config.searchTraceMoeUrl,
-          config.searchTraceMoeTimeoutMs,
-          imageUrl,
-          config.searchTraceMoeMaxResults,
-        );
+    const imageInput: ImageInput | undefined = localImage
+      ? { kind: "bytes", bytes: localImage.bytes, filename: localImage.filename, mime: localImage.mime }
+      : imageUrl
+        ? { kind: "url", url: imageUrl }
+        : undefined;
+    // 按 sources 清单并发扇出；未知 / 未启用的源直接忽略，每个源内部都不抛裸异常
+    const sourceTasks: Array<{ name: string; promise: Promise<SourceCall> }> = [];
+    if (reverseImage && imageInput) {
+      for (const name of config.searchReverseImageSources) {
+        if (name === "tracemoe") {
+          const promise =
+            imageInput.kind === "bytes"
+              ? searchTraceMoeUpload(
+                  config.searchTraceMoeUrl,
+                  config.searchTraceMoeTimeoutMs,
+                  imageInput.bytes,
+                  imageInput.filename,
+                  imageInput.mime,
+                  config.searchTraceMoeMaxResults,
+                )
+              : searchTraceMoe(
+                  config.searchTraceMoeUrl,
+                  config.searchTraceMoeTimeoutMs,
+                  imageInput.url,
+                  config.searchTraceMoeMaxResults,
+                );
+          sourceTasks.push({ name, promise });
+        } else if (name === "saucenao") {
+          if (!config.searchSaucenaoApiKey) {
+            logger.debug("反向图搜：saucenao 未配置 api_key，跳过该源");
+            continue;
+          }
+          sourceTasks.push({
+            name,
+            promise: searchSaucenao(
+              {
+                apiKey: config.searchSaucenaoApiKey,
+                baseUrl: config.searchSaucenaoUrl,
+                timeoutMs: config.searchSaucenaoTimeoutMs,
+                maxResults: config.searchSaucenaoMaxResults,
+                minsim: config.searchSaucenaoMinsim,
+              },
+              imageInput,
+            ),
+          });
+        } else if (name === "baidu") {
+          if (!config.searchBaiduReverseEnabled) {
+            logger.debug("反向图搜：baidu 未启用，跳过该源");
+            continue;
+          }
+          sourceTasks.push({
+            name,
+            promise: searchBaiduReverse(
+              {
+                baseUrl: config.searchBaiduReverseUrl,
+                timeoutMs: config.searchBaiduReverseTimeoutMs,
+                maxResults: config.searchBaiduReverseMaxResults,
+                maxBytes: config.searchReverseImageLocalMaxBytes,
+              },
+              imageInput,
+            ),
+          });
+        }
       }
-      traceMoePromise?.catch(() => undefined);
+      for (const t of sourceTasks) t.promise.catch(() => undefined);
     }
     let publish: PublishResult | undefined;
     let publishMs = 0;
@@ -648,15 +694,17 @@ export function createSearchService(
         }
       }
 
-      // 反向图搜：等网关侧附加源（与上面的 searxng 批次并发），并汇总提示
-      const reverse = traceMoePromise ? await traceMoePromise : undefined;
+      // 反向图搜：等所有附加源（与上面的 searxng 批次并发），逐源汇总提示
+      const sourceResults = await Promise.all(
+        sourceTasks.map(async (t) => ({ name: t.name, result: await t.promise })),
+      );
       const reverseMs = performance.now() - tReverse;
-      const reverseCount = reverse?.ok ? reverse.results.length : 0;
+      const reverseCount = sourceResults.reduce((n, s) => n + (s.result.ok ? s.result.results.length : 0), 0);
       const notes: string[] = [];
       if (reverseImage && localImage) {
         if (!config.searchReverseImagePublishEnabled) {
           notes.push(
-            "反向图搜：publish 未启用，本地图只走 trace.moe —— tineye 需要公网可达的图片 URL，未参与。",
+            "反向图搜：publish 未启用，本地图只走直传的附加源 —— tineye 需要公网可达的图片 URL，未参与。",
           );
         } else if (publish && !publish.ok) {
           notes.push(
@@ -672,11 +720,23 @@ export function createSearchService(
           "反向图搜：query 里没有图片 URL（http/https），且未提供 image_path，已跳过图源；searxng 也只在 query 含图片 URL 时触发 tineye。",
         );
       }
-      if (reverse && !reverse.ok) {
-        notes.push(`反向图搜：网关侧图源 tracemoe 不可用（${reverse.error.kind}）——${reverse.error.message}`);
-      } else if (reverse?.ok && reverseCount === 0) {
-        const quota = reverse.quotaUsed !== undefined && reverse.quota !== undefined ? `（配额 ${reverse.quotaUsed}/${reverse.quota}）` : "";
-        notes.push(`反向图搜：网关侧图源 tracemoe 无匹配${quota}。`);
+      for (const { name, result } of sourceResults) {
+        if (!result.ok) {
+          notes.push(`反向图搜：网关侧图源 ${name} 不可用（${result.error.kind}）——${result.error.message}`);
+          continue;
+        }
+        if (result.results.length === 0) {
+          const quota =
+            result.quotaUsed !== undefined && result.quota !== undefined
+              ? `（配额 ${result.quotaUsed}/${result.quota}）`
+              : "";
+          const rem = result.remaining;
+          const remaining =
+            rem && (rem.short !== undefined || rem.long !== undefined)
+              ? `（剩余 ${rem.short ?? "?"}/30s、${rem.long ?? "?"}/天）`
+              : "";
+          notes.push(`反向图搜：网关侧图源 ${name} 无匹配${quota}${remaining}。`);
+        }
       }
 
       if (!lastData && reverseCount === 0) {
@@ -711,8 +771,11 @@ export function createSearchService(
       // searxng 失败但网关侧图源有结果 → 降级为部分成功（不报错）
       const data: SearxngResponse = lastData ?? { query: upstreamQuery ?? effParams.query, results: [] };
       if (!lastData && upstreamBatches > 0) notes.push("searxng 未返回结果，以下仅来自网关侧图源。");
-      // 多源候选合并：按 URL 去重、引擎归属取并集（ADR-0010）
-      const candidates = reverse?.ok ? unionResults(data.results, reverse.results) : data.results;
+      // 多源候选合并：按 URL 去重、引擎归属取并集（ADR-0010/0012）
+      let candidates = data.results;
+      for (const { result } of sourceResults) {
+        if (result.ok && result.results.length > 0) candidates = unionResults(candidates, result.results);
+      }
       const rawCount = candidates.length;
       const engineCounts: Record<string, number> = {};
       for (const r of candidates) {
@@ -788,17 +851,21 @@ export function createSearchService(
         residualMs: totalMs - preMs - upstreamMs - localMs - mergeMs - renderMs,
         semantic: semanticTimings,
         degraded,
-        reverseImage: reverse
-          ? {
-              source: "tracemoe",
-              ok: reverse.ok,
-              results: reverseCount,
-              ms: reverseMs,
-              error: reverse.ok ? undefined : reverse.error.kind,
-              published: publish ? publish.ok : undefined,
-              publishMs: localImage && config.searchReverseImagePublishEnabled ? publishMs : undefined,
-            }
-          : undefined,
+        reverseImage:
+          sourceResults.length > 0
+            ? {
+                sources: sourceResults.map(({ name, result }) => ({
+                  name,
+                  ok: result.ok,
+                  results: result.ok ? result.results.length : 0,
+                  ms: result.ok ? result.latencyMs : 0,
+                  error: result.ok ? undefined : result.error.kind,
+                })),
+                ms: reverseMs,
+                published: publish ? publish.ok : undefined,
+                publishMs: localImage && config.searchReverseImagePublishEnabled ? publishMs : undefined,
+              }
+            : undefined,
       });
 
       if (cacheable) cache.set(key, text);

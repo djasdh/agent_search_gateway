@@ -286,6 +286,18 @@ let publishMode: "ok" | "apifail" | "http500" = "ok";
 let publishBody = "";
 let publishCalls = 0;
 
+// mock SauceNAO（官方 JSON API 形状）
+let saucenaoServer: ReturnType<typeof createHttpServer>;
+let saucenaoPort = 0;
+let saucenaoMode: "ok" | "apierror" | "http500" = "ok";
+let saucenaoQueries: string[] = [];
+
+// mock 百度识图（upload → 结果页 cardData）
+let baiduServer: ReturnType<typeof createHttpServer>;
+let baiduPort = 0;
+let baiduMode: "ok" | "reject" = "ok";
+let baiduUploads = 0;
+
 function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   return {
     host: "127.0.0.1",
@@ -318,6 +330,15 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     searchReverseImagePublishEnabled: true,
     searchReverseImagePublishEndpoint: `http://127.0.0.1:${publishPort}/upload?output=json`,
     searchReverseImagePublishTimeoutMs: 3000,
+    searchSaucenaoApiKey: "test-key",
+    searchSaucenaoUrl: `http://127.0.0.1:${saucenaoPort}`,
+    searchSaucenaoTimeoutMs: 3000,
+    searchSaucenaoMaxResults: 8,
+    searchSaucenaoMinsim: 0,
+    searchBaiduReverseEnabled: true,
+    searchBaiduReverseUrl: `http://127.0.0.1:${baiduPort}`,
+    searchBaiduReverseTimeoutMs: 3000,
+    searchBaiduReverseMaxResults: 8,
     rerankEnabled: true,
     rerankEngineBoost: {},
     rerankDiversityEnabled: false,
@@ -378,11 +399,79 @@ beforeAll(async () => {
   });
   await new Promise<void>((r) => publishServer.listen(0, "127.0.0.1", r));
   publishPort = (publishServer.address() as AddressInfo).port;
+
+  saucenaoServer = createHttpServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    saucenaoQueries.push(url.searchParams.get("url") ?? "");
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c as Buffer));
+    req.on("end", () => {
+      if (saucenaoMode === "http500") {
+        res.statusCode = 500;
+        res.end("boom");
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      if (saucenaoMode === "apierror") {
+        res.end(JSON.stringify({ header: { status: -1, message: "The anonymous account type does not permit API usage." } }));
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          header: { status: 0, short_remaining: 2, long_remaining: 100 },
+          results: [
+            {
+              header: { similarity: "88.0", thumbnail: "https://pixiv.example/thumb.jpg", index_name: "Pixiv" },
+              data: { pixiv_id: 999, title: "插画出处" },
+            },
+          ],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((r) => saucenaoServer.listen(0, "127.0.0.1", r));
+  saucenaoPort = (saucenaoServer.address() as AddressInfo).port;
+
+  baiduServer = createHttpServer((req, res) => {
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${baiduPort}`);
+    if (req.method === "POST" && url.pathname === "/upload") {
+      baiduUploads++;
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(c as Buffer));
+      req.on("end", () => {
+        res.setHeader("Content-Type", "application/json");
+        if (baiduMode === "reject") {
+          res.end(JSON.stringify({ status: 1, msg: "Reject", data: null }));
+          return;
+        }
+        res.end(JSON.stringify({ status: 0, msg: "Success", data: { url: `http://127.0.0.1:${baiduPort}/s?sign=x` } }));
+      });
+      return;
+    }
+    if (url.pathname === "/s") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(
+        '<script>window.cardData = [{"cardName":"same","tplData":{"list":[{"url":"https://duitang.example/1","image_src":"https://img.example/bd1.jpg"}]}}];</script>',
+      );
+      return;
+    }
+    if (url.pathname === "/img.jpg") {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.end(LOCAL_JPEG);
+      return;
+    }
+    res.statusCode = 404;
+    res.end("nf");
+  });
+  await new Promise<void>((r) => baiduServer.listen(0, "127.0.0.1", r));
+  baiduPort = (baiduServer.address() as AddressInfo).port;
 });
 
 afterAll(() => {
   searxServer.close();
   publishServer.close();
+  saucenaoServer.close();
+  baiduServer.close();
 });
 
 describe("createSearchService 反向图搜扇出（ADR-0010）", () => {
@@ -636,5 +725,104 @@ describe("createSearchService 本地图片（image_path）", () => {
     expect(a.cacheHit).toBe(false);
     expect(b.cacheHit).toBe(false);
     expect(publishCalls).toBe(2); // 每次都真跑
+  });
+});
+
+// ── 多源扇出（ADR-0012）：trace.moe + SauceNAO + 百度识图 ──
+
+describe("createSearchService 多源扇出（ADR-0012）", () => {
+  let dir = "";
+  let imgPath = "";
+  const all = ["tracemoe", "saucenao", "baidu"];
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "revimg-multi-"));
+    imgPath = join(dir, "shot.jpg");
+    await writeFile(imgPath, LOCAL_JPEG);
+  });
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const resetAll = () => {
+    traceMode = "ok";
+    searxFail = false;
+    searxCategories = [];
+    searxEngines = [];
+    searxQueries = [];
+    searxResults = [];
+    saucenaoMode = "ok";
+    saucenaoQueries = [];
+    baiduMode = "ok";
+    baiduUploads = 0;
+    lastTraceMethod = "";
+    lastTraceQuery = undefined;
+  };
+
+  // 百度识图在 URL 输入时要先把图下载下来再上传，所以这里用「可下载」的 mock 图片 URL
+  const imgUrl = () => `http://127.0.0.1:${baiduPort}/img.jpg`;
+
+  it("三源并发：URL 输入 → 各源候选合并进结果", async () => {
+    resetAll();
+    const q = imgUrl();
+    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const r = await svc.search({ query: q, categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    expect(searxQueries).toEqual([q]); // searxng（tineye）用 query 里的图片 URL
+    expect(saucenaoQueries).toEqual([q]); // SauceNAO 收到 url 参数
+    expect(baiduUploads).toBe(1); // 百度识图上传了一次
+    expect(lastTraceMethod).toBe("GET"); // trace.moe 走 URL
+    expect(r.text).toContain("某番"); // trace.moe 结果
+    expect(r.text).toContain("插画出处"); // SauceNAO 结果
+    expect(r.text).toContain("duitang.example"); // 百度识图结果
+  });
+
+  it("SauceNAO 未配 api_key → 跳过该源（不发请求）", async () => {
+    resetAll();
+    const svc = createSearchService(
+      makeConfig({ searchReverseImageSources: all, searchSaucenaoApiKey: "" }),
+      domainFilter,
+      silentLogger,
+    );
+    const r = await svc.search({ query: imgUrl(), categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    expect(saucenaoQueries).toEqual([]);
+    expect(baiduUploads).toBe(1);
+  });
+
+  it("百度识图被拒 → 其它源结果照常 + 提示 baidu 不可用", async () => {
+    resetAll();
+    baiduMode = "reject";
+    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const r = await svc.search({ query: imgUrl(), categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain("某番");
+    expect(r.text).toContain("插画出处");
+    expect(r.text).toContain("图源 baidu 不可用");
+  });
+
+  it("SauceNAO 匿名拒绝（status<0）→ 提示 + 其它源照常", async () => {
+    resetAll();
+    saucenaoMode = "apierror";
+    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const r = await svc.search({ query: imgUrl(), categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain("图源 saucenao 不可用");
+    expect(r.text).toContain("某番");
+    expect(r.text).toContain("duitang.example");
+  });
+
+  it("本地图：三源直传（不经图床）+ searxng 用发布后的公网 URL", async () => {
+    resetAll();
+    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const r = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    expect(saucenaoQueries).toEqual([""]); // 本地直传 → 没有 url 参数
+    expect(baiduUploads).toBe(1);
+    expect(lastTraceMethod).toBe("POST"); // trace.moe 走 multipart
+    expect(searxQueries).toEqual(["https://n.uguu.se/published.jpg"]); // tineye 用发布出来的公网 URL
+    expect(r.text).toContain("某番");
+    expect(r.text).toContain("插画出处");
   });
 });

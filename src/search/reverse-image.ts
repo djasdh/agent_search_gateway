@@ -1,5 +1,6 @@
 import { normalizeUrlKey, resultEngines } from "./clean.js";
 import type { SearxngResult } from "./searxng.js";
+import { classifyFetchError, type SourceCall, type SourceError } from "./sources.js";
 
 /**
  * 反向图搜（以图搜图）的**网关侧附加源**（ADR-0010）。
@@ -69,15 +70,9 @@ export interface TraceMoeResponse {
   result?: TraceMoeMatch[];
 }
 
-export interface TraceMoeError {
-  kind: "timeout" | "http" | "network" | "invalid_json" | "api";
-  status?: number;
-  message: string;
-}
-
-export type TraceMoeCall =
-  | { ok: true; results: SearxngResult[]; latencyMs: number; quota?: number; quotaUsed?: number }
-  | { ok: false; error: TraceMoeError };
+/** trace.moe 的返回形状 = 统一的附加源契约（ADR-0012）。 */
+export type TraceMoeError = SourceError;
+export type TraceMoeCall = SourceCall;
 
 /** 秒 → `mm:ss` / `hh:mm:ss`。 */
 function formatTime(seconds: number): string {
@@ -184,13 +179,7 @@ async function callTraceMoe(
       quotaUsed: data.quotaUsed,
     };
   } catch (err) {
-    const aborted = (err as Error)?.name === "TimeoutError" || (err as Error)?.name === "AbortError";
-    return {
-      ok: false,
-      error: aborted
-        ? { kind: "timeout", message: `trace.moe 请求超时 (>${timeoutMs}ms)` }
-        : { kind: "network", message: err instanceof Error ? err.message : String(err) },
-    };
+    return { ok: false, error: classifyFetchError(err, timeoutMs, "trace.moe") };
   }
 }
 

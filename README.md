@@ -223,25 +223,29 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 ### 以图搜图（`categories=search_by_image`）
 
-`search` 传 `categories=search_by_image`，并让 **`query` 直接是图片 URL**（http/https），即同时启用两个源（ADR-0010）：
+`search` 传 `categories=search_by_image`：`query` 给图片 URL，或改用 `image_path` 给本地图片 —— 会**并发**启用四路源（ADR-0010 / ADR-0012）：
 
-| 源 | 承载方 | 说明 |
-|---|---|---|
-| searxng 的 `tineye` | searxng 引擎（上游自带） | 需要在 searxng 的 `settings.yml` 里给 tineye 声明 `categories: [search_by_image]`（见 `searxng-ext/settings.example.yml` / `docker/searxng/settings.template.yml`）；网关不点名引擎 |
-| `trace.moe` | 网关侧附加源 | 动画截图匹配（AniList 标题/集数/时间点）；免 key、按 IP 限 100 次/日 |
+| 源 | 承载方 | 覆盖 | 成本 |
+|---|---|---|---|
+| searxng 的 `tineye` | searxng 引擎（上游自带） | 任意图片的"网络出现处"（近似重复匹配） | 需在 searxng 的 `settings.yml` 里给 tineye 声明 `categories: [search_by_image]`（见 `searxng-ext/settings.example.yml` / `docker/searxng/settings.template.yml`）；网关不点名引擎 |
+| `tracemoe` | 网关侧附加源 | 动画截图 → 动画出处（AniList 标题/集数/时间点） | 免费、按 IP 100 次/日 |
+| `saucenao` | 网关侧附加源 | **插画 / 同人图出处**（Pixiv / Danbooru / Twitter…） | 免费 key（150 次/天、4 次/30 秒）；**需在配置里填 `api_key` 才启用** |
+| `baidu` | 网关侧附加源 | **中文 / 国内图**（完全相同图 + 相似图） | 免费（抓网页、无 key、有风控） |
 
 ```jsonc
-// 示例：以图搜图
+// 示例：以图搜图（图 URL 写在 query 里）
 { "query": "https://example.com/some-image.jpg", "categories": "search_by_image" }
+// 本地图（与 query 里的图片 URL 互斥）
+{ "query": "", "image_path": "/tmp/shot.jpg", "categories": "search_by_image" }
 ```
 
-- **「图就是 query」**：图片 URL 写在 `query` 里（与 searxng 的 `online_url_search` 同形），没有额外的上传字段；query 里没有 http(s) URL 时会附一条提示并只走 searxng（searxng 也不会触发 tineye）。
-- 两边候选统一成同一线格式后**按 URL 去重**（同 URL 的引擎归属并写入 `engines[]`），再走与 `categories=images` 完全相同的排序/渲染管线（图片直链 + 不走语义层）。
-- 排序：图片查询没有文本 query 向量，故按 `score`（tineye 的匹配分 / trace.moe 的 similarity）× `engine_boost`，`rerank.diversity` 开启时同注册域去冗余。
-- **不支持本地图片文件**：TinEye 是服务端拉图，URL 必须公网可达；trace.moe 虽支持上传，但只覆盖一个源（记在 `TODO.md`）。
-- 失败不致命：单个源失败/无匹配时返回另一边的结果，并在结果末尾附一条提示（`反向图搜：…`）。
+- **「图就是 query」**：URL 输入时图片 URL 写在 `query` 里（与 searxng 的 `online_url_search` 同形）；本地图用 `image_path`（网关同机路径）。两者必有其一，都缺席时只附提示、不调网关侧源。
+- 各源候选统一成同一线格式后**按 URL 去重**（同 URL 的引擎归属并写入 `engines[]`），再走与 `categories=images` 相同的排序/渲染管线（图片直链 + 不走语义层）。
+- 排序：按 `score`（tineye 匹配分 / trace.moe 与 SauceNAO 的 similarity / 百度识图的约定分）× `engine_boost`；`rerank.diversity` 开启时同注册域去冗余。
+- 失败不致命：**单个源**失败/超时/无匹配都不影响其它源，只在结果末尾各附一条提示（`反向图搜：…`）。
+- **本地图直传**：`tracemoe` / `saucenao` / `baidu` 都以 multipart 直传图片字节，**不经图床**；只有 `tineye` 需要公网 URL（见下）。
 - **部署检查**：searxng 若没声明该类别，请求会被静默过滤、回落成 `general` 搜索（不报错）。验证：`curl -s localhost:8888/config | grep search_by_image`。
-- 相关配置在 `gateway.yaml` 的 `search.reverse_image`（开关 / 触发类别 / 附加源清单 / trace.moe 地址与超时）。
+- 相关配置在 `gateway.yaml` 的 `search.reverse_image`（开关 / 触发类别 / `sources` 清单 / 各源地址与超时 / SauceNAO 的 `api_key`）。
 
 #### 本地图片（`image_path`）
 
@@ -251,11 +255,11 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 { "query": "", "image_path": "/tmp/shot.jpg", "categories": "search_by_image" }
 ```
 
-- **trace.moe 直传**：图片字节以 multipart 上传（`POST /search`，字段 `image`），**不经图床、图不外流**，所以图床不可用时它照样出结果。
+- **网关侧源直传**：`tracemoe`（字段 `image`）/ `saucenao`（字段 `file`）/ `baidu`（字段 `image`）都以 multipart 直接接收图片字节，**不经图床**；但它们各自是第三方服务（图仍会发给该服务）。
 - **要 tineye 参与就得发布**：tineye 的图片是 **TinEye 服务器**去拉的，必须给一个**公网可达的图片 URL** → 网关先把图发布到图床（`search.reverse_image.publish`，uguu/pomf 协议，默认 `https://uguu.se/upload?output=json`），再拿返回的 URL 当 searxng 的 query。
   - ⚠️ **这一步会把图上传到公网第三方**：图公网可见、由对方按其 TTL 删除（uguu 为 **3 小时**），对方还会保留短时的**上传 IP / 文件名 / 哈希**日志。只有显式传 `image_path` 才会发生；`query` 给 URL 的老路径不发布。不想要就设 `publish.enabled: false`。
   - 发布前做三重校验：常规文件、大小 ≤ `local_max_bytes`（默认 5MiB）、**magic bytes 必须是图片** → 不可能把配置/密钥之类的文件发出去。
-  - 发布失败**不影响**结果：跳过 searxng，只返回 trace.moe 的结果并附一条提示。
+  - 发布失败**不影响**结果：跳过 searxng（tineye 不参与），仍返回网关侧源的结果并附一条提示。
   - 想换图床（含自建 pomf/uguu 实例）：改 `publish.endpoint` 即可，协议同形。
 - 本地图请求**不写搜索缓存**（同路径文件内容会变），渲染标题退化为文件名。
 - 出处/留存等细节见 `docs/adr/0011`。

@@ -82,7 +82,7 @@ const configSchema = z.object({
         .object({
           enabled: z.boolean().default(true),
           category: z.string().default("search_by_image"),
-          sources: z.array(z.enum(["tracemoe"])).default(["tracemoe"]),
+          sources: z.array(z.enum(["tracemoe", "saucenao", "baidu"])).default(["tracemoe"]),
           tracemoe_url: z.string().url().default("https://api.trace.moe"),
           tracemoe_timeout_ms: z.number().int().positive().default(15000),
           tracemoe_max_results: z.number().int().positive().max(20).default(8),
@@ -100,6 +100,26 @@ const configSchema = z.object({
               endpoint: "https://uguu.se/upload?output=json",
               timeout_ms: 20000,
             }),
+          // SauceNAO（ADR-0012）：插画/同人图出处；api_key 为空 = 该源不启用。
+          // 免费账号限额 150 次/天、4 次/30 秒。
+          saucenao: z
+            .object({
+              api_key: z.string().default(""),
+              url: z.string().url().default("https://saucenao.com"),
+              timeout_ms: z.number().int().positive().default(15000),
+              max_results: z.number().int().positive().max(20).default(8),
+              minsim: z.number().min(0).max(100).default(30),
+            })
+            .catch({ api_key: "", url: "https://saucenao.com", timeout_ms: 15000, max_results: 8, minsim: 30 }),
+          // 百度识图（ADR-0012）：抓网页；无 key，但会触发百度风控。
+          baidu: z
+            .object({
+              enabled: z.boolean().default(true),
+              url: z.string().url().default("https://graph.baidu.com"),
+              timeout_ms: z.number().int().positive().default(15000),
+              max_results: z.number().int().positive().max(30).default(8),
+            })
+            .catch({ enabled: true, url: "https://graph.baidu.com", timeout_ms: 15000, max_results: 8 }),
         })
         .catch({
           enabled: true,
@@ -114,6 +134,8 @@ const configSchema = z.object({
             endpoint: "https://uguu.se/upload?output=json",
             timeout_ms: 20000,
           },
+          saucenao: { api_key: "", url: "https://saucenao.com", timeout_ms: 15000, max_results: 8, minsim: 30 },
+          baidu: { enabled: true, url: "https://graph.baidu.com", timeout_ms: 15000, max_results: 8 },
         }),
     })
     .catch({
@@ -143,6 +165,8 @@ const configSchema = z.object({
           endpoint: "https://uguu.se/upload?output=json",
           timeout_ms: 20000,
         },
+        saucenao: { api_key: "", url: "https://saucenao.com", timeout_ms: 15000, max_results: 8, minsim: 30 },
+        baidu: { enabled: true, url: "https://graph.baidu.com", timeout_ms: 15000, max_results: 8 },
       },
     }),
   rerank: z
@@ -349,7 +373,7 @@ export interface GatewayConfig {
   searchReverseImageEnabled: boolean;
   /** 触发反向图搜的类别名（网关侧大小写不敏感；转发给 searxng 时用此规范名）。 */
   searchReverseImageCategory: string;
-  /** 网关侧附加图源清单（当前仅 `tracemoe`；空 = 只走 searxng 的 tineye）。 */
+  /** 网关侧附加图源清单（`tracemoe` / `saucenao` / `baidu`；空 = 只走 searxng 的 tineye）。 */
   searchReverseImageSources: string[];
   /** trace.moe API 基址（免 key；免费额度按 IP 计）。 */
   searchTraceMoeUrl: string;
@@ -362,6 +386,18 @@ export interface GatewayConfig {
   searchReverseImagePublishEnabled: boolean;
   searchReverseImagePublishEndpoint: string;
   searchReverseImagePublishTimeoutMs: number;
+  /** SauceNAO（ADR-0012）：插画/同人图出处；api_key 为空 = 该源不启用。 */
+  searchSaucenaoApiKey: string;
+  searchSaucenaoUrl: string;
+  searchSaucenaoTimeoutMs: number;
+  searchSaucenaoMaxResults: number;
+  /** SauceNAO 相似度下限（0–100）。 */
+  searchSaucenaoMinsim: number;
+  /** 百度识图（ADR-0012）：抓网页；开关 + 超时 + 候选上限。 */
+  searchBaiduReverseEnabled: boolean;
+  searchBaiduReverseUrl: string;
+  searchBaiduReverseTimeoutMs: number;
+  searchBaiduReverseMaxResults: number;
   rerankEnabled: boolean;
   rerankEngineBoost: Record<string, number>;
   /** 多样性重排（MMR + 同注册域上限）；关闭时行为等同纯 cosine 重排。 */
@@ -514,6 +550,15 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     searchReverseImagePublishEnabled: v.search.reverse_image.publish.enabled,
     searchReverseImagePublishEndpoint: v.search.reverse_image.publish.endpoint,
     searchReverseImagePublishTimeoutMs: v.search.reverse_image.publish.timeout_ms,
+    searchSaucenaoApiKey: v.search.reverse_image.saucenao.api_key,
+    searchSaucenaoUrl: v.search.reverse_image.saucenao.url.replace(/\/+$/, ""),
+    searchSaucenaoTimeoutMs: v.search.reverse_image.saucenao.timeout_ms,
+    searchSaucenaoMaxResults: v.search.reverse_image.saucenao.max_results,
+    searchSaucenaoMinsim: v.search.reverse_image.saucenao.minsim,
+    searchBaiduReverseEnabled: v.search.reverse_image.baidu.enabled,
+    searchBaiduReverseUrl: v.search.reverse_image.baidu.url.replace(/\/+$/, ""),
+    searchBaiduReverseTimeoutMs: v.search.reverse_image.baidu.timeout_ms,
+    searchBaiduReverseMaxResults: v.search.reverse_image.baidu.max_results,
     rerankEnabled: v.rerank.enabled,
     rerankEngineBoost: v.rerank.engine_boost,
     rerankDiversityEnabled: v.rerank.diversity.enabled,
