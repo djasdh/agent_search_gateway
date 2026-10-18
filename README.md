@@ -229,7 +229,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 |---|---|---|---|
 | searxng 的 `tineye` | searxng 引擎（上游自带） | 任意图片的"网络出现处"（近似重复匹配） | 需在 searxng 的 `settings.yml` 里给 tineye 声明 `categories: [search_by_image]`（见 `searxng-ext/settings.example.yml` / `docker/searxng/settings.template.yml`）；网关不点名引擎 |
 | `tracemoe` | 网关侧附加源 | 动画截图 → 动画出处（AniList 标题/集数/时间点） | 免费、按 IP 100 次/日 |
-| `saucenao` | 网关侧附加源 | **插画 / 同人图出处**（Pixiv / Danbooru / Twitter…） | 免费 key（150 次/天、4 次/30 秒）；**需在配置里填 `api_key` 才启用** |
+| `saucenao` | 网关侧附加源 | **插画 / 同人图出处**（Pixiv / Danbooru / Twitter…） | 免费 key（实测免费账号 100 次/天、4 次/30 秒）；**需在配置里填 `api_key` 才启用** |
 | `baidu` | 网关侧附加源 | **中文 / 国内图**（完全相同图 + 相似图） | 免费（抓网页、无 key、有风控） |
 
 ```jsonc

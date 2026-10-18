@@ -5,7 +5,7 @@ ADR-0010 让以图搜图（`categories=search_by_image`）在 searxng 的 tineye
 | 源 | 性质 | 覆盖 | 成本 | 输入 |
 |---|---|---|---|---|
 | `tracemoe` | 官方 API | 动画截图 → 动画出处 | 免费（按 IP 限额） | URL / 字节 |
-| `saucenao` | 官方 API（需 key） | 插画 / 同人图出处（Pixiv / Danbooru / Twitter…） | 免费 key（150 次/天、4 次/30 秒） | URL / 字节 |
+| `saucenao` | 官方 API（需 key） | 插画 / 同人图出处（Pixiv / Danbooru / Twitter…） | 免费 key（实测免费账号 100 次/天、4 次/30 秒） | URL / 字节 |
 | `baidu` | 抓网页（graph.baidu.com） | 中文 / 国内图 | 0 | URL（先下载）/ 字节 |
 
 searxng 侧仍由 tineye 承担（`engine_type = online_url_search`）。四路候选统一成 `SearxngResult` 线格式 → 按 URL 去重（`engines[]` 取并集）→ 进现有排序。
@@ -34,7 +34,7 @@ searxng 全库只有 tineye 一个 `online_url_search`（能"拿图当 query"）
 - `POST https://saucenao.com/search.php`，参数 `output_type=2 / db=999 / numres / minsim(默认 30) / hide=0 / api_key`；输入 `url=` 或 multipart 字段 **`file=`**。
 - 响应 `{ header:{ status, short_remaining, long_remaining, … }, results:[ { header:{ similarity, thumbnail, index_name, hidden }, data:{ title|material|jp_name, author|member_name|…, ext_urls, pixiv_id, … } } ] }`。
 - `status < 0` = 业务拒绝（如**匿名 key 不允许 API 调用**，实测）→ 归类 `api` 错误。
-- **必须注册免费 key**；限额 150 次/天、4 次/30 秒，网关把 `short/long remaining` 透进"无匹配"提示。
+- **必须注册免费 key**；限额 **100 次/天、4 次/30 秒**（实测免费账号 header：`long_limit=100`、`short_limit=4`），网关把 `short/long remaining` 透进"无匹配"提示。
 
 ### 百度识图（抓网页）
 - 三步：① `POST graph.baidu.com/upload`（header `Acs-Token: ""`，multipart `from=pc` + `image`）→ `data.url`；② `GET` 结果页 → 从 HTML 抠 `window.cardData`；③ `same.list[]`（完全相同）/ `simipic.firstUrl` → JSON `data.list[]`（相似）。

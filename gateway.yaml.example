@@ -71,7 +71,7 @@ search:
       enabled: true
       endpoint: https://uguu.se/upload?output=json   # 也可指向自建 pomf/uguu 实例
       timeout_ms: 20000
-    # SauceNAO：插画/同人图出处。api_key 为空 = 该源不启用（免费注册；150 次/天、4 次/30 秒）
+    # SauceNAO：插画/同人图出处。api_key 为空 = 该源不启用（免费注册；实测免费账号 100 次/天、4 次/30 秒）
     saucenao:
       api_key: ""
       url: https://saucenao.com

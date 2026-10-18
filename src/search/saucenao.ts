@@ -16,7 +16,8 @@ import { classifyFetchError, type ImageInput, type SourceCall } from "./sources.
  *                    data: { title|material|jp_name, author|member_name|…, ext_urls[],
  *                            pixiv_id?, pawoo_id?/pawoo_user_acct?, getchu_id?, source, … } } ] }
  *
- * 免费账号限额：**150 次/天、4 次/30 秒**（字段名与限额出处：官方 API 文档 +
+ * 免费账号限额：**100 次/天、4 次/30 秒**（实测免费账号 header：`long_limit=100`、
+ * `short_limit=4`；字段名与响应结构另据官方 API 文档 +
  * kitUIN/PicImageSearch `engines/saucenao.py` / `model/saucenao.py`，MIT）。
  */
 
