@@ -27,8 +27,6 @@ flaresolverr:
 
 search:
   max_results: 10
-  # num_results 的单一上限：agent 请求超过即按此截断（不报错），并在结果末尾附加说明。
-  max_results_cap: 50
   max_result_chars: 500
   cache_ttl_ms: 300000    # 5 分钟
   cache_max_entries: 200
@@ -48,9 +46,20 @@ search:
   resident_quota_floor: 0.2    # resident 引擎剩余占比低于该值 → 从常住档移出
   # 类别感知超时：命中请求类别时覆盖上面的 searxng.timeout_ms（学术引擎更慢）
   # 指定非 general 类别时还会抑制 resident/rotating，交 searxng 按类别选引擎（ADR-0008）
-  # 须 ≥ 引擎自报的 timeout：cnki 按 page_size × num_pages 自算（默认 50 条 → 30s）
   category_timeout_ms:
-    academic: 40000
+    academic: 25000
+    search_by_image: 25000   # 以图搜图：tineye 要等 TinEye 侧拉图，给足时间
+  # 以图搜图（reverse image search，ADR-0010）：query 直接给图片 URL（http/https）+
+  # categories 含 search_by_image 时触发。searxng 侧由 tineye 引擎承担（需在 searxng 的
+  # settings.yml 里给 tineye 声明该类别，见 README），网关侧再并发扇出 sources 列的附加源；
+  # 两边候选按 URL 去重合并后进现有排序。图不是 URL（本地文件）时无法使用——TinEye 侧要拉公网 URL。
+  reverse_image:
+    enabled: true
+    category: search_by_image    # 触发类别（网关侧大小写不敏感，转发时用此规范名）
+    sources: [tracemoe]          # 网关侧附加源；置空 = 只走 searxng 的 tineye
+    tracemoe_url: https://api.trace.moe
+    tracemoe_timeout_ms: 15000
+    tracemoe_max_results: 8      # 附加源候选上限（合并前）
 
 rerank:
   enabled: true

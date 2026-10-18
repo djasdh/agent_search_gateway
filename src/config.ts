@@ -75,6 +75,26 @@ const configSchema = z.object({
       resident_quota_floor: z.number().min(0).max(1).default(0.2),
       // 类别感知超时（ADR-0008）：academic 等类别的引擎更慢
       category_timeout_ms: z.record(z.string(), z.number().int().positive()).default({}),
+      // 反向图搜（ADR-0010）：请求类别命中 reverse_image.category 时，
+      // 除 searxng（其 tineye 引擎由 searxng settings 按类别启用）外，
+      // 网关再并发扇出 reverse_image.sources 列的附加图源，候选按 URL 去重合并。
+      reverse_image: z
+        .object({
+          enabled: z.boolean().default(true),
+          category: z.string().default("search_by_image"),
+          sources: z.array(z.enum(["tracemoe"])).default(["tracemoe"]),
+          tracemoe_url: z.string().url().default("https://api.trace.moe"),
+          tracemoe_timeout_ms: z.number().int().positive().default(15000),
+          tracemoe_max_results: z.number().int().positive().max(20).default(8),
+        })
+        .catch({
+          enabled: true,
+          category: "search_by_image",
+          sources: ["tracemoe"],
+          tracemoe_url: "https://api.trace.moe",
+          tracemoe_timeout_ms: 15000,
+          tracemoe_max_results: 8,
+        }),
     })
     .catch({
       max_results: 10,
@@ -90,6 +110,14 @@ const configSchema = z.object({
       quota_tight_threshold: 0.1,
       resident_quota_floor: 0.2,
       category_timeout_ms: {},
+      reverse_image: {
+        enabled: true,
+        category: "search_by_image",
+        sources: ["tracemoe"],
+        tracemoe_url: "https://api.trace.moe",
+        tracemoe_timeout_ms: 15000,
+        tracemoe_max_results: 8,
+      },
     }),
   rerank: z
     .object({
@@ -291,6 +319,17 @@ export interface GatewayConfig {
    * 命中请求类别时覆盖 searxngTimeoutMs；未命中回落 searxngTimeoutMs。
    */
   searchCategoryTimeoutMs: Record<string, number>;
+  /** 反向图搜（ADR-0010）总开关；关闭时 `search_by_image` 类别只走 searxng（tineye）。 */
+  searchReverseImageEnabled: boolean;
+  /** 触发反向图搜的类别名（网关侧大小写不敏感；转发给 searxng 时用此规范名）。 */
+  searchReverseImageCategory: string;
+  /** 网关侧附加图源清单（当前仅 `tracemoe`；空 = 只走 searxng 的 tineye）。 */
+  searchReverseImageSources: string[];
+  /** trace.moe API 基址（免 key；免费额度按 IP 计）。 */
+  searchTraceMoeUrl: string;
+  searchTraceMoeTimeoutMs: number;
+  /** 网关侧图源返回的候选上限（合并前）。 */
+  searchTraceMoeMaxResults: number;
   rerankEnabled: boolean;
   rerankEngineBoost: Record<string, number>;
   /** 多样性重排（MMR + 同注册域上限）；关闭时行为等同纯 cosine 重排。 */
@@ -433,6 +472,12 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     searchQuotaTightThreshold: v.search.quota_tight_threshold,
     searchResidentQuotaFloor: v.search.resident_quota_floor,
     searchCategoryTimeoutMs: v.search.category_timeout_ms,
+    searchReverseImageEnabled: v.search.reverse_image.enabled,
+    searchReverseImageCategory: v.search.reverse_image.category,
+    searchReverseImageSources: v.search.reverse_image.sources,
+    searchTraceMoeUrl: v.search.reverse_image.tracemoe_url.replace(/\/+$/, ""),
+    searchTraceMoeTimeoutMs: v.search.reverse_image.tracemoe_timeout_ms,
+    searchTraceMoeMaxResults: v.search.reverse_image.tracemoe_max_results,
     rerankEnabled: v.rerank.enabled,
     rerankEngineBoost: v.rerank.engine_boost,
     rerankDiversityEnabled: v.rerank.diversity.enabled,

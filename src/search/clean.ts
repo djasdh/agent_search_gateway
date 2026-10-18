@@ -44,8 +44,18 @@ export function isImageResult(r: Pick<CleanedResult, "imgSrc" | "thumbnailSrc" |
   return !!r.imgSrc || !!r.thumbnailSrc || r.category === "images";
 }
 
+/** 取单条上游结果归属的引擎名（searxng 单引擎用 `engine`，多引擎合并用 `engines[]`）。 */
+export function resultEngines(r: Pick<SearxngResult, "engine" | "engines">): string[] {
+  const out: string[] = [];
+  if (typeof r.engine === "string" && r.engine.length > 0) out.push(r.engine);
+  if (Array.isArray(r.engines)) {
+    for (const e of r.engines) if (typeof e === "string" && e.length > 0) out.push(e);
+  }
+  return out;
+}
+
 /** 规范化 URL 用于去重：去 fragment，去掉常见跟踪参数。 */
-function normalizeUrlKey(url: string): string {
+export function normalizeUrlKey(url: string): string {
   try {
     const u = new URL(url);
     u.hash = "";
@@ -79,6 +89,17 @@ function hostnameOf(url: string): string | null {
 function truncate(s: string, max: number): string {
   if (max <= 0 || s.length <= max) return s;
   return s.slice(0, max) + "…";
+}
+
+/**
+ * 图片结果的分辨率兜底：部分图片源（searxng 的 tineye 引擎）只给 `width`/`height`
+ * 数字，不给 `resolution` 字符串 → 组装成 searxng 同形的 `宽 x 高`。
+ */
+function resolutionFrom(width: unknown, height: unknown): string | undefined {
+  const w = Number(width);
+  const h = Number(height);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined;
+  return `${w} x ${h}`;
 }
 
 /**
@@ -149,6 +170,11 @@ export function cleanResults(results: SearxngResult[], opts: CleanOptions): Clea
         ? [r.engine]
         : [];
 
+    // 图片源字段名不统一：searxng 图片引擎给 `resolution`/`img_format`，
+    // tineye（online_url_search）给 `width`/`height`/`format` → 只在图片结果上兜底。
+    const thumbSrc = optionalString(r.thumbnail_src);
+    const isImage = !!imgSrc || !!thumbSrc;
+
     out.push({
       title: decodeHtmlEntities(title),
       url,
@@ -158,9 +184,9 @@ export function cleanResults(results: SearxngResult[], opts: CleanOptions): Clea
       score: r.score,
       category: r.category,
       imgSrc,
-      thumbnailSrc: optionalString(r.thumbnail_src),
-      resolution: optionalString(r.resolution),
-      imgFormat: optionalString(r.img_format),
+      thumbnailSrc: thumbSrc,
+      resolution: optionalString(r.resolution) ?? (isImage ? resolutionFrom(r.width, r.height) : undefined),
+      imgFormat: optionalString(r.img_format) ?? (isImage ? optionalString(r.format) : undefined),
       imgSource: optionalString(r.source),
     });
   }

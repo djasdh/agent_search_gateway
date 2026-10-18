@@ -6,13 +6,15 @@ import type { Logger } from "../logger.js";
 import { ErrorCodes, withCode } from "../utils/errors.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { StringCache } from "./cache.js";
-import { cleanResults, type CleanedResult } from "./clean.js";
+import { cleanResults, resultEngines, type CleanedResult } from "./clean.js";
 import type { EmbeddingProvider } from "./embedding/provider.js";
+import { mmrSelect, registeredDomainOfUrl } from "./embedding/diversity.js";
 import { mergeAndRank, type SemanticTimings } from "./embedding/semantic.js";
 import type { CorpusStore } from "./embedding/store.js";
 import type { EmbedResult } from "./embedding/types.js";
 import { renderResults, renderSearchMarkdown } from "./render.js";
 import { rerankResults } from "./rerank.js";
+import { extractImageUrl, searchTraceMoe, unionResults, type TraceMoeCall } from "./reverse-image.js";
 import {
   searchSearxng,
   type SearchCallError,
@@ -147,6 +149,67 @@ export function hasNonGeneralCategory(categories: string | undefined): boolean {
     .some((c) => c !== "general");
 }
 
+/** 请求是否只要图片（显式 `images` 类别；非 general 类别即「只要这一类」，ADR-0008）。 */
+export function isImageQuery(categories: string | undefined, extra: string[] = []): boolean {
+  const want = new Set(["images", ...extra.map((c) => c.trim().toLowerCase()).filter((c) => c.length > 0)]);
+  return (categories ?? "")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .some((c) => want.has(c));
+}
+
+/**
+ * 反向图搜触发判定（ADR-0010）：请求类别里出现配置的类别名（大小写不敏感）。
+ * 「图就是 query」——类别只是开关，图片本身是以 URL 形式写在 query 里。
+ */
+export function isReverseImageQuery(categories: string | undefined, canonical: string): boolean {
+  const want = (canonical ?? "").trim().toLowerCase();
+  if (!want) return false;
+  return (categories ?? "")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .some((c) => c === want);
+}
+
+/**
+ * 把请求类别里的配置类别名（大小写变体）归一成规范名后转发。
+ *
+ * searxng 按**字面**匹配类别（`categ in categories`），声明与请求必须同字串；
+ * 这里只在该类别确实出现时改写，未命中的请求逐字不动（保证既有行为零变化）。
+ */
+export function canonicalizeCategories(categories: string | undefined, canonical: string): string | undefined {
+  if (!categories || !canonical) return categories;
+  const want = canonical.toLowerCase();
+  const parts = categories.split(",").map((c) => c.trim());
+  if (!parts.some((c) => c.toLowerCase() === want)) return categories;
+  return parts
+    .filter((c) => c.length > 0)
+    .map((c) => (c.toLowerCase() === want ? canonical : c))
+    .join(",");
+}
+
+/**
+ * 图片查询的排序：不 embedding、不召回语料。
+ *
+ * 图片结果没有正文（embedding 只能拿标题，收益低），而语料是**文本**库——把图片
+ * 来源页写进语料会污染后续文本召回，反向召回文本条目又只会成为图片查询的噪声。
+ * 因此直接沿用 rerank 的 `score × boost` 顺序；多样性开启时只保留同注册域上限
+ * （λ=1 时 MMR 项失效，行为等于「按分排序 + 同域上限」）。
+ */
+export function selectImageResults(
+  results: CleanedResult[],
+  limit: number,
+  diversity: { enabled: boolean; mmrLambda: number; maxPerDomain: number },
+): CleanedResult[] {
+  if (!diversity.enabled) return results.slice(0, limit);
+  return mmrSelect(
+    results.map((item) => ({ score: item.score ?? 0, item })),
+    limit,
+    { mmrLambda: diversity.mmrLambda, maxPerDomain: diversity.maxPerDomain },
+    (c) => registeredDomainOfUrl(c.item.url),
+  ).map((c) => c.item);
+}
+
 /**
  * 类别感知的 searxng 超时（D18）：按请求类别顺序取第一个命中
  * `search.category_timeout_ms` 的值；未命中 → `searxngTimeoutMs`。
@@ -245,16 +308,6 @@ export function planEngines(
   return planEngineBatches(params, config, enabled, quota).map((b) => b.engines);
 }
 
-/** 取单条结果归属的引擎名（searxng 单引擎用 `engine`，多引擎合并用 `engines[]`）。 */
-function resultEngines(r: SearxngResult): string[] {
-  const out: string[] = [];
-  if (typeof r.engine === "string" && r.engine.length > 0) out.push(r.engine);
-  if (Array.isArray(r.engines)) {
-    for (const e of r.engines) if (typeof e === "string" && e.length > 0) out.push(e);
-  }
-  return out;
-}
-
 /**
  * 本批结果里是否有 rotating 候选贡献（用结果的 `engine` 字段判定）。
  * rotating 为空 → 视为贡献（该批没有 rotating 候选，回退旧语义）。
@@ -305,6 +358,8 @@ export interface SearchMetrics {
   semantic: SemanticTimings | null;
   /** 语义层是否降级（embedding/语料不可用或失败）。 */
   degraded: boolean;
+  /** 反向图搜（ADR-0010）：网关侧附加源的调用结果；未触发为 undefined。 */
+  reverseImage?: { source: string; ok: boolean; results: number; ms: number; error?: string };
 }
 
 /** 构造稳定缓存键（搜索参数 + 选中引擎批次 + 语料命名空间一致）。 */
@@ -410,14 +465,19 @@ export function createSearchService(
 
   async function search(params: SearchParams): Promise<SearchOutcome> {
     const tStart = performance.now();
+    // 反向图搜（ADR-0010）：类别命中才拉起网关侧附加源。命中时把类别名归一成
+    // 规范写法再转发（searxng 按字面匹配类别）；未命中则参数逐字不变。
+    const reverseCategory = config.searchReverseImageCategory;
+    const reverseImage =
+      config.searchReverseImageEnabled && isReverseImageQuery(params.categories, reverseCategory);
+    const categories = reverseImage ? canonicalizeCategories(params.categories, reverseCategory) : params.categories;
+    const effParams: SearchParams = categories === params.categories ? params : { ...params, categories };
+    const imageQuery = isImageQuery(effParams.categories, reverseImage ? [reverseCategory] : []);
     const enabled = await getEnabledEngines();
     const quota = await getQuota();
-    const batches = planEngineBatches(params, config, enabled, quota);
-    // 单一上限（search.max_results_cap）：agent 请求超过即按上限截断，不报错；
-    // 渲染时据 cappedAt/availableCount 在末尾附加说明。
-    const requested = params.numResults ?? config.searchMaxResults;
-    const limit = Math.min(requested, config.searchMaxResultsCap);
-    const key = cacheKey(params, batches.map((b) => b.engines), corpus?.namespace ?? "");
+    const batches = planEngineBatches(effParams, config, enabled, quota);
+    const limit = params.numResults ?? config.searchMaxResults;
+    const key = cacheKey(effParams, batches.map((b) => b.engines), corpus?.namespace ?? "");
     const cached = cache.get(key);
     if (cached !== undefined) {
       logger.debug(`search cache hit: "${params.query}"`);
@@ -443,11 +503,26 @@ export function createSearchService(
     const release = await sem.acquire();
     const preMs = performance.now() - tStart;
     // 语义层：query 向量不依赖候选 → 先起 Promise，与上游 searxng 召回 overlap（省一次串行等待）。
-    // provider/corpus 缺一即无语义层，无需发起；catch 兜底避免未被消费时产生 unhandled rejection。
+    // provider/corpus 缺一即无语义层，无需发起；图片查询不走语义层（见 selectImageResults）；
+    // catch 兜底避免未被消费时产生 unhandled rejection。
     let queryEmbed: Promise<EmbedResult> | undefined;
-    if (provider && corpus) {
+    if (provider && corpus && !imageQuery) {
       queryEmbed = provider.embed([params.query], "query");
       queryEmbed.catch(() => undefined);
+    }
+    // 反向图搜（ADR-0010）：网关侧附加源与 searxng 并发，两边都不等对方。
+    // 「图就是 query」——图片 URL 直接从 query 里取，没有额外输入字段。
+    const reverseUrl = reverseImage ? extractImageUrl(effParams.query) : undefined;
+    const tReverse = performance.now();
+    let reversePromise: Promise<TraceMoeCall> | undefined;
+    if (reverseUrl && config.searchReverseImageSources.includes("tracemoe")) {
+      reversePromise = searchTraceMoe(
+        config.searchTraceMoeUrl,
+        config.searchTraceMoeTimeoutMs,
+        reverseUrl,
+        config.searchTraceMoeMaxResults,
+      );
+      reversePromise.catch(() => undefined);
     }
     try {
       // 静默降级：按批次依次查询。**以「本批 rotating 候选是否产出结果」判定成功**：
@@ -461,14 +536,14 @@ export function createSearchService(
       let upstreamBatches = 0;
 
       // 类别感知超时（D18）：academic 等类别的引擎更慢，取该类别配置的超时
-      const searxngTimeoutMs = resolveSearxngTimeout(params, config);
+      const searxngTimeoutMs = resolveSearxngTimeout(effParams, config);
 
       for (const batch of batches) {
         const req: SearchRequest = {
-          query: params.query,
-          language: params.language,
-          safeSearch: params.safeSearch,
-          categories: params.categories,
+          query: effParams.query,
+          language: effParams.language,
+          safeSearch: effParams.safeSearch,
+          categories: effParams.categories,
           engines: batch.engines || undefined,
         };
 
@@ -491,37 +566,65 @@ export function createSearchService(
         );
       }
 
-      if (!lastData) {
+      // 反向图搜：等网关侧附加源（与上面的 searxng 批次并发），并汇总提示
+      const reverse = reversePromise ? await reversePromise : undefined;
+      const reverseMs = performance.now() - tReverse;
+      const reverseCount = reverse?.ok ? reverse.results.length : 0;
+      const notes: string[] = [];
+      if (reverseImage && !reverseUrl) {
+        notes.push(
+          "反向图搜：query 里没有图片 URL（http/https），已跳过网关侧图源；searxng 也只在 query 含图片 URL 时触发 tineye。",
+        );
+      } else if (reverse && !reverse.ok) {
+        notes.push(`反向图搜：网关侧图源 tracemoe 不可用（${reverse.error.kind}）——${reverse.error.message}`);
+      } else if (reverse?.ok && reverseCount === 0) {
+        const quota = reverse.quotaUsed !== undefined && reverse.quota !== undefined ? `（配额 ${reverse.quotaUsed}/${reverse.quota}）` : "";
+        notes.push(`反向图搜：网关侧图源 tracemoe 无匹配${quota}。`);
+      }
+
+      if (!lastData && reverseCount === 0) {
         // 上游失败：报错但尽量附语料召回结果
         const e = lastError ?? { kind: "network" as const, message: "no engine available" };
         let code: SearchOutcome["code"] = ErrorCodes.SEARCH_UPSTREAM;
         if (e.kind === "timeout") code = ErrorCodes.SEARCH_TIMEOUT;
         else if (e.kind === "invalid_json") code = ErrorCodes.SEARCH_INVALID;
         const errText = `搜索失败（${e.kind}${e.status ? ` ${e.status}` : ""}）：${e.message}\n\n请稍后重试，或更换关键词。`;
+        const noteText = notes.length > 0 ? `\n\n${notes.map((n) => `> ${n}`).join("\n>\n")}` : "";
 
         let recalled: CleanedResult[] = [];
-        try {
-          const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
-          recalled = r.results;
-        } catch (err) {
-          logger.warn(`语料召回失败: ${String(err)}`);
+        // 图片查询不混文本语料（语料是文本库，召回条目对图片查询只算噪声）
+        if (!imageQuery) {
+          try {
+            const r = await mergeAndRank(params.query, [], limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
+            recalled = r.results;
+          } catch (err) {
+            logger.warn(`语料召回失败: ${String(err)}`);
+          }
         }
         if (recalled.length > 0) {
-          return { ok: false, code, text: withCode(code, `${errText}\n\n## 结果（本地语料）\n\n${renderResults(recalled)}`) };
+          return {
+            ok: false,
+            code,
+            text: withCode(code, `${errText}${noteText}\n\n## 结果（本地语料）\n\n${renderResults(recalled)}`),
+          };
         }
-        return { ok: false, code, text: withCode(code, errText) };
+        return { ok: false, code, text: withCode(code, `${errText}${noteText}`) };
       }
 
-      const data = lastData;
-      const rawCount = data.results.length;
+      // searxng 失败但网关侧图源有结果 → 降级为部分成功（不报错）
+      const data: SearxngResponse = lastData ?? { query: effParams.query, results: [] };
+      if (!lastData) notes.push("searxng 未返回结果，以下仅来自网关侧图源。");
+      // 多源候选合并：按 URL 去重、引擎归属取并集（ADR-0010）
+      const candidates = reverse?.ok ? unionResults(data.results, reverse.results) : data.results;
+      const rawCount = candidates.length;
       const engineCounts: Record<string, number> = {};
-      for (const r of data.results) {
+      for (const r of candidates) {
         for (const e of resultEngines(r)) engineCounts[e] = (engineCounts[e] ?? 0) + 1;
       }
 
       // 轻量重排：绕过 searxng category 分组排序，按 score × boost 降序（语义不可用时的回退顺序）
       const tLocal = performance.now();
-      const reranked = rerankResults(data.results, {
+      const reranked = rerankResults(candidates, {
         enabled: config.rerankEnabled,
         engineBoost: config.rerankEngineBoost,
       });
@@ -535,36 +638,39 @@ export function createSearchService(
       });
       const localMs = performance.now() - tLocal;
 
-      // 合并语料召回 + 纯语义排序；失败则回退引擎分顺序
-      let ranked: CleanedResult[] = cleaned;
+      // 合并语料召回 + 纯语义排序；失败则回退引擎分顺序。
+      // 图片查询例外：不 embedding / 不召回 / 不写语料（见 selectImageResults）。
+      let ranked: CleanedResult[];
       let semanticTimings: SemanticTimings | null = null;
       let degraded = false;
-      // 截断前的候选总数（默认=清洗后候选；语义层返回合并去重后的总数）
-      let candidateCount = cleaned.length;
       const tMerge = performance.now();
-      try {
-        const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
-        ranked = merged.results;
-        semanticTimings = merged.timings ?? null;
-        degraded = merged.degraded;
-        candidateCount = merged.total;
-      } catch (err) {
-        logger.warn(`语义重排失败，回退引擎分顺序: ${String(err)}`);
-        ranked = cleaned.slice(0, limit);
-        degraded = true;
+      if (imageQuery) {
+        ranked = selectImageResults(cleaned, limit, diversity);
+      } else {
+        ranked = cleaned;
+        try {
+          const merged = await mergeAndRank(params.query, cleaned, limit, { provider, corpus, recallK, diversity, authority, queryEmbed });
+          ranked = merged.results;
+          semanticTimings = merged.timings ?? null;
+          degraded = merged.degraded;
+        } catch (err) {
+          logger.warn(`语义重排失败，回退引擎分顺序: ${String(err)}`);
+          ranked = cleaned.slice(0, limit);
+          degraded = true;
+        }
       }
       const mergeMs = performance.now() - tMerge;
 
       const tRender = performance.now();
-      const text = renderSearchMarkdown({
-        query: params.query,
+      const rendered = renderSearchMarkdown({
+        query: effParams.query,
         raw: data,
         results: ranked,
         latencyMs,
         skipped: blockedCount > 0 ? blockedCount : undefined,
-        cappedAt: requested > limit ? limit : undefined,
-        availableCount: candidateCount,
       });
+      // 反向图搜的降级/无匹配提示（只在该路径下出现，正常搜索逐字不变）
+      const text = notes.length > 0 ? `${rendered}\n\n${notes.map((n) => `> ${n}`).join("\n>\n")}` : rendered;
       const renderMs = performance.now() - tRender;
 
       const totalMs = performance.now() - tStart;
@@ -583,6 +689,15 @@ export function createSearchService(
         residualMs: totalMs - preMs - upstreamMs - localMs - mergeMs - renderMs,
         semantic: semanticTimings,
         degraded,
+        reverseImage: reverse
+          ? {
+              source: "tracemoe",
+              ok: reverse.ok,
+              results: reverseCount,
+              ms: reverseMs,
+              error: reverse.ok ? undefined : reverse.error.kind,
+            }
+          : undefined,
       });
 
       cache.set(key, text);

@@ -254,12 +254,12 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
     "search",
     {
       description:
-        "搜索网页，返回 markdown 文本结果。查询会聚合多个搜索引擎（searxng），自动过滤广告/垃圾域名，并置顶直接回答/建议等元数据。指定 categories 非 general 类别（如 images、academic）时只走该类别的引擎；images 类别返回图片直链（markdown 图片），可再交给 fetch 落盘。",
+        "搜索网页，返回 markdown 文本结果。查询会聚合多个搜索引擎（searxng），自动过滤广告/垃圾域名，并置顶直接回答/建议等元数据。指定 categories 非 general 类别（如 images、academic）时只走该类别的引擎；images 类别返回图片直链（markdown 图片），可再交给 fetch 落盘。以图搜图用 categories=search_by_image 且 query 直接给图片 URL（http/https）：同时走 searxng 的 tineye 与 trace.moe（动画截图匹配），结果按 URL 合并后统一排序。",
       inputSchema: {
-        query: z.string().describe("搜索关键词"),
+        query: z.string().describe("搜索关键词；以图搜图时直接给图片 URL（http/https）"),
         language: z.string().optional().describe("语言代码，如 en/zh-CN，默认按 searxng 实例"),
         safesearch: z.enum(["0", "1", "2"]).optional().describe("安全搜索：0 无/1 中/2 严"),
-        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；images（图片直链）、academic（科研/知网）"),
+        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；images（图片直链）、academic（科研/知网）、search_by_image（以图搜图，query 需为图片 URL）"),
         engines: z.string().optional().describe("指定搜索引擎，逗号分隔"),
         min_score: z.number().min(0).max(1).optional().describe("最低相关度分数 0-1"),
         num_results: z

@@ -32,6 +32,16 @@ engines:
     shortcut: you
     disabled: true
 
+  # ── tineye:以图搜图（searxng 上游自带，engine_type=online_url_search，免 key）──
+  # 只服务于请求类别 `search_by_image`（网关侧触发，见 ADR-0010）；不在 general 类出现。
+  # 要求 query 里出现图片 URL（http/https）或 data:image —— 图片由 TinEye 侧拉取，
+  # 因此 URL 必须公网可达（本机 /files/<id> 之类的内网地址不可用）。
+  - name: tineye
+    engine: tineye
+    categories: [search_by_image]
+    timeout: 15.0
+    disabled: false
+
   # ── cnki:知网学术检索(KNS 站内接口,零凭据)──
   # 权限绑定机构出口 IP;全局配了代理时默认绕开(network.proxies 置空)。
   # 若代理本身就在机构出口,删掉 network 即可。

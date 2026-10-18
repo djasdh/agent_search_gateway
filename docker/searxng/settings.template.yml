@@ -145,3 +145,12 @@ engines:
     # 不要写 timeout：引擎在 init() 里按 page_size × num_pages 自算总超时并
     # 汇报给 searxng；手写会盖掉它。
     disabled: false
+
+  # 以图搜图：searxng 上游自带的 tineye（engine_type=online_url_search，免 key）。
+  # 只服务于请求类别 `search_by_image`（网关侧触发，见 ADR-0010），不在 general 类出现。
+  # 要求 query 里出现图片 URL（http/https）——图片由 TinEye 侧拉取，URL 必须公网可达。
+  - name: tineye
+    engine: tineye
+    categories: [search_by_image]
+    timeout: 15.0
+    disabled: false

@@ -31,7 +31,7 @@ gateway (本服务, :3000/mcp)
 
 | 工具 | 说明 |
 |---|---|
-| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results/fanout。`num_results` 上限由 `search.max_results_cap` 决定，超出按上限截断并在结果末尾说明 |
+| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results；`categories=images` 时返回图片直链，`academic` 时走科研/知网，`search_by_image` 时以图搜图（query 给图片 URL） |
 | `fetch` | 抓取 URL：网页→md；纯文本/JSON/CSV/XML 直接返回；PDF 抽正文；图片等二进制落盘并返回路径与 `/files/<id>` 链接。参数：url/max_chars |
 | `browser_navigate` | 浏览器打开 URL，返回无障碍树快照（省 token） |
 | `browser_snapshot` | 当前页无障碍树快照，可选 target 限定 |
@@ -173,7 +173,7 @@ gateway:        # host/port/token
 logging:        # level/file
 searxng:        # url/timeout_ms
 flaresolverr:   # url/enabled/timeout_ms/max_concurrent/trigger_status/fallback_on_empty
-search:         # max_results/max_results_cap/max_result_chars/cache_ttl_ms/cache_max_entries/max_concurrent
+search:         # max_results/max_result_chars/cache_ttl_ms/cache_max_entries/max_concurrent
 fetch:          # timeout_ms/max_bytes/user_agent/block_private_ips/structural/max_output_chars/cache_ttl_ms/cache_max_entries/max_download_bytes/download_dir/download_ttl_ms/download_max_total_bytes/files_route
 ad_filter:      # enabled/level(off|ads|ads+tracking|full)/extra_domains/hosts_file/allowlist
 browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufox预留)/proxy_*/wait_for_selector/screenshot
@@ -209,6 +209,40 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 二进制结果**不写** fetch 文本缓存，避免文件被 TTL 清走后链接失效。
 - 目录布局：`<download_dir>/<前两位>/<sha256><扩展名>` + 同名 `.json` 侧车。
 
+### 图片搜索（`categories=images`）
+
+`search` 传 `categories=images` 即只走 searxng 的图片引擎（非 general 类别会抑制常驻/轮换源，ADR-0008），返回图片**直链**：
+
+- 结果以 markdown 图片给出：`![标题](图片直链)`，下一行附来源页、分辨率、格式、图片来源与引擎、score；
+- 只有缩略图时会标注「缩略图」并沿用缩略图直链；
+- 拿到直链后可再调 `fetch` 把原图落盘到 `/data/downloads` 并得到 `/files/<id>` 链接；
+- **不走语义层**：不调 embedding、不召回文本语料、不把图片来源页写进语料（图片结果没有正文；图片源页进文本语料会污染后续文本召回）；
+- 排序沿用 `rerank`（`score × engine_boost`）；`rerank.diversity` 开启时按同注册域上限去冗余；
+- 图片引擎在 searxng 的 `settings.yml` 里配置（默认可用 `bing images`、`duckduckgo images`、`openverse`、`wikicommons.images`；国内出口可再加 `baidu images`、`sogou images`）；
+- 图片建议显式传 `safesearch`（searxng 的 `search.safe_search` 默认 1）。
+
+### 以图搜图（`categories=search_by_image`）
+
+`search` 传 `categories=search_by_image`，并让 **`query` 直接是图片 URL**（http/https），即同时启用两个源（ADR-0010）：
+
+| 源 | 承载方 | 说明 |
+|---|---|---|
+| searxng 的 `tineye` | searxng 引擎（上游自带） | 需要在 searxng 的 `settings.yml` 里给 tineye 声明 `categories: [search_by_image]`（见 `searxng-ext/settings.example.yml` / `docker/searxng/settings.template.yml`）；网关不点名引擎 |
+| `trace.moe` | 网关侧附加源 | 动画截图匹配（AniList 标题/集数/时间点）；免 key、按 IP 限 100 次/日 |
+
+```jsonc
+// 示例：以图搜图
+{ "query": "https://example.com/some-image.jpg", "categories": "search_by_image" }
+```
+
+- **「图就是 query」**：图片 URL 写在 `query` 里（与 searxng 的 `online_url_search` 同形），没有额外的上传字段；query 里没有 http(s) URL 时会附一条提示并只走 searxng（searxng 也不会触发 tineye）。
+- 两边候选统一成同一线格式后**按 URL 去重**（同 URL 的引擎归属并写入 `engines[]`），再走与 `categories=images` 完全相同的排序/渲染管线（图片直链 + 不走语义层）。
+- 排序：图片查询没有文本 query 向量，故按 `score`（tineye 的匹配分 / trace.moe 的 similarity）× `engine_boost`，`rerank.diversity` 开启时同注册域去冗余。
+- **不支持本地图片文件**：TinEye 是服务端拉图，URL 必须公网可达；trace.moe 虽支持上传，但只覆盖一个源（记在 `TODO.md`）。
+- 失败不致命：单个源失败/无匹配时返回另一边的结果，并在结果末尾附一条提示（`反向图搜：…`）。
+- **部署检查**：searxng 若没声明该类别，请求会被静默过滤、回落成 `general` 搜索（不报错）。验证：`curl -s localhost:8888/config | grep search_by_image`。
+- 相关配置在 `gateway.yaml` 的 `search.reverse_image`（开关 / 触发类别 / 附加源清单 / trace.moe 地址与超时）。
+
 ### searxng 配置分工（gateway.yaml vs settings.yml）
 
 搜索系统的 searxng 相关配置分两层，**各读各的，不重复**：
@@ -237,7 +271,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 - 开关：`embedding.enabled` + `corpus.enabled`；都关闭时行为与旧版完全一致。
 - 来源：外部 embedding API（OpenAI 兼容 `/embeddings` 或 Ollama `/api/embed`），**不内置本地模型**；自托管 embedding 可行但非建议（见 `docs/adr/0005`）。
-- 机制：每次搜索把结果写入本地语料库（按 URL 去重、TTL 30 天），并用 query 向量 KNN 召回；召回条目与上游结果按 URL 合并去重后**按纯语义排序**，条目标注「本地缓存 · 抓取于 X」。
+- 机制：每次搜索把结果写入本地语料库（按 URL 去重、TTL 30 天），并用 query 向量 KNN 召回；召回条目与上游结果按 URL 合并去重后**按纯语义排序**，条目标注「本地缓存 · 抓取于 X」。图片查询（`categories=images`）是例外：不写语料、不召回、不 embedding。
 - 降级：embedding 不可用或调用失败时回退为 `score × engine_boost` 排序；上游请求失败时返回错误码并尽量附语料召回结果。
 - 依赖：`sqlite-vec` 随 npm 安装自带平台二进制，无需手动装扩展。
 - 模型切换：命名空间为 `provider:model@dim`；换模型产生新命名空间，旧向量保留但不参与（多命名空间并存，见 `docs/adr/0001`–`0006`）。
@@ -260,7 +294,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 ## 测试与压测
 
-- `npm test`：227 个测试（28 个测试文件）
+- `npm test`：256 个测试（30 个测试文件）
 - `scripts/bench.sh`：测量各组件内存/延迟，验证 3.8GB 预算
 
 实测（本机模拟）：
