@@ -31,7 +31,7 @@ gateway (本服务, :3000/mcp)
 
 | 工具 | 说明 |
 |---|---|
-| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results；`categories=images` 时返回图片直链，`academic` 时走科研/知网，`search_by_image` 时以图搜图（query 给图片 URL） |
+| `search` | 搜索网页，返回纯 md（直接回答/纠正/建议/infobox 置顶 + 结果列表）。参数：query/language/safesearch/categories/engines/min_score/num_results；`categories=images` 时返回图片直链，`academic` 时走科研/知网，`search_by_image` 时以图搜图（query 给图片 URL，或 image_path 给本地图片） |
 | `fetch` | 抓取 URL：网页→md；纯文本/JSON/CSV/XML 直接返回；PDF 抽正文；图片等二进制落盘并返回路径与 `/files/<id>` 链接。参数：url/max_chars |
 | `browser_navigate` | 浏览器打开 URL，返回无障碍树快照（省 token） |
 | `browser_snapshot` | 当前页无障碍树快照，可选 target 限定 |
@@ -242,6 +242,23 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 失败不致命：单个源失败/无匹配时返回另一边的结果，并在结果末尾附一条提示（`反向图搜：…`）。
 - **部署检查**：searxng 若没声明该类别，请求会被静默过滤、回落成 `general` 搜索（不报错）。验证：`curl -s localhost:8888/config | grep search_by_image`。
 - 相关配置在 `gateway.yaml` 的 `search.reverse_image`（开关 / 触发类别 / 附加源清单 / trace.moe 地址与超时）。
+
+#### 本地图片（`image_path`）
+
+`image_path` 给一张**网关所在机器上**的图片路径（MCP 没有上传通道，所以是同机路径），与 `query` 里的图片 URL **互斥**：
+
+```jsonc
+{ "query": "", "image_path": "/tmp/shot.jpg", "categories": "search_by_image" }
+```
+
+- **trace.moe 直传**：图片字节以 multipart 上传（`POST /search`，字段 `image`），**不经图床、图不外流**，所以图床不可用时它照样出结果。
+- **要 tineye 参与就得发布**：tineye 的图片是 **TinEye 服务器**去拉的，必须给一个**公网可达的图片 URL** → 网关先把图发布到图床（`search.reverse_image.publish`，uguu/pomf 协议，默认 `https://uguu.se/upload?output=json`），再拿返回的 URL 当 searxng 的 query。
+  - ⚠️ **这一步会把图上传到公网第三方**：图公网可见、由对方按其 TTL 删除（uguu 为 **3 小时**），对方还会保留短时的**上传 IP / 文件名 / 哈希**日志。只有显式传 `image_path` 才会发生；`query` 给 URL 的老路径不发布。不想要就设 `publish.enabled: false`。
+  - 发布前做三重校验：常规文件、大小 ≤ `local_max_bytes`（默认 5MiB）、**magic bytes 必须是图片** → 不可能把配置/密钥之类的文件发出去。
+  - 发布失败**不影响**结果：跳过 searxng，只返回 trace.moe 的结果并附一条提示。
+  - 想换图床（含自建 pomf/uguu 实例）：改 `publish.endpoint` 即可，协议同形。
+- 本地图请求**不写搜索缓存**（同路径文件内容会变），渲染标题退化为文件名。
+- 出处/留存等细节见 `docs/adr/0011`。
 
 ### searxng 配置分工（gateway.yaml vs settings.yml）
 

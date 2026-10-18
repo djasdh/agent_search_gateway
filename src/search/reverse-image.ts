@@ -148,23 +148,18 @@ export function traceMoeToResults(resp: TraceMoeResponse, maxResults: number): S
 }
 
 /**
- * 按 query 里的图片 URL 调 trace.moe。失败不抛裸异常，返回结构化错误
+ * 调 trace.moe 并按统一口径解析。失败不抛裸异常，返回结构化错误
  * （与 `searchSearxng` 同风格），调用方据此决定是否附提示。
  */
-export async function searchTraceMoe(
-  baseUrl: string,
+async function callTraceMoe(
+  url: string,
   timeoutMs: number,
-  imageUrl: string,
+  init: RequestInit,
   maxResults: number,
 ): Promise<TraceMoeCall> {
-  const params = new URLSearchParams();
-  params.set("url", imageUrl);
-  params.set("anilistInfo", "1");
-  const url = `${baseUrl.replace(/\/+$/, "")}/search?${params.toString()}`;
-
   const start = Date.now();
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), redirect: "follow" });
+    const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs), redirect: "follow" });
     const latencyMs = Date.now() - start;
     if (!res.ok) {
       return { ok: false, error: { kind: "http", status: res.status, message: `trace.moe HTTP ${res.status}` } };
@@ -197,6 +192,42 @@ export async function searchTraceMoe(
         : { kind: "network", message: err instanceof Error ? err.message : String(err) },
     };
   }
+}
+
+/** 按图片 URL 调 trace.moe（`GET /search?url=`）。 */
+export function searchTraceMoe(
+  baseUrl: string,
+  timeoutMs: number,
+  imageUrl: string,
+  maxResults: number,
+): Promise<TraceMoeCall> {
+  const params = new URLSearchParams();
+  params.set("url", imageUrl);
+  params.set("anilistInfo", "1");
+  const url = `${baseUrl.replace(/\/+$/, "")}/search?${params.toString()}`;
+  return callTraceMoe(url, timeoutMs, {}, maxResults);
+}
+
+/**
+ * 直接把图片字节上传给 trace.moe（`POST /search`，multipart 字段 `image`）。
+ *
+ * 本地图片（`image_path`）走这条：**不经图床**，图不外流，因此图床不可用时
+ * trace.moe 这一半仍然可用。实测三种形态都收（`image` / `file` / raw body）。
+ */
+export function searchTraceMoeUpload(
+  baseUrl: string,
+  timeoutMs: number,
+  bytes: Uint8Array,
+  filename: string,
+  mime: string,
+  maxResults: number,
+): Promise<TraceMoeCall> {
+  const params = new URLSearchParams();
+  params.set("anilistInfo", "1");
+  const url = `${baseUrl.replace(/\/+$/, "")}/search?${params.toString()}`;
+  const form = new FormData();
+  form.append("image", new Blob([bytes as BlobPart], { type: mime }), filename);
+  return callTraceMoe(url, timeoutMs, { method: "POST", body: form }, maxResults);
 }
 
 /**

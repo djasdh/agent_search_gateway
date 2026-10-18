@@ -7,7 +7,7 @@
 
 两边的候选统一成 `SearxngResult` 线格式，按**规范化 URL 去重**（同 URL 的引擎归属取并集写进 `engines[]`），然后进现有排序尾部（`rerank` → `cleanResults` → `selectImageResults`）——与今天 `categories=images` 完全同一条管线。
 
-**输入契约：「图就是 query」。** 图片以 URL 形式写在 `query` 里（与 searxng `online_url_search` 的 `search_syntax` 同形：`https?://[^ ]*`），网关与 searxng 从同一处取它。不新增 `image_url` / 上传通道，也不支持「文本 query + 图片」同时给。
+**输入契约：「图就是 query」。** 图片以 URL 形式写在 `query` 里（与 searxng `online_url_search` 的 `search_syntax` 同形：`https?://[^ ]*`），网关与 searxng 从同一处取它。本 ADR 不新增输入字段，也不支持「文本 query + 图片」同时给；**本地图片文件**另见 ADR-0011（`image_path` + 可选公网发布）。
 
 ## Considered Options
 
@@ -15,7 +15,7 @@
 - **把 trace.moe 做成 searxng 引擎**：要么在 Python 侧重算图向量（ColorLayout，需移植算法与依赖），要么给 searxng 加向量服务；两条都要动 searxng 运行时，且 ADR-0006 的"检索留在 searxng"本意是**避免网关侧 provider 抽象**，不是"禁止任何网关侧出口"；被否。
 - **引入 `trace.moe-id`（MIT）在网关侧本地算向量**，再打 trace.moe 的 `vector` 接口：可以做到图不外传、免上传，但把算法版本与本地依赖（sharp/Node 侧计算）耦合进网关，收益只是"少一次上传"；被否（记录在此，将来若要求"图不外传"再评估）。
 - **有序 + 顺序降级（单一源胜出）**：会白白丢掉另一源的候选，而排序层已经是"向量 + 算法"（ADR-0002），降级属于退回旧假设；被否。
-- **本地上传图片**：tineye 是 `online_url_search`，图片由 **TinEye 侧拉取**，要求公网可达 URL —— 本机 `/files/<id>` 之类的内网地址不成立；trace.moe 虽支持 multipart 上传，但只覆盖一个源。故本期不做，见下方 Consequences。
+- **本地上传图片**：tineye 是 `online_url_search`，图片由 **TinEye 侧拉取**，要求公网可达 URL —— 本机 `/files/<id>` 之类的内网地址不成立。**ADR-0011 已解决**：本地图走 trace.moe multipart 直传，另由图床发布拿到公网 URL 供 tineye 使用。
 
 ## Consequences
 

@@ -49,10 +49,10 @@ search:
   category_timeout_ms:
     academic: 25000
     search_by_image: 25000   # 以图搜图：tineye 要等 TinEye 侧拉图，给足时间
-  # 以图搜图（reverse image search，ADR-0010）：query 直接给图片 URL（http/https）+
-  # categories 含 search_by_image 时触发。searxng 侧由 tineye 引擎承担（需在 searxng 的
-  # settings.yml 里给 tineye 声明该类别，见 README），网关侧再并发扇出 sources 列的附加源；
-  # 两边候选按 URL 去重合并后进现有排序。图不是 URL（本地文件）时无法使用——TinEye 侧要拉公网 URL。
+  # 以图搜图（reverse image search，ADR-0010/0011）：query 直接给图片 URL（http/https），
+  # 或改用 image_path 给本地图片路径（两者互斥；本地图只在以图搜图时可用）。
+  # searxng 侧由 tineye 引擎承担（需在 searxng 的 settings.yml 里给 tineye 声明该类别，见 README），
+  # 网关侧再并发扇出 sources 列的附加源；两边候选按 URL 去重合并后进现有排序。
   reverse_image:
     enabled: true
     category: search_by_image    # 触发类别（网关侧大小写不敏感，转发时用此规范名）
@@ -60,6 +60,15 @@ search:
     tracemoe_url: https://api.trace.moe
     tracemoe_timeout_ms: 15000
     tracemoe_max_results: 8      # 附加源候选上限（合并前）
+    local_max_bytes: 5242880     # image_path 读取上限（multipart 直传与图床发布共用）
+    # 本地图专用：tineye 要由 TinEye 服务器拉图，所以本地文件必须先发布到公网图床。
+    # ⚠️ 开启即代表允许把 image_path 指定的图片传到公网第三方（公网可见；uguu 3 小时后自动删，
+    #    并保留短时的上传 IP/文件名/哈希日志）。只有显式传 image_path 时才会用到。
+    # endpoint 用 uguu/pomf 上传协议：POST {endpoint}，multipart 字段 files[] → files[0].url。
+    publish:
+      enabled: true
+      endpoint: https://uguu.se/upload?output=json   # 也可指向自建 pomf/uguu 实例
+      timeout_ms: 20000
 
 rerank:
   enabled: true
@@ -106,6 +115,7 @@ ad_filter:
   auto_update_interval_ms: 86400000   # 过期阈值 24h
   # 保白名单：这些域名即使命中黑名单也保留（防误杀）
   allowlist:
+    - uguu.se          # 以图搜图的本地图图床（发布出去的直链别被我们自己的过滤挡掉）
     - wikipedia.org
     - github.com
     - github.io

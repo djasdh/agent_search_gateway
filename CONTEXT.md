@@ -49,8 +49,12 @@ _Avoid_: 第二上游, provider, 备源
 _Avoid_: 搜索, 查询, search
 
 **反向图搜**:
-以一张图片（以 URL 形式写在 `query` 里）为查询的检索；由类别 `search_by_image` 触发，同时启用 searxng 的 tineye 与附加源 trace.moe。
+以一张图片（以 URL 形式写在 `query` 里，或用 `image_path` 给本地文件）为查询的检索；由类别 `search_by_image` 触发，同时启用 searxng 的 tineye 与附加源 trace.moe。
 _Avoid_: 以图搜图, 图片搜索, reverse image search（同一概念的英文/俗称，正文可用，**不要**当成两个词）
+
+**公网发布**:
+把一张本地图片交给第三方图床、换取**公网可达 URL** 的动作。只为满足"图片由对方服务器拉取"的源（tineye）而存在；trace.moe 走直传、不需要它。图会公网可见，故只在显式给 `image_path` 时发生（ADR-0011）。
+_Avoid_: 上传, 图床（"图床"指服务本身，本概念指动作）
 
 **取件**:
 按一个具体 URL 取得**一个**资源（网页或文件）的动作；一进一出、无聚合，因此发生在网关内。

@@ -1,5 +1,8 @@
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { GatewayConfig } from "../src/config.js";
 import type { DomainFilter } from "../src/filter/domain-filter.js";
@@ -7,6 +10,7 @@ import type { Logger } from "../src/logger.js";
 import {
   extractImageUrl,
   searchTraceMoe,
+  searchTraceMoeUpload,
   traceMoeToResults,
   unionResults,
   type TraceMoeResponse,
@@ -155,33 +159,43 @@ let traceServer: ReturnType<typeof createHttpServer>;
 let tracePort = 0;
 let traceMode: "ok" | "http500" | "apierror" | "notjson" = "ok";
 let lastTraceQuery: URLSearchParams | undefined;
+let lastTraceMethod = "";
+let lastTraceBody = "";
+let lastTraceContentType = "";
 
 beforeAll(async () => {
   traceServer = createHttpServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     lastTraceQuery = url.searchParams;
-    if (traceMode === "http500") {
-      res.statusCode = 500;
-      res.end("boom");
-      return;
-    }
-    res.setHeader("Content-Type", "application/json");
-    if (traceMode === "apierror") {
-      res.end(JSON.stringify({ quota: 100, quotaUsed: 100, error: "Invalid image url" }));
-      return;
-    }
-    if (traceMode === "notjson") {
-      res.end("<html>nope</html>");
-      return;
-    }
-    res.end(
-      JSON.stringify({
-        quota: 100,
-        quotaUsed: 3,
-        error: "",
-        result: [{ anilist: { id: 1, title: { chinese: "某番" } }, episode: 2, similarity: 0.8, at: 61, image: "https://api.trace.moe/image/z" }],
-      }),
-    );
+    lastTraceMethod = req.method ?? "";
+    lastTraceContentType = String(req.headers["content-type"] ?? "");
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c as Buffer));
+    req.on("end", () => {
+      lastTraceBody = Buffer.concat(chunks).toString("latin1");
+      if (traceMode === "http500") {
+        res.statusCode = 500;
+        res.end("boom");
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      if (traceMode === "apierror") {
+        res.end(JSON.stringify({ quota: 100, quotaUsed: 100, error: "Invalid image url" }));
+        return;
+      }
+      if (traceMode === "notjson") {
+        res.end("<html>nope</html>");
+        return;
+      }
+      res.end(
+        JSON.stringify({
+          quota: 100,
+          quotaUsed: 3,
+          error: "",
+          result: [{ anilist: { id: 1, title: { chinese: "某番" } }, episode: 2, similarity: 0.8, at: 61, image: "https://api.trace.moe/image/z" }],
+        }),
+      );
+    });
   });
   await new Promise<void>((r) => traceServer.listen(0, "127.0.0.1", r));
   tracePort = (traceServer.address() as AddressInfo).port;
@@ -238,6 +252,21 @@ describe("searchTraceMoe", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(["network", "timeout"]).toContain(r.error.kind);
   });
+
+  it("本地图走 multipart 直传：POST + 字段 image + 原始字节（图不经图床）", async () => {
+    traceMode = "ok";
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    const r = await searchTraceMoeUpload(base(), 3000, bytes, "shot.jpg", "image/jpeg", 8);
+    expect(lastTraceMethod).toBe("POST");
+    expect(lastTraceContentType).toContain("multipart/form-data; boundary=");
+    expect(lastTraceQuery?.get("anilistInfo")).toBe("1");
+    expect(lastTraceQuery?.get("url")).toBeNull();
+    expect(lastTraceBody).toContain('name="image"');
+    expect(lastTraceBody).toContain('filename="shot.jpg"');
+    expect(lastTraceBody).toContain("Content-Type: image/jpeg");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.results).toHaveLength(1);
+  });
 });
 
 // ── 服务级：类别触发的多源扇出 ──
@@ -246,8 +275,16 @@ let searxServer: ReturnType<typeof createHttpServer>;
 let searxPort = 0;
 let searxCategories: string[] = [];
 let searxEngines: Array<string | null> = [];
+let searxQueries: string[] = [];
 let searxFail = false;
 let searxResults: Array<Record<string, unknown>> = [];
+
+// mock 图床（uguu/pomf 协议）；记录收到的 multipart 原文以便断言
+let publishServer: ReturnType<typeof createHttpServer>;
+let publishPort = 0;
+let publishMode: "ok" | "apifail" | "http500" = "ok";
+let publishBody = "";
+let publishCalls = 0;
 
 function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   return {
@@ -277,6 +314,10 @@ function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
     searchTraceMoeUrl: `http://127.0.0.1:${tracePort}`,
     searchTraceMoeTimeoutMs: 3000,
     searchTraceMoeMaxResults: 8,
+    searchReverseImageLocalMaxBytes: 5 * 1024 * 1024,
+    searchReverseImagePublishEnabled: true,
+    searchReverseImagePublishEndpoint: `http://127.0.0.1:${publishPort}/upload?output=json`,
+    searchReverseImagePublishTimeoutMs: 3000,
     rerankEnabled: true,
     rerankEngineBoost: {},
     rerankDiversityEnabled: false,
@@ -303,6 +344,7 @@ beforeAll(async () => {
       res.end(JSON.stringify({ engines: [{ name: "exaapi", enabled: true }] }));
       return;
     }
+    searxQueries.push(url.searchParams.get("q") ?? "");
     searxCategories.push(url.searchParams.get("categories") ?? "");
     searxEngines.push(url.searchParams.get("engines"));
     if (searxFail) {
@@ -314,10 +356,33 @@ beforeAll(async () => {
   });
   await new Promise<void>((r) => searxServer.listen(0, "127.0.0.1", r));
   searxPort = (searxServer.address() as AddressInfo).port;
+
+  publishServer = createHttpServer((req, res) => {
+    publishCalls++;
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c as Buffer));
+    req.on("end", () => {
+      publishBody = Buffer.concat(chunks).toString("latin1");
+      if (publishMode === "http500") {
+        res.statusCode = 500;
+        res.end("nope");
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      if (publishMode === "apifail") {
+        res.end(JSON.stringify({ success: false, error: "File too large" }));
+        return;
+      }
+      res.end(JSON.stringify({ success: true, files: [{ url: "https://n.uguu.se/published.jpg" }] }));
+    });
+  });
+  await new Promise<void>((r) => publishServer.listen(0, "127.0.0.1", r));
+  publishPort = (publishServer.address() as AddressInfo).port;
 });
 
 afterAll(() => {
   searxServer.close();
+  publishServer.close();
 });
 
 describe("createSearchService 反向图搜扇出（ADR-0010）", () => {
@@ -419,5 +484,157 @@ describe("createSearchService 反向图搜扇出（ADR-0010）", () => {
     expect(r.ok).toBe(true);
     expect(lastTraceQuery).toBeUndefined();
     expect(r.text).not.toContain("反向图搜");
+  });
+});
+
+// ── 本地图片（image_path）：trace.moe 直传 + 可选公网发布（ADR-0011） ──
+
+/** 最小合法 JPEG 头（≥12 字节）。 */
+const LOCAL_JPEG = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]),
+  Buffer.alloc(64, 0x5a),
+]);
+
+describe("createSearchService 本地图片（image_path）", () => {
+  let dir = "";
+  let imgPath = "";
+  let txtPath = "";
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "revimg-local-"));
+    imgPath = join(dir, "shot.jpg");
+    txtPath = join(dir, "secret.txt");
+    await writeFile(imgPath, LOCAL_JPEG);
+    await writeFile(txtPath, "这不是图片\n");
+  });
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const reset = (mode: "ok" | "apifail" | "http500" = "ok") => {
+    traceMode = "ok";
+    publishMode = mode;
+    searxFail = false;
+    searxCategories = [];
+    searxEngines = [];
+    searxQueries = [];
+    searxResults = [];
+    publishBody = "";
+    publishCalls = 0;
+    lastTraceMethod = "";
+    lastTraceQuery = undefined;
+  };
+
+  const tinEyeHit = {
+    url: "https://backlink.example/page",
+    title: "TinEye Hit",
+    engine: "tineye",
+    img_src: "https://backlink.example/pic.jpg",
+    thumbnail_src: "https://tineye.example/thumb.jpg",
+    score: 0.7,
+  };
+
+  it("发布成功 → trace.moe 直传 + searxng 用发布到的公网 URL（tineye 参与）", async () => {
+    reset("ok");
+    searxResults = [tinEyeHit];
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    // trace.moe：POST multipart 直传本地字节（不借助图床）
+    expect(lastTraceMethod).toBe("POST");
+    expect(publishBody).toContain('name="files[]"');
+    expect(publishBody).toContain('filename="shot.jpg"');
+    // searxng：query 用的是发布出来的公网 URL，类别照旧转发、引擎留空
+    expect(searxQueries).toEqual(["https://n.uguu.se/published.jpg"]);
+    expect(searxCategories).toEqual(["search_by_image"]);
+    expect(searxEngines).toEqual([null]);
+    // 两源结果合并；标题用本地文件名（没有 query 文本）
+    expect(r.text).toContain("TinEye Hit");
+    expect(r.text).toContain("某番 · 第 2 集");
+    expect(r.text).toContain("# Search: 本地图片 shot.jpg");
+    expect(r.text).toContain("已发布到公网图床");
+  });
+
+  it("发布失败 → 跳过 searxng，只返回 trace.moe 结果 + 提示", async () => {
+    reset("apifail");
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    expect(searxQueries).toEqual([]); // 没有公网 URL → 不调 searxng
+    expect(r.text).toContain("某番 · 第 2 集");
+    expect(r.text).toContain("图床发布失败");
+    expect(r.text).toContain("File too large");
+  });
+
+  it("publish 关闭 → 只走 trace.moe，并说明 tineye 未参与", async () => {
+    reset("ok");
+    const svc = createSearchService(makeConfig({ searchReverseImagePublishEnabled: false }), domainFilter, silentLogger);
+    const r = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
+    expect(r.ok).toBe(true);
+    expect(publishCalls).toBe(0);
+    expect(searxQueries).toEqual([]);
+    expect(r.text).toContain("publish 未启用");
+  });
+
+  it("trace.moe 也失败（图床失败）→ 报错并附原因", async () => {
+    reset("http500");
+    traceMode = "http500";
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("[SEARCH_UPSTREAM]");
+    expect(r.text).toContain("tracemoe 不可用");
+    expect(r.text).toContain("图床发布失败");
+  });
+
+  it("非图片文件 → 明确拒绝（不读不传）", async () => {
+    reset("ok");
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: "", imagePath: txtPath, categories: "search_by_image" });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("[SEARCH_INVALID]");
+    expect(r.text).toContain("not_image");
+    expect(publishCalls).toBe(0);
+    expect(lastTraceMethod).toBe("");
+  });
+
+  it("文件不存在 → not_found；目录 → not_file", async () => {
+    reset("ok");
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const a = await svc.search({ query: "", imagePath: join(dir, "nope.jpg"), categories: "search_by_image" });
+    expect(a.ok).toBe(false);
+    expect(a.text).toContain("not_found");
+    const b = await svc.search({ query: "", imagePath: dir, categories: "search_by_image" });
+    expect(b.ok).toBe(false);
+    expect(b.text).toContain("not_file");
+  });
+
+  it("image_path 与 query 里的图片 URL 互斥", async () => {
+    reset("ok");
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: IMG, imagePath: imgPath, categories: "search_by_image" });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("[SEARCH_INVALID]");
+    expect(r.text).toContain("只能给一个");
+  });
+
+  it("没带以图搜图类别时给 image_path → 明确报错", async () => {
+    reset("ok");
+    const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
+    const r = await svc.search({ query: "点兔", imagePath: imgPath });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("[SEARCH_INVALID]");
+    expect(r.text).toContain("image_path");
+  });
+
+  it("本地图请求不进搜索缓存（同一路径改了文件也不会命中旧结果）", async () => {
+    reset("ok");
+    const svc = createSearchService(makeConfig({ searchCacheTtlMs: 60000 }), domainFilter, silentLogger);
+    const a = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
+    const b = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
+    expect(a.cacheHit).toBe(false);
+    expect(b.cacheHit).toBe(false);
+    expect(publishCalls).toBe(2); // 每次都真跑
   });
 });

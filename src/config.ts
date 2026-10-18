@@ -86,6 +86,20 @@ const configSchema = z.object({
           tracemoe_url: z.string().url().default("https://api.trace.moe"),
           tracemoe_timeout_ms: z.number().int().positive().default(15000),
           tracemoe_max_results: z.number().int().positive().max(20).default(8),
+          // 本地图片（image_path）读取上限；multipart 直传与图床发布共用
+          local_max_bytes: z.number().int().positive().default(5242880),
+          // 公网发布（ADR-0011）：本地图要先变成公网可达 URL，TinEye 才能拉取
+          publish: z
+            .object({
+              enabled: z.boolean().default(true),
+              endpoint: z.string().url().default("https://uguu.se/upload?output=json"),
+              timeout_ms: z.number().int().positive().default(20000),
+            })
+            .catch({
+              enabled: true,
+              endpoint: "https://uguu.se/upload?output=json",
+              timeout_ms: 20000,
+            }),
         })
         .catch({
           enabled: true,
@@ -94,6 +108,12 @@ const configSchema = z.object({
           tracemoe_url: "https://api.trace.moe",
           tracemoe_timeout_ms: 15000,
           tracemoe_max_results: 8,
+          local_max_bytes: 5242880,
+          publish: {
+            enabled: true,
+            endpoint: "https://uguu.se/upload?output=json",
+            timeout_ms: 20000,
+          },
         }),
     })
     .catch({
@@ -117,6 +137,12 @@ const configSchema = z.object({
         tracemoe_url: "https://api.trace.moe",
         tracemoe_timeout_ms: 15000,
         tracemoe_max_results: 8,
+        local_max_bytes: 5242880,
+        publish: {
+          enabled: true,
+          endpoint: "https://uguu.se/upload?output=json",
+          timeout_ms: 20000,
+        },
       },
     }),
   rerank: z
@@ -330,6 +356,12 @@ export interface GatewayConfig {
   searchTraceMoeTimeoutMs: number;
   /** 网关侧图源返回的候选上限（合并前）。 */
   searchTraceMoeMaxResults: number;
+  /** 本地图片（`image_path`）读取上限：multipart 直传与图床发布共用。 */
+  searchReverseImageLocalMaxBytes: number;
+  /** 本地图公网发布（ADR-0011）：开关 + 上传接口（uguu/pomf 协议）。 */
+  searchReverseImagePublishEnabled: boolean;
+  searchReverseImagePublishEndpoint: string;
+  searchReverseImagePublishTimeoutMs: number;
   rerankEnabled: boolean;
   rerankEngineBoost: Record<string, number>;
   /** 多样性重排（MMR + 同注册域上限）；关闭时行为等同纯 cosine 重排。 */
@@ -478,6 +510,10 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
     searchTraceMoeUrl: v.search.reverse_image.tracemoe_url.replace(/\/+$/, ""),
     searchTraceMoeTimeoutMs: v.search.reverse_image.tracemoe_timeout_ms,
     searchTraceMoeMaxResults: v.search.reverse_image.tracemoe_max_results,
+    searchReverseImageLocalMaxBytes: v.search.reverse_image.local_max_bytes,
+    searchReverseImagePublishEnabled: v.search.reverse_image.publish.enabled,
+    searchReverseImagePublishEndpoint: v.search.reverse_image.publish.endpoint,
+    searchReverseImagePublishTimeoutMs: v.search.reverse_image.publish.timeout_ms,
     rerankEnabled: v.rerank.enabled,
     rerankEngineBoost: v.rerank.engine_boost,
     rerankDiversityEnabled: v.rerank.diversity.enabled,

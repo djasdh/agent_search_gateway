@@ -12,9 +12,16 @@ import { mmrSelect, registeredDomainOfUrl } from "./embedding/diversity.js";
 import { mergeAndRank, type SemanticTimings } from "./embedding/semantic.js";
 import type { CorpusStore } from "./embedding/store.js";
 import type { EmbedResult } from "./embedding/types.js";
+import { loadLocalImage, publishImage, type LocalImage, type PublishResult } from "./image-publish.js";
 import { renderResults, renderSearchMarkdown } from "./render.js";
 import { rerankResults } from "./rerank.js";
-import { extractImageUrl, searchTraceMoe, unionResults, type TraceMoeCall } from "./reverse-image.js";
+import {
+  extractImageUrl,
+  searchTraceMoe,
+  searchTraceMoeUpload,
+  unionResults,
+  type TraceMoeCall,
+} from "./reverse-image.js";
 import {
   searchSearxng,
   type SearchCallError,
@@ -32,6 +39,8 @@ export interface SearchParams {
   fanout?: number;
   minScore?: number;
   numResults?: number;
+  /** 反向图搜（ADR-0011）：本地图片路径；与 query 里的图片 URL 互斥。 */
+  imagePath?: string;
 }
 
 export interface SearchOutcome {
@@ -358,8 +367,17 @@ export interface SearchMetrics {
   semantic: SemanticTimings | null;
   /** 语义层是否降级（embedding/语料不可用或失败）。 */
   degraded: boolean;
-  /** 反向图搜（ADR-0010）：网关侧附加源的调用结果；未触发为 undefined。 */
-  reverseImage?: { source: string; ok: boolean; results: number; ms: number; error?: string };
+  /** 反向图搜（ADR-0010/0011）：网关侧附加源的调用结果；未触发为 undefined。 */
+  reverseImage?: {
+    source: string;
+    ok: boolean;
+    results: number;
+    ms: number;
+    error?: string;
+    /** 本地图是否成功发布到公网图床（非本地图请求为 undefined） */
+    published?: boolean;
+    publishMs?: number;
+  };
 }
 
 /** 构造稳定缓存键（搜索参数 + 选中引擎批次 + 语料命名空间一致）。 */
@@ -473,12 +491,34 @@ export function createSearchService(
     const categories = reverseImage ? canonicalizeCategories(params.categories, reverseCategory) : params.categories;
     const effParams: SearchParams = categories === params.categories ? params : { ...params, categories };
     const imageQuery = isImageQuery(effParams.categories, reverseImage ? [reverseCategory] : []);
+    // 反向图搜：图来自 query 里的 URL，或来自本地文件（image_path）；两者互斥
+    const imageUrl = reverseImage ? extractImageUrl(effParams.query) : undefined;
+    const imagePath = reverseImage ? effParams.imagePath : undefined;
+    if (reverseImage && imageUrl && imagePath) {
+      return {
+        ok: false,
+        code: ErrorCodes.SEARCH_INVALID,
+        text: withCode(ErrorCodes.SEARCH_INVALID, "反向图搜：query 里的图片 URL 与 image_path 只能给一个。"),
+      };
+    }
+    if (effParams.imagePath && !reverseImage) {
+      return {
+        ok: false,
+        code: ErrorCodes.SEARCH_INVALID,
+        text: withCode(
+          ErrorCodes.SEARCH_INVALID,
+          `image_path 只在以图搜图时可用：请在 categories 里加上 ${reverseCategory || "search_by_image"}（当前该能力可能未启用）。`,
+        ),
+      };
+    }
     const enabled = await getEnabledEngines();
     const quota = await getQuota();
     const batches = planEngineBatches(effParams, config, enabled, quota);
     const limit = params.numResults ?? config.searchMaxResults;
+    // 本地图请求绕开搜索缓存：同一路径的文件内容随时会变，缓存会给出错的结果
+    const cacheable = !effParams.imagePath;
     const key = cacheKey(effParams, batches.map((b) => b.engines), corpus?.namespace ?? "");
-    const cached = cache.get(key);
+    const cached = cacheable ? cache.get(key) : undefined;
     if (cached !== undefined) {
       logger.debug(`search cache hit: "${params.query}"`);
       emitMetrics({
@@ -500,6 +540,20 @@ export function createSearchService(
       return { ok: true, text: cached, cacheHit: true };
     }
 
+    // 本地图片：读取 + 三重校验（常规文件 / 大小 / magic bytes 是图片），
+    // 失败直接返回明确错误，不进后续流程（ADR-0011）
+    let localImage: LocalImage | undefined;
+    if (imagePath) {
+      const loaded = await loadLocalImage(imagePath, config.searchReverseImageLocalMaxBytes);
+      if (!loaded.ok) {
+        const errText = `反向图搜：本地图片不可用（${loaded.error.kind}）——${loaded.error.message}`;
+        logger.debug(errText);
+        return { ok: false, code: ErrorCodes.SEARCH_INVALID, text: withCode(ErrorCodes.SEARCH_INVALID, errText) };
+      }
+      localImage = loaded.image;
+      logger.debug(`反向图搜：本地图片 ${localImage.filename} ${localImage.mime} ${localImage.size}B`);
+    }
+
     const release = await sem.acquire();
     const preMs = performance.now() - tStart;
     // 语义层：query 向量不依赖候选 → 先起 Promise，与上游 searxng 召回 overlap（省一次串行等待）。
@@ -510,19 +564,45 @@ export function createSearchService(
       queryEmbed = provider.embed([params.query], "query");
       queryEmbed.catch(() => undefined);
     }
-    // 反向图搜（ADR-0010）：网关侧附加源与 searxng 并发，两边都不等对方。
-    // 「图就是 query」——图片 URL 直接从 query 里取，没有额外输入字段。
-    const reverseUrl = reverseImage ? extractImageUrl(effParams.query) : undefined;
+    // 反向图搜（ADR-0010/0011）：网关侧附加源 trace.moe 与 searxng 并发。
+    // 图有两个来源：query 里的图片 URL（URL 输入），或本地文件 image_path。
+    // 本地文件时 trace.moe 走 multipart 直传（图不外流）；要让 searxng 的 tineye
+    // 参与，还得多一步「发布到公网图床」——TinEye 是从它自己的服务器拉图的。
     const tReverse = performance.now();
-    let reversePromise: Promise<TraceMoeCall> | undefined;
-    if (reverseUrl && config.searchReverseImageSources.includes("tracemoe")) {
-      reversePromise = searchTraceMoe(
-        config.searchTraceMoeUrl,
-        config.searchTraceMoeTimeoutMs,
-        reverseUrl,
-        config.searchTraceMoeMaxResults,
-      );
-      reversePromise.catch(() => undefined);
+    let traceMoePromise: Promise<TraceMoeCall> | undefined;
+    if (reverseImage && config.searchReverseImageSources.includes("tracemoe")) {
+      if (localImage) {
+        traceMoePromise = searchTraceMoeUpload(
+          config.searchTraceMoeUrl,
+          config.searchTraceMoeTimeoutMs,
+          localImage.bytes,
+          localImage.filename,
+          localImage.mime,
+          config.searchTraceMoeMaxResults,
+        );
+      } else if (imageUrl) {
+        traceMoePromise = searchTraceMoe(
+          config.searchTraceMoeUrl,
+          config.searchTraceMoeTimeoutMs,
+          imageUrl,
+          config.searchTraceMoeMaxResults,
+        );
+      }
+      traceMoePromise?.catch(() => undefined);
+    }
+    let publish: PublishResult | undefined;
+    let publishMs = 0;
+    if (localImage && config.searchReverseImagePublishEnabled) {
+      const tPublish = performance.now();
+      publish = await publishImage(config.searchReverseImagePublishEndpoint, config.searchReverseImagePublishTimeoutMs, localImage);
+      publishMs = performance.now() - tPublish;
+      logger.debug(`反向图搜：图床发布 ${publish.ok ? "成功" : `失败(${publish.error.kind})`} (${Math.round(publishMs)}ms)`);
+    }
+    // 发给 searxng 的 query：URL 输入用它自己；本地图用发布到的公网 URL；
+    // 本地图且没发布成功 → 没有可给 TinEye 的公网 URL，searxng 这一半跳过。
+    const upstreamQuery = localImage ? (publish?.ok ? publish.url : undefined) : effParams.query;
+    if (upstreamQuery === undefined) {
+      logger.debug("反向图搜：本地图未获得公网 URL，跳过 searxng（tineye 不参与）");
     }
     try {
       // 静默降级：按批次依次查询。**以「本批 rotating 候选是否产出结果」判定成功**：
@@ -538,44 +618,61 @@ export function createSearchService(
       // 类别感知超时（D18）：academic 等类别的引擎更慢，取该类别配置的超时
       const searxngTimeoutMs = resolveSearxngTimeout(effParams, config);
 
-      for (const batch of batches) {
-        const req: SearchRequest = {
-          query: effParams.query,
-          language: effParams.language,
-          safeSearch: effParams.safeSearch,
-          categories: effParams.categories,
-          engines: batch.engines || undefined,
-        };
+      if (upstreamQuery !== undefined) {
+        for (const batch of batches) {
+          const req: SearchRequest = {
+            query: upstreamQuery,
+            language: effParams.language,
+            safeSearch: effParams.safeSearch,
+            categories: effParams.categories,
+            engines: batch.engines || undefined,
+          };
 
-        upstreamBatches++;
-        const tUp = performance.now();
-        const result = await searchSearxng(config.searxngUrl, searxngTimeoutMs, req);
-        upstreamMs += performance.now() - tUp;
-        if (!result.ok) {
-          lastError = result.error;
-          logger.debug(`search engine batch "${batch.engines}" failed (${result.error.kind}), trying next`);
-          continue;
+          upstreamBatches++;
+          const tUp = performance.now();
+          const result = await searchSearxng(config.searxngUrl, searxngTimeoutMs, req);
+          upstreamMs += performance.now() - tUp;
+          if (!result.ok) {
+            lastError = result.error;
+            logger.debug(`search engine batch "${batch.engines}" failed (${result.error.kind}), trying next`);
+            continue;
+          }
+
+          latencyMs += result.latencyMs;
+          lastData = result.data;
+          if (result.data.results.length === 0) continue;
+          if (rotatingContributed(result.data.results, batch.rotating)) break;
+          logger.debug(
+            `rotating candidate "${batch.rotating.join(",")}" produced no results, trying next batch`,
+          );
         }
-
-        latencyMs += result.latencyMs;
-        lastData = result.data;
-        if (result.data.results.length === 0) continue;
-        if (rotatingContributed(result.data.results, batch.rotating)) break;
-        logger.debug(
-          `rotating candidate "${batch.rotating.join(",")}" produced no results, trying next batch`,
-        );
       }
 
       // 反向图搜：等网关侧附加源（与上面的 searxng 批次并发），并汇总提示
-      const reverse = reversePromise ? await reversePromise : undefined;
+      const reverse = traceMoePromise ? await traceMoePromise : undefined;
       const reverseMs = performance.now() - tReverse;
       const reverseCount = reverse?.ok ? reverse.results.length : 0;
       const notes: string[] = [];
-      if (reverseImage && !reverseUrl) {
+      if (reverseImage && localImage) {
+        if (!config.searchReverseImagePublishEnabled) {
+          notes.push(
+            "反向图搜：publish 未启用，本地图只走 trace.moe —— tineye 需要公网可达的图片 URL，未参与。",
+          );
+        } else if (publish && !publish.ok) {
+          notes.push(
+            `反向图搜：图床发布失败（${publish.error.kind}），tineye 未参与 —— ${publish.error.message}`,
+          );
+        } else if (publish?.ok) {
+          notes.push(
+            `反向图搜：本地图已发布到公网图床（${publish.url}，公网可见、到期由对方删除）。`,
+          );
+        }
+      } else if (reverseImage && !imageUrl) {
         notes.push(
-          "反向图搜：query 里没有图片 URL（http/https），已跳过网关侧图源；searxng 也只在 query 含图片 URL 时触发 tineye。",
+          "反向图搜：query 里没有图片 URL（http/https），且未提供 image_path，已跳过图源；searxng 也只在 query 含图片 URL 时触发 tineye。",
         );
-      } else if (reverse && !reverse.ok) {
+      }
+      if (reverse && !reverse.ok) {
         notes.push(`反向图搜：网关侧图源 tracemoe 不可用（${reverse.error.kind}）——${reverse.error.message}`);
       } else if (reverse?.ok && reverseCount === 0) {
         const quota = reverse.quotaUsed !== undefined && reverse.quota !== undefined ? `（配额 ${reverse.quotaUsed}/${reverse.quota}）` : "";
@@ -612,8 +709,8 @@ export function createSearchService(
       }
 
       // searxng 失败但网关侧图源有结果 → 降级为部分成功（不报错）
-      const data: SearxngResponse = lastData ?? { query: effParams.query, results: [] };
-      if (!lastData) notes.push("searxng 未返回结果，以下仅来自网关侧图源。");
+      const data: SearxngResponse = lastData ?? { query: upstreamQuery ?? effParams.query, results: [] };
+      if (!lastData && upstreamBatches > 0) notes.push("searxng 未返回结果，以下仅来自网关侧图源。");
       // 多源候选合并：按 URL 去重、引擎归属取并集（ADR-0010）
       const candidates = reverse?.ok ? unionResults(data.results, reverse.results) : data.results;
       const rawCount = candidates.length;
@@ -662,8 +759,10 @@ export function createSearchService(
       const mergeMs = performance.now() - tMerge;
 
       const tRender = performance.now();
+      // 本地图请求没有 query 文本，标题用文件名代替（避免渲染出空的 `# Search: `）
+      const displayQuery = localImage ? `本地图片 ${localImage.filename}` : effParams.query;
       const rendered = renderSearchMarkdown({
-        query: effParams.query,
+        query: displayQuery,
         raw: data,
         results: ranked,
         latencyMs,
@@ -696,12 +795,14 @@ export function createSearchService(
               results: reverseCount,
               ms: reverseMs,
               error: reverse.ok ? undefined : reverse.error.kind,
+              published: publish ? publish.ok : undefined,
+              publishMs: localImage && config.searchReverseImagePublishEnabled ? publishMs : undefined,
             }
           : undefined,
       });
 
-      cache.set(key, text);
-      logger.debug(`search done: "${params.query}" (${ranked.length}/${rawCount} results, ${blockedCount} blocked)`);
+      if (cacheable) cache.set(key, text);
+      logger.debug(`search done: "${displayQuery}" (${ranked.length}/${rawCount} results, ${blockedCount} blocked)`);
       return { ok: true, text, cacheHit: false };
     } finally {
       release();
