@@ -163,6 +163,44 @@ fetch:
   download_max_total_bytes: 4294967296  # 产物总量配额 4GB（超出按最旧优先清理）
   files_route: true             # 提供 GET /files/<id> 下载链接（id = 内容 sha256）
 
+# B 站抓取（全部走 fetch，URL 带 bili= 参数触发；默认关闭）。
+#   detail / comments / comments_search / video / audio / article
+# 多后端按能力路由，失败自动换下一个；未安装后端时返回 BILI_UNAVAILABLE。
+bilibili:
+  enabled: false
+  routes:
+    detail: [cli-kukemc, cli-ytdlp, http]
+    comments: [cli-kukemc, cli-ytdlp, http]
+    media: [cli-ytdlp, http]          # video/audio 直链
+    article: [http]                   # 专栏正文目前只有 http 后端
+  cli_kukemc:
+    command: bili                     # kukemc/bili-cli；提供详情与分页评论
+    timeout_ms: 30000
+  cli_ytdlp:
+    command: yt-dlp                   # 提供详情与 video/audio 直链
+    cookies_file: ""                  # Netscape 格式；空=未登录（只能 480p）
+    probe_command: ""                 # 可选；空时首次请求兼作登录态探测
+    timeout_ms: 30000
+  http:
+    base_url: http://127.0.0.1:8010
+    token: ""                         # 与后端约定的 Bearer；只走环境变量注入更好
+    command: []                       # 非空时由插件拉起/回收，如 ["python","server.py","--port","8010"]
+    startup_timeout_ms: 10000
+    request_timeout_ms: 15000
+  auth_probe_ttl_ms: 60000
+  quality: 1080p
+  download:
+    max_bytes: 536870912              # 单文件 512MB；实际取与 fetch.max_download_bytes 的较小值
+    timeout_ms: 120000
+    max_concurrent: 1
+    allow_private_cdn: false          # 仅测试：放开 CDN 内网限制
+    allowed_hosts: [bilivideo.com, bilivideo.cn, biliapi.net, hdslb.com]
+  comment_db: data/bilibili.sqlite    # 评论本地库（全量检索用）
+  comments:
+    page_size: 20
+    search_limit: 50
+    max_pages_per_call: 20            # comments&all=1 单次最多翻多少页，没完返回 next_page
+
 browser:
   enabled: true            # 浏览器能力（fetch 路由③ + browser_* 工具）
   headless: true

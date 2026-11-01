@@ -254,6 +254,12 @@ export function createFetchService(
 
     // direct 失败且不升级 → 返回 direct 错误
     const msg = direct.errorMessage ?? "未知错误";
+    // 插件自定义错误码（Bilibili 等）优先，避免被包成 FETCH_NETWORK
+    if (direct.errorCode) {
+      const pluginCode = direct.errorCode as (typeof ErrorCodes)[keyof typeof ErrorCodes];
+      logger.debug(`fetch failed (plugin code ${direct.errorCode}): ${params.url}`);
+      return { ok: false, code: pluginCode, text: withCode(pluginCode, msg) };
+    }
     let code: FetchOutcome["code"] = ErrorCodes.FETCH_NETWORK;
     if (direct.errorKind === "blocked_private_ip") code = ErrorCodes.FETCH_BLOCKED;
     else if (direct.errorKind === "not_html") code = ErrorCodes.FETCH_NOT_HTML;

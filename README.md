@@ -60,6 +60,40 @@ gateway (本服务, :3000/mcp)
 | `FETCH_INVALID_URL` | 非法 URL | 放弃 |
 | `BROWSER_UNAVAILABLE` | 浏览器未启用 | 检查配置 |
 | `BROWSER_ERROR` | 浏览器操作失败 | 可重试 |
+| `BILI_UNAVAILABLE` | B 站后端未启用/未安装/连不上 | 看 `bilibili.routes` 与安装提示 |
+| `BILI_AUTH_REQUIRED` | 该动作需要登录态（高清、评论第 2 页、专栏全文） | 按提示登录对应后端 |
+| `BILI_CAPABILITY_UNSUPPORTED` | 当前没有支持该动作的后端 | 换/加后端 |
+| `BILI_RISK_CONTROL` | B 站 403/412 风控 | 降频、换出口，稍后重试 |
+| `BILI_DOWNLOAD_FAIL` | 直链下载失败/超时/超限 | 重试或调大 `bilibili.download.max_bytes` |
+| `BILI_INVALID_URL` | 动作或目标不合法 | 检查 `bili=` 与 URL |
+| `BILI_PARTIAL` | 评论未拉全 | 用返回的 `next_page` 续拉 |
+
+## B 站抓取
+
+全部走 `fetch`，不新增工具；URL 带 `bili=` 参数才触发，否则 B 站页面仍走普通抓取。默认关闭，在 `gateway.yaml` 里把 `bilibili.enabled` 设为 `true`。
+
+| 请求 | 说明 |
+|---|---|
+| `.../video/BVxxx?bili=detail` | 详情 JSON（标题/简介/UP/统计/分P/标签） |
+| `.../video/BVxxx?bili=comments&page=1&sort=hot` | 单页评论 + 楼中楼，同时写入本地库 |
+| `.../video/BVxxx?bili=comments&all=1` | 连续翻页（受 `max_pages_per_call` 与 60s 预算限制），返回 `next_page` |
+| `.../video/BVxxx?bili=comments_search&q=关键词` | 在本地评论库检索，可按 `mid` 过滤 |
+| `.../video/BVxxx?bili=video&quality=1080p&p=1` | 下载视频并返回 `/files/<sha256>` |
+| `.../video/BVxxx?bili=audio&p=1` | 下载音频（m4a） |
+| `.../read/cv123456?bili=article` | 专栏正文 Markdown（需 http 后端） |
+
+多后端按能力路由（`bilibili.routes`），失败自动换下一个，错误里带完整尝试链：
+
+- `cli-kukemc`（`bili` CLI）：详情、分页评论；`bili auth status` 顺带续期
+- `cli-ytdlp`（`yt-dlp`）：详情、video/audio 直链；cookie 用 `--cookies <file>`
+- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`
+
+要点：
+
+- 视频与音频是**分离的 DASH 流**，本网关不做合并；需要时分别 `bili=video` 与 `bili=audio`，由 agent 自行用 ffmpeg 合并。
+- 登录态由各后端自己持有；网关只探测一次（60s 缓存），缺了直接返回 `BILI_AUTH_REQUIRED`，不静默降级。
+- 评论全量只能是"后端接口可达上限"，落库后可用 `comments_search` 检索；不承诺 100%。
+- 未安装后端或 `bilibili.enabled=false` 时，命中 `bili=` 会明确返回 `BILI_UNAVAILABLE`，不会静默回退成抓网页。
 
 ## 快速开始
 

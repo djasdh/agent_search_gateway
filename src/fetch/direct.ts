@@ -39,6 +39,8 @@ export interface DirectFetchResult {
   plugin?: string;
   errorKind?: FetchErrorKind;
   errorMessage?: string;
+  /** 插件自定义错误码（如 BILI_AUTH_REQUIRED）；service 会优先用它而不是 FETCH_NETWORK。 */
+  errorCode?: string;
 }
 
 const MAX_REDIRECTS = 5;
@@ -166,6 +168,7 @@ async function fetchViaPlugin(
       finalUrl,
       errorKind,
       errorMessage: r.errorCode ? `[${r.errorCode}] ${detail}` : `插件 ${plugin.name}: ${detail}`,
+      errorCode: r.errorCode,
     };
   }
 

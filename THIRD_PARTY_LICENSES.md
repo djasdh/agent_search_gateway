@@ -32,6 +32,12 @@
 
 > AGPL-3.0 说明：AGPL 约束的是"基于其源码的修改/衍生作品"。searxng 以独立服务运行、通过 HTTP API 交互（类似调用数据库/外部搜索 API），不构成衍生作品。本仓库未修改其源码。
 
+## 可选组件（独立进程/脚本，非 MIT 核心）
+
+| 组件 | 许可证 | 说明 |
+|---|---|---|
+| [bilibili-api-python](https://pypi.org/project/bilibili-api-python/) | GPL-3.0-or-later | `scripts/bilibili-article-server/` 的运行时依赖；该目录整体按 GPL-3.0 发布，网关核心（src/）不导入它 |
+
 ## 引用的数据与代码借鉴
 
 | 来源 | 许可证 | 说明 |

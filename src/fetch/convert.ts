@@ -62,6 +62,8 @@ const EXT_BY_TYPE: Record<string, string> = {
   "image/svg+xml": ".svg",
   "image/tiff": ".tiff",
   "audio/mpeg": ".mp3",
+  "audio/mp4": ".m4a",
+  "audio/x-m4a": ".m4a",
   "audio/wav": ".wav",
   "audio/ogg": ".ogg",
   "video/mp4": ".mp4",
