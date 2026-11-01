@@ -1,7 +1,7 @@
 /** 三个后端共用的失败映射：CLI 信封、CLI 退出码、HTTP 状态与信封都收敛到 BiliError。 */
 
 import { BiliError, type BiliErrorCode, type CliResult } from "./types.js";
-import { asRecord, str, type Json } from "./json.js";
+import { asRecord, str } from "./json.js";
 
 const AUTH_ALIASES = new Set([
   "not_logged_in",
@@ -26,9 +26,7 @@ const KNOWN: ReadonlySet<string> = new Set([
   "BILI_AUTH_REQUIRED",
   "BILI_CAPABILITY_UNSUPPORTED",
   "BILI_RISK_CONTROL",
-  "BILI_DOWNLOAD_FAIL",
   "BILI_INVALID_URL",
-  "BILI_PARTIAL",
 ]);
 
 /** 把外部错误码归一成 BILI_*；认不出的返回 undefined。 */
@@ -87,10 +85,4 @@ export function httpFailure(status: number, body: unknown, what: string): BiliEr
   const message = str(envelope, "message") ?? str(envelope, "msg") ?? `${what}：HTTP ${status}`;
   if (code) return new BiliError(code, message, str(envelope, "hint"));
   return new BiliError("BILI_UNAVAILABLE", message);
-}
-
-/** 供后端判断"这个错误体是不是业务失败信封"。 */
-export function envelopeError(body: Json): BiliError | undefined {
-  if (body.ok !== false) return undefined;
-  return errorFromEnvelope(body.error, "后端");
 }

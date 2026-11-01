@@ -349,8 +349,8 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
     {
       description:
         "抓取一个 URL。网页（HTML）转 markdown；纯文本/JSON/CSV/XML 直接返回；PDF 抽取正文；图片等二进制文件落盘并返回本地路径与 /files/<id> 下载链接（正文不注入上下文）。网页遇到反爬会自动升级浏览器渲染。\n\n" +
-        "B 站视频/专栏在 URL 上带 bili= 参数时按动作抓取：bili=detail（详情 JSON）、bili=comments（评论，支持 page/sort/all=1）、bili=comments_search（本地库检索，q=关键词）、bili=video|audio（下载并返回 /files 链接，支持 quality/p）、bili=article（专栏正文，需 http 后端）。" +
-        "示例：https://www.bilibili.com/video/BV1xx411c7mD?bili=video&quality=1080p；https://www.bilibili.com/video/BV1xx411c7mD?bili=comments&page=1&all=1；https://www.bilibili.com/read/cv123456?bili=article。视频与音频是分离的 DASH 流，需要时分别请求 bili=video 和 bili=audio，由 agent 自行合并。",
+        "B 站视频/专栏 URL 会自动返回结构化摘要（标题、链接、音频直链、封面、简介/正文、UP、统计、分P、评论区链接）。" +
+        "评论区链接是 URL 加 #reply（视频）或 #comment（专栏），fetch 它可抓全量评论；再加 q=关键词 可在本地评论库检索。",
       inputSchema: {
         url: z.string().url().describe("要抓取的网页 URL"),
         max_chars: z

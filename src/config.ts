@@ -248,22 +248,21 @@ const configSchema = z.object({
       download_max_total_bytes: 4294967296,
       files_route: true,
     }),
-  // Bilibili 抓取（ADR：全部走 fetch，动作由 URL 的 bili= 参数选择）。
-  // 默认关闭；关闭时命中 bili 参数会返回明确的不可用提示，不静默降级。
+  // Bilibili 抓取（全部走 fetch，按 URL 类型自动判定；默认关闭）。
   bilibili: z
     .object({
       enabled: z.boolean().default(false),
       routes: z
         .object({
           detail: z.array(z.string()).default(["cli-kukemc", "cli-ytdlp", "http"]),
-          comments: z.array(z.string()).default(["cli-kukemc", "cli-ytdlp", "http"]),
-          media: z.array(z.string()).default(["cli-ytdlp", "http"]),
+          comments: z.array(z.string()).default(["cli-kukemc", "http"]),
+          audio: z.array(z.string()).default(["cli-ytdlp", "http"]),
           article: z.array(z.string()).default(["http"]),
         })
         .default({
           detail: ["cli-kukemc", "cli-ytdlp", "http"],
-          comments: ["cli-kukemc", "cli-ytdlp", "http"],
-          media: ["cli-ytdlp", "http"],
+          comments: ["cli-kukemc", "http"],
+          audio: ["cli-ytdlp", "http"],
           article: ["http"],
         }),
       cli_kukemc: z
@@ -297,41 +296,22 @@ const configSchema = z.object({
           request_timeout_ms: 15000,
         }),
       auth_probe_ttl_ms: z.number().int().positive().default(60000),
-      quality: z.string().default("1080p"),
-      download: z
-        .object({
-          max_bytes: z.number().int().positive().default(536870912),
-          timeout_ms: z.number().int().positive().default(120000),
-          max_concurrent: z.number().int().positive().max(8).default(1),
-          // 仅测试用：放开本地 CDN 桩服务器的内网限制。
-          allow_private_cdn: z.boolean().default(false),
-          allowed_hosts: z
-            .array(z.string())
-            .default(["bilivideo.com", "bilivideo.cn", "biliapi.net", "hdslb.com"]),
-        })
-        .default({
-          max_bytes: 536870912,
-          timeout_ms: 120000,
-          max_concurrent: 1,
-          allow_private_cdn: false,
-          allowed_hosts: ["bilivideo.com", "bilivideo.cn", "biliapi.net", "hdslb.com"],
-        }),
       comment_db: z.string().default("data/bilibili.sqlite"),
       comments: z
         .object({
           page_size: z.number().int().positive().max(50).default(20),
           search_limit: z.number().int().positive().max(200).default(50),
-          // all=1 单次最多拉多少页，避免一次 fetch 挂太久；没拉完返回 next_page。
-          max_pages_per_call: z.number().int().positive().max(500).default(20),
+          // 单次 fetch 最多拉多少页，避免一次调用挂太久；没拉完下次续传。
+          max_pages_per_fetch: z.number().int().positive().max(500).default(20),
         })
-        .default({ page_size: 20, search_limit: 50, max_pages_per_call: 20 }),
+        .default({ page_size: 20, search_limit: 50, max_pages_per_fetch: 20 }),
     })
     .catch({
       enabled: false,
       routes: {
         detail: ["cli-kukemc", "cli-ytdlp", "http"],
-        comments: ["cli-kukemc", "cli-ytdlp", "http"],
-        media: ["cli-ytdlp", "http"],
+        comments: ["cli-kukemc", "http"],
+        audio: ["cli-ytdlp", "http"],
         article: ["http"],
       },
       cli_kukemc: { command: "bili", timeout_ms: 30000 },
@@ -344,16 +324,8 @@ const configSchema = z.object({
         request_timeout_ms: 15000,
       },
       auth_probe_ttl_ms: 60000,
-      quality: "1080p",
-      download: {
-        max_bytes: 536870912,
-        timeout_ms: 120000,
-        max_concurrent: 1,
-        allow_private_cdn: false,
-        allowed_hosts: ["bilivideo.com", "bilivideo.cn", "biliapi.net", "hdslb.com"],
-      },
       comment_db: "data/bilibili.sqlite",
-      comments: { page_size: 20, search_limit: 50, max_pages_per_call: 20 },
+      comments: { page_size: 20, search_limit: 50, max_pages_per_fetch: 20 },
     }),
   browser: z
     .object({
@@ -444,7 +416,7 @@ export interface BilibiliConfig {
   routes: {
     detail: string[];
     comments: string[];
-    media: string[];
+    audio: string[];
     article: string[];
   };
   cliKukemc: { command: string; timeoutMs: number };
@@ -458,16 +430,8 @@ export interface BilibiliConfig {
     requestTimeoutMs: number;
   };
   authProbeTtlMs: number;
-  quality: string;
-  download: {
-    maxBytes: number;
-    timeoutMs: number;
-    maxConcurrent: number;
-    allowPrivateCdn: boolean;
-    allowedHosts: string[];
-  };
   commentDb: string;
-  comments: { pageSize: number; searchLimit: number; maxPagesPerCall: number };
+  comments: { pageSize: number; searchLimit: number; maxPagesPerFetch: number };
 }
 
 export interface GatewayConfig {
@@ -733,7 +697,7 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
       routes: {
         detail: v.bilibili.routes.detail,
         comments: v.bilibili.routes.comments,
-        media: v.bilibili.routes.media,
+        audio: v.bilibili.routes.audio,
         article: v.bilibili.routes.article,
       },
       cliKukemc: {
@@ -754,19 +718,11 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
         requestTimeoutMs: v.bilibili.http.request_timeout_ms,
       },
       authProbeTtlMs: v.bilibili.auth_probe_ttl_ms,
-      quality: v.bilibili.quality,
-      download: {
-        maxBytes: v.bilibili.download.max_bytes,
-        timeoutMs: v.bilibili.download.timeout_ms,
-        maxConcurrent: v.bilibili.download.max_concurrent,
-        allowPrivateCdn: v.bilibili.download.allow_private_cdn,
-        allowedHosts: v.bilibili.download.allowed_hosts,
-      },
       commentDb: expandHome(v.bilibili.comment_db),
       comments: {
         pageSize: v.bilibili.comments.page_size,
         searchLimit: v.bilibili.comments.search_limit,
-        maxPagesPerCall: v.bilibili.comments.max_pages_per_call,
+        maxPagesPerFetch: v.bilibili.comments.max_pages_per_fetch,
       },
     },
     browserEnabled: v.browser.enabled,

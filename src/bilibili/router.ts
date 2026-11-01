@@ -7,20 +7,15 @@ import { createKukemcBackend, KUKEMC_ID } from "./backends/cli-kukemc.js";
 import { createYtdlpBackend, YTDLP_ID } from "./backends/cli-ytdlp.js";
 import { BiliError } from "./types.js";
 import type {
-  BiliArticle, BiliAttempt, BiliBackend, BiliCapability, BiliCommentPage, BiliDetail,
-  BiliProbe, BiliRef, BiliStream, MediaKind,
+  BiliArticle, BiliAttempt, BiliAudio, BiliBackend, BiliCapability, BiliCommentPage,
+  BiliDetail, BiliProbe, BiliRef,
 } from "./types.js";
 
 export interface BiliRouter {
   detail(ref: BiliRef): Promise<{ value: BiliDetail; attempts: BiliAttempt[] }>;
   comments(ref: BiliRef, o: { page: number; sort: "hot" | "time" }): Promise<{ value: BiliCommentPage; attempts: BiliAttempt[] }>;
-  media(ref: BiliRef, o: { kind: MediaKind; quality: string }): Promise<{ value: BiliStream; attempts: BiliAttempt[] }>;
+  audio(ref: BiliRef): Promise<{ value: BiliAudio; attempts: BiliAttempt[] }>;
   article(ref: BiliRef): Promise<{ value: BiliArticle; attempts: BiliAttempt[] }>;
-}
-
-function rank(quality: string): number {
-  const m = /^(\d{3,4})p$/i.exec(quality.trim());
-  return m ? Number.parseInt(m[1]!, 10) : quality.trim() === "best" ? 10000 : 1080;
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -114,7 +109,7 @@ export function createRouter(config: GatewayConfig, logger?: Logger): BiliRouter
   return {
     detail: (ref) => run("detail", ref, (b) => b.detail(ref)),
     comments: (ref, o) => run("comments", ref, (b) => b.comments(ref, o), o.page > 1),
-    media: (ref, o) => run("media", ref, (b) => b.media(ref, o), rank(o.quality) > 480),
-    article: (ref) => run("article", ref, (b) => b.article(ref), true),
+    audio: (ref) => run("audio", ref, (b) => b.audio(ref)),
+    article: (ref) => run("article", ref, (b) => b.article(ref)),
   };
 }

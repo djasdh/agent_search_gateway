@@ -55,13 +55,6 @@ export function numRecord(value: unknown): Record<string, number> | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-export function strArray(value: unknown): string[] | undefined {
-  const list = asArray(value)
-    .map((item) => (typeof item === "string" ? item : asString(asRecord(item)?.name)))
-    .filter((item): item is string => Boolean(item));
-  return list.length > 0 ? list : undefined;
-}
-
 /** 从混杂输出里取最后一个 JSON 对象（yt-dlp 的 --dump-json）。 */
 export function lastJsonObject(text: string): Json | undefined {
   for (const line of text.trim().split("\n").reverse()) {

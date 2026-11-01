@@ -103,7 +103,8 @@ export function createFetchService(
       lines.push(`> 注：响应体超过 ${(config.fetchMaxBytes / 1024 / 1024).toFixed(1)}MB，内容已截断。`);
     }
     const full = lines.join("\n");
-    cachedSet("direct", url, full, maxChars);
+    // 插件结果不进缓存：评论/直链这类产物会随调用变化，缓存会让续传和直链刷新失效。
+    if (!direct.plugin) cachedSet("direct", url, full, maxChars);
     logger.debug(`fetch done (${base}): ${url} (${full.length} chars)`);
     return { ok: true, text: full };
   }

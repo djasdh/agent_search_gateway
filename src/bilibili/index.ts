@@ -1,18 +1,24 @@
-/** Bilibili fetch 插件：URL 的 bili= 选动作，内部按能力路由到 CLI/HTTP 后端。 */
+/** Bilibili fetch 插件：按 URL 类型自动返回视频/专栏摘要，评论区锚点抓评论。 */
 
 import { resolve } from "node:path";
 import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "../fetch/plugins/types.js";
-import { downloadStream } from "./download.js";
-import { isBilibiliUrl, parseBiliRequest, resolveShortLink } from "./parse.js";
+import {
+  isBiliContentUrl, isBilibiliUrl, isShortLink, parseBiliRequest, resolveShortLink,
+} from "./parse.js";
+import type { ParsedBili } from "./parse.js";
 import { createRouter } from "./router.js";
 import type { BiliRouter } from "./router.js";
 import { createCommentStore } from "./store.js";
 import { BiliError } from "./types.js";
-import type { BiliAttempt, BiliCommentStore, MediaKind } from "./types.js";
+import type {
+  BiliArticle, BiliArticleSummary, BiliComment, BiliCommentStore, BiliDetail,
+  BiliVideoSummary,
+} from "./types.js";
 
 const BUDGET_MS = 60_000;
+const SAMPLE_SIZE = 20;
 const routers = new WeakMap<GatewayConfig, BiliRouter>();
 const stores = new Map<string, BiliCommentStore>();
 
@@ -39,110 +45,176 @@ const fail = (code: string, message: string, finalUrl?: string): FetchPluginResu
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-function formatAttempts(attempts: BiliAttempt[]): string {
-  return attempts.length === 0
-    ? ""
-    : `\n\n尝试记录：\n${attempts.map((a) => `- ${a.backend}：${a.ok ? "ok" : `[${a.code ?? "UNKNOWN"}] ${a.error ?? ""}`}`).join("\n")}`;
+/** 对 agent 只暴露错误码含义，不暴露插件名/后端名/尝试链。 */
+function publicError(err: BiliError): string {
+  const hint = err.hint ? `（${err.hint}）` : "";
+  switch (err.code) {
+    case "BILI_AUTH_REQUIRED":
+      return `需要登录${hint}`;
+    case "BILI_RISK_CONTROL":
+      return `B 站风控拦截${hint}`;
+    case "BILI_CAPABILITY_UNSUPPORTED":
+      return `当前后端不支持该动作${hint}`;
+    case "BILI_INVALID_URL":
+      return err.message;
+    default:
+      return `Bilibili 后端不可用${hint}`;
+  }
 }
 
-function attemptsOf(err: BiliError): BiliAttempt[] {
-  const raw = err.detail?.attempts;
-  return Array.isArray(raw) ? (raw as BiliAttempt[]) : [];
+export function buildVideoSummary(
+  detail: BiliDetail,
+  ref: { raw: string },
+  audioUrl: string | null,
+  audioError?: string,
+): BiliVideoSummary {
+  const summary: BiliVideoSummary = {
+    kind: "video",
+    title: detail.title,
+    url: ref.raw,
+    audio_url: audioUrl,
+    cover_url: detail.cover,
+    detail: {
+      desc: detail.desc,
+      owner: detail.owner,
+      stat: detail.stat ?? {},
+      current_page: detail.currentPage,
+      page_count: detail.pageCount,
+      pages: detail.pages,
+    },
+    comments_url: `${ref.raw}#reply`,
+  };
+  if (audioError) summary.audio_error = audioError;
+  return summary;
 }
 
-async function comments(parsed: ReturnType<typeof parseBiliRequest>, url: URL, config: GatewayConfig, logger?: Logger) {
-  const bvid = parsed.ref.bvid!;
+export function buildArticleSummary(article: BiliArticle, ref: { raw: string }): BiliArticleSummary {
+  const cover = typeof article.meta?.cover === "string" ? article.meta.cover : undefined;
+  return {
+    kind: "article",
+    title: article.title?.trim() || `cv${article.cv}`,
+    url: ref.raw,
+    audio_url: null,
+    cover_url: cover,
+    detail: { content: article.content.trim() },
+    comments_url: `${ref.raw}#comment`,
+  };
+}
+
+const targetOf = (parsed: ParsedBili): string =>
+  parsed.ref.bvid ?? (parsed.ref.cv ? `cv${parsed.ref.cv}` : parsed.ref.aid ? `av${parsed.ref.aid}` : "");
+
+async function videoSummary(parsed: ParsedBili, config: GatewayConfig, logger?: Logger) {
   const router = routerFor(config, logger);
-  const store = storeFor(config, logger);
-  const maxPages = parsed.all ? config.bilibili.comments.maxPagesPerCall : 1;
-  const deadline = Date.now() + BUDGET_MS;
-  const attempts: BiliAttempt[] = [];
-  let cursor = parsed.page;
-  let fetched = 0;
-  let count = 0;
-  let total: number | undefined;
-  let hasMore = false;
-  let nextPage: number | undefined;
+  const [detailResult, audioResult] = await Promise.allSettled([
+    router.detail(parsed.ref),
+    router.audio(parsed.ref),
+  ]);
+  if (detailResult.status === "rejected") throw detailResult.reason;
+  const audioUrl = audioResult.status === "fulfilled" ? audioResult.value.value.url : null;
+  const audioError = audioResult.status === "rejected"
+    ? (audioResult.reason instanceof BiliError ? publicError(audioResult.reason) : "音频直链获取失败")
+    : undefined;
+  if (audioResult.status === "rejected") logger?.debug(`bilibili audio failed: ${errorText(audioResult.reason)}`);
+  const summary = buildVideoSummary(detailResult.value.value, parsed.ref, audioUrl, audioError);
+  return text(JSON.stringify(summary, null, 2), "application/json", parsed.ref.raw);
+}
 
-  while (fetched < maxPages) {
-    if (fetched > 0 && Date.now() >= deadline) break;
-    let page: Awaited<ReturnType<BiliRouter["comments"]>>;
-    try {
-      page = await router.comments(parsed.ref, { page: cursor, sort: parsed.sort });
-    } catch (err) {
-      if (fetched === 0) throw err;
-      if (err instanceof BiliError) attempts.push(...(attemptsOf(err).length ? attemptsOf(err) : [{ backend: "(route)", ok: false, code: err.code, error: err.message }]));
-      break;
-    }
-    attempts.push(...page.attempts);
-    store.upsertPage({ bvid: page.value.bvid || bvid, page: cursor, items: page.value.items, hasMore: page.value.hasMore });
-    fetched++;
-    count += page.value.items.length;
-    total = page.value.total ?? total;
-    hasMore = page.value.hasMore;
-    nextPage = hasMore ? page.value.nextPage ?? cursor + 1 : undefined;
-    if (!parsed.all || !hasMore || !nextPage || nextPage <= cursor) break;
-    cursor = nextPage;
+async function articleSummary(parsed: ParsedBili, config: GatewayConfig, logger?: Logger) {
+  const { value } = await routerFor(config, logger).article(parsed.ref);
+  return text(JSON.stringify(buildArticleSummary(value, parsed.ref), null, 2), "application/json", parsed.ref.raw);
+}
+
+async function comments(parsed: ParsedBili, config: GatewayConfig, logger?: Logger) {
+  const target = targetOf(parsed);
+  const store = storeFor(config, logger);
+
+  if (parsed.action === "comments_search") {
+    const items = store.search(target, parsed.query!, { limit: config.bilibili.comments.searchLimit });
+    const payload = {
+      kind: "comments_search", target, q: parsed.query, count: items.length, items,
+      ...(items.length === 0 ? { hint: "本地暂无评论，先 fetch 评论区链接抓取全量" } : {}),
+    };
+    return text(JSON.stringify(payload, null, 2), "application/json", parsed.ref.raw);
   }
 
-  const payload = { bvid, page: parsed.page, count, total: total ?? store.count(bvid), fetched, has_more: hasMore, next_page: nextPage, attempts };
-  return text(JSON.stringify(payload, null, 2), "application/json", url.toString());
+  const router = routerFor(config, logger);
+  const maxPages = config.bilibili.comments.maxPagesPerFetch;
+  const deadline = Date.now() + BUDGET_MS;
+  const state = store.syncState(target);
+  let cursor = state.finished ? 1 : state.nextPage;
+  let pages = 0;
+  let fetched = 0;
+  let total: number | undefined;
+  let hasMore = true;
+  let error: string | undefined;
+  const sample: BiliComment[] = [];
+
+  while (pages < maxPages && Date.now() < deadline) {
+    try {
+      const { value } = await router.comments(parsed.ref, { page: cursor, sort: parsed.sort });
+      store.upsertPage({ bvid: target, page: cursor, items: value.items, hasMore: value.hasMore });
+      pages++;
+      fetched += value.items.length;
+      if (sample.length < SAMPLE_SIZE) sample.push(...value.items.slice(0, SAMPLE_SIZE - sample.length));
+      total = value.total ?? total;
+      hasMore = value.hasMore;
+      const next = value.nextPage ?? cursor + 1;
+      if (!hasMore || next <= cursor) break;
+      cursor = next;
+    } catch (err) {
+      if (pages === 0) throw err;
+      error = err instanceof BiliError ? publicError(err) : "评论抓取中断";
+      logger?.debug(`bilibili comments failed: ${errorText(err)}`);
+      break;
+    }
+  }
+
+  const payload = {
+    kind: "comments",
+    target,
+    sort: parsed.sort,
+    fetched,
+    total: total ?? store.count(target),
+    complete: !hasMore,
+    ...(error ? { error } : {}),
+    sample,
+  };
+  return text(JSON.stringify(payload, null, 2), "application/json", parsed.ref.raw);
 }
 
-async function handle(parsed: ReturnType<typeof parseBiliRequest>, url: URL, config: GatewayConfig, logger?: Logger) {
-  const router = routerFor(config, logger);
+async function handle(parsed: ParsedBili, config: GatewayConfig, logger?: Logger) {
   switch (parsed.action) {
-    case "comments_search": {
-      const items = storeFor(config, logger).search(parsed.ref.bvid!, parsed.query!, {
-        mid: Number(url.searchParams.get("mid")) || undefined,
-        limit: config.bilibili.comments.searchLimit,
-      });
-      return text(JSON.stringify({ bvid: parsed.ref.bvid, keyword: parsed.query, count: items.length, items }, null, 2), "application/json", url.toString());
-    }
+    case "video":
+      return videoSummary(parsed, config, logger);
+    case "article":
+      return articleSummary(parsed, config, logger);
     case "comments":
-      return comments(parsed, url, config, logger);
-    case "detail": {
-      const { value, attempts } = await router.detail(parsed.ref);
-      return text(JSON.stringify({ ...value, attempts }, null, 2), "application/json", url.toString());
-    }
-    case "article": {
-      const { value } = await router.article(parsed.ref);
-      return text(`# ${value.title?.trim() || `cv${value.cv}`}\n\n${value.content.trim()}`, "text/markdown", url.toString());
-    }
-    case "media": {
-      const kind: MediaKind = parsed.kind ?? "video";
-      const { value } = await router.media(parsed.ref, { kind, quality: parsed.quality });
-      const got = await downloadStream(value, config, logger);
-      return { ok: true, status: 200, contentType: got.contentType, finalUrl: url.toString(), bytes: got.bytes };
-    }
+    case "comments_search":
+      return comments(parsed, config, logger);
   }
 }
 
 async function fetchBilibili(url: URL, ctx: FetchPluginContext): Promise<FetchPluginResult> {
   const { config, logger } = ctx;
-  if (!config.bilibili?.enabled) return fail("BILI_UNAVAILABLE", "bilibili 插件未启用（bilibili.enabled=false）。", url.toString());
+  if (!config.bilibili?.enabled) return fail("BILI_UNAVAILABLE", "B 站抓取未启用（bilibili.enabled=false）。", url.toString());
   try {
-    const short = url.hostname === "b23.tv" || url.hostname.endsWith(".b23.tv");
-    const target = short ? await resolveShortLink(url) : url;
+    const target = isShortLink(url) ? await resolveShortLink(url) : new URL(url);
     for (const [k, v] of url.searchParams) if (!target.searchParams.has(k)) target.searchParams.set(k, v);
-    return await handle(parseBiliRequest(target, config), target, config, logger);
+    if (url.hash && !target.hash) target.hash = url.hash;
+    return await handle(parseBiliRequest(target), config, logger);
   } catch (err) {
     if (err instanceof BiliError) {
-      const hint = err.hint ? `\n处理：${err.hint}` : "";
-      return fail(err.code, err.message + hint + formatAttempts(attemptsOf(err)), url.toString());
+      logger?.debug(`bilibili failed: ${err.code} ${err.message}`);
+      return fail(err.code, publicError(err), url.toString());
     }
     logger?.debug(`bilibili: 未预期异常 ${errorText(err)}`);
-    return fail("BILI_UNAVAILABLE", `Bilibili 抓取失败：${errorText(err)}`, url.toString());
+    return fail("BILI_UNAVAILABLE", "Bilibili 抓取失败", url.toString());
   }
 }
 
 export const bilibiliPlugin: FetchPlugin = {
   name: "bilibili",
-  match: (url) => isBilibiliUrl(url) && url.searchParams.has("bili"),
+  match: (url) => isBilibiliUrl(url) && (isBiliContentUrl(url) || isShortLink(url)),
   fetch: fetchBilibili,
 };
-
-export function closeBilibiliStores(): void {
-  for (const store of stores.values()) store.close();
-  stores.clear();
-}

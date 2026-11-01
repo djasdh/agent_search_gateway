@@ -1,26 +1,18 @@
-/** Bilibili 后端：yt-dlp CLI，提供详情与媒体直链（`-g` 只打印 URL）。 */
+/** Bilibili 后端：yt-dlp CLI，提供详情与音频直链（`-g` 只打印 URL）。 */
 import type { GatewayConfig } from "../../config.js";
 import type { Logger } from "../../logger.js";
 import { runCli } from "../cli.js";
 import { cliFailure } from "../errors.js";
-import { asString, lastJsonObject, num, str, strArray, type Json } from "../json.js";
+import { asArray, asRecord, asString, lastJsonObject, num, str, type Json } from "../json.js";
 import {
-  BiliError, type BiliArticle, type BiliBackend, type BiliCapability, type BiliCommentPage,
-  type BiliDetail, type BiliProbe, type BiliRef, type BiliStream, type MediaKind,
+  BiliError, type BiliArticle, type BiliAudio, type BiliBackend, type BiliCapability,
+  type BiliCommentPage, type BiliDetail, type BiliPage, type BiliProbe, type BiliRef,
 } from "../types.js";
 
 export const YTDLP_ID = "cli-ytdlp";
 
 function lastNonEmptyLine(text: string): string | undefined {
   return text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0).at(-1);
-}
-
-function toIso(value: unknown): string | undefined {
-  let ms: number;
-  if (typeof value === "number" && Number.isFinite(value)) ms = value < 1e12 ? value * 1000 : value;
-  else if (typeof value === "string") ms = Date.parse(value);
-  else return undefined;
-  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : undefined;
 }
 
 function toMid(value: unknown): number | undefined {
@@ -43,14 +35,23 @@ function statOf(info: Json): Record<string, number> | undefined {
   const like = num(info, "like_count");
   if (like !== undefined) stat.like = like;
   const comment = num(info, "comment_count");
-  if (comment !== undefined) stat.comment = comment;
+  if (comment !== undefined) stat.reply = comment;
   return Object.keys(stat).length > 0 ? stat : undefined;
 }
 
-function formatFor(kind: MediaKind, quality: string): string {
-  if (kind === "audio") return "ba";
-  const height = /\d{3,4}/.exec(quality)?.[0];
-  return height ? `bv*[height<=${height}]` : "bv*";
+/** 多P合集时 yt-dlp 返回 entries；单P只有当前标题。 */
+function pagesOf(info: Json, ref: BiliRef, title: string): BiliPage[] {
+  const entries = asArray(info.entries);
+  if (entries.length > 0) {
+    return entries.map((entry, index) => {
+      const item = asRecord(entry) ?? {};
+      return {
+        page: num(item, "playlist_index") ?? index + 1,
+        title: str(item, "title") ?? "",
+      };
+    });
+  }
+  return [{ page: ref.page, title }];
 }
 
 export function createYtdlpBackend(config: GatewayConfig, logger?: Logger): BiliBackend {
@@ -63,16 +64,13 @@ export function createYtdlpBackend(config: GatewayConfig, logger?: Logger): Bili
 
   return {
     id: YTDLP_ID,
-    supports: (cap: BiliCapability) => cap === "detail" || cap === "media",
+    supports: (cap: BiliCapability) => cap === "detail" || cap === "audio",
 
     async probe(): Promise<BiliProbe> {
       const parts = probeCommand.trim().split(/\s+/).filter(Boolean);
-      if (parts.length === 0) {
-        const loggedIn = Boolean(cookiesFile);
-        return { ok: true, loggedIn, maxQuality: loggedIn ? "1080p" : "480p" };
-      }
+      if (parts.length === 0) return { ok: true, loggedIn: Boolean(cookiesFile) };
       const result = await runCli(parts[0]!, parts.slice(1), timeoutMs);
-      return result.failed ? { ok: true, loggedIn: false, maxQuality: "480p" } : { ok: true, loggedIn: true, maxQuality: "1080p" };
+      return { ok: true, loggedIn: !result.failed };
     },
 
     async detail(ref: BiliRef): Promise<BiliDetail> {
@@ -81,32 +79,34 @@ export function createYtdlpBackend(config: GatewayConfig, logger?: Logger): Bili
       const info = lastJsonObject(result.stdout);
       if (!info) throw new BiliError("BILI_UNAVAILABLE", "video info：yt-dlp 没有输出可解析的 JSON");
       const title = str(info, "title") ?? "";
-      const duration = num(info, "duration");
-      const bvid = inferBvid(ref, info.id, info.webpage_url);
-      const fallback = ref.raw.startsWith("http") ? ref.raw : bvid ? `https://www.bilibili.com/video/${bvid}` : ref.raw;
+      const pages = pagesOf(info, ref, title);
       return {
-        bvid, aid: ref.aid, title, desc: str(info, "description") ?? "",
+        bvid: inferBvid(ref, info.id, info.webpage_url),
+        aid: ref.aid,
+        title,
+        desc: str(info, "description") ?? "",
         owner: { mid: toMid(info.uploader_id), name: str(info, "uploader") },
-        pubdate: toIso(info.timestamp), duration, stat: statOf(info), cover: str(info, "thumbnail"),
-        tags: strArray(info.tags), pages: [{ page: ref.page, title, duration }],
-        url: str(info, "webpage_url") ?? fallback,
+        stat: statOf(info),
+        cover: str(info, "thumbnail"),
+        pages,
+        currentPage: ref.page,
+        pageCount: pages.length,
       };
     },
 
-    async media(ref: BiliRef, opts: { kind: MediaKind; quality: string }): Promise<BiliStream> {
-      const format = formatFor(opts.kind, opts.quality || config.bilibili.quality);
-      const result = await run(["-g", "-f", format, "--no-playlist", ...baseArgs(), ref.raw]);
-      if (result.failed) throw cliFailure(result, command, "media");
+    async audio(ref: BiliRef): Promise<BiliAudio> {
+      const result = await run(["-g", "-f", "ba", "--no-playlist", ...baseArgs(), ref.raw]);
+      if (result.failed) throw cliFailure(result, command, "audio");
       const url = lastNonEmptyLine(result.stdout);
-      if (!url) throw new BiliError("BILI_UNAVAILABLE", "media：yt-dlp 没有返回直链");
-      return { url, contentType: opts.kind === "audio" ? "audio/mp4" : "video/mp4", quality: opts.kind === "video" ? opts.quality || undefined : undefined };
+      if (!url) throw new BiliError("BILI_UNAVAILABLE", "audio：yt-dlp 没有返回直链");
+      return { url };
     },
 
     async comments(): Promise<BiliCommentPage> {
-      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-ytdlp 不支持该动作");
+      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-ytdlp 不支持评论");
     },
     async article(): Promise<BiliArticle> {
-      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-ytdlp 不支持该动作");
+      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-ytdlp 不支持专栏");
     },
   };
 }

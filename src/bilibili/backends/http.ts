@@ -1,11 +1,12 @@
 import type { GatewayConfig } from "../../config.js";
 import type { Logger } from "../../logger.js";
 import { httpFailure } from "../errors.js";
-import { asRecord, asString, num, numRecord, pick, str, strArray } from "../json.js";
+import { asArray, asRecord, asString, num, numRecord, pick, str } from "../json.js";
 import { ManagedProcess } from "../process.js";
 import {
-  BiliError, type BiliArticle, type BiliBackend, type BiliCapability, type BiliComment, type BiliCommentPage,
-  type BiliDetail, type BiliProbe, type BiliRef, type BiliStream, type MediaKind,
+  BiliError, type BiliArticle, type BiliAudio, type BiliBackend, type BiliCapability,
+  type BiliComment, type BiliCommentPage, type BiliDetail, type BiliPage, type BiliProbe,
+  type BiliRef,
 } from "../types.js";
 
 /** HTTP 后端：契约见 README，响应兼容 `{ok:true,data}` 与直接数据对象。 */
@@ -17,42 +18,56 @@ function mapProbe(raw: unknown): BiliProbe {
   return {
     ok: src?.ok !== false,
     loggedIn: (src?.loggedIn ?? src?.logged_in) === true,
-    maxQuality: str(src, "maxQuality", "max_quality", "quality"),
     hint: str(src, "hint"),
   };
 }
+
+function mapPages(raw: unknown): BiliPage[] {
+  return (Array.isArray(raw) ? raw : []).map((item, index) => {
+    const page = asRecord(item) ?? {};
+    return { page: num(page, "page", "p") ?? index + 1, title: str(page, "title", "part") ?? "" };
+  });
+}
+
 function mapDetail(raw: unknown, ref: BiliRef): BiliDetail {
   const outer = asRecord(raw) ?? {};
   const src = asRecord(outer.detail) ?? outer;
   const owner = asRecord(src.owner) ?? {};
-  const zone = asRecord(src.zone) ?? {};
   const bvid = str(src, "bvid", "bv_id") ?? ref.bvid ?? "";
-  const pages = (Array.isArray(src.pages) ? src.pages : []).map((item, i) => {
-    const page = asRecord(item) ?? {};
-    return { page: num(page, "page", "p") ?? i + 1, cid: num(page, "cid"), title: str(page, "title", "part"), duration: num(page, "duration") };
-  });
+  const pages = mapPages(src.pages);
+  if (pages.length === 0) pages.push({ page: ref.page, title: str(src, "title") ?? "" });
   return {
-    bvid, aid: num(src, "aid", "avid"), title: str(src, "title") ?? "", desc: str(src, "desc", "description") ?? "",
+    bvid,
+    aid: num(src, "aid", "avid"),
+    title: str(src, "title") ?? "",
+    desc: str(src, "desc", "description") ?? "",
     owner: { mid: num(owner, "mid", "uid"), name: str(owner, "name", "uname") },
-    pubdate: str(src, "pubdate", "pub_time"), duration: num(src, "duration"),
-    zone: { tid: num(zone, "tid") ?? num(src, "tid"), name: str(zone, "name") ?? str(src, "tname") },
-    stat: numRecord(pick(src, "stat", "stats")), cover: str(src, "cover", "pic"), tags: strArray(pick(src, "tags", "tag_list")),
-    pages, url: str(src, "url", "link") ?? (bvid ? `https://www.bilibili.com/video/${bvid}` : ""),
+    stat: numRecord(pick(src, "stat", "stats")),
+    cover: str(src, "cover", "pic"),
+    pages,
+    currentPage: ref.page,
+    pageCount: pages.length,
   };
 }
+
 function mapComment(raw: unknown): BiliComment {
   const src = asRecord(raw) ?? {};
   const member = asRecord(pick(src, "member", "user")) ?? {};
   const content = pick(src, "content");
   const replies = pick(src, "replies");
   return {
-    rpid: num(src, "rpid", "id") ?? 0, root: num(src, "root", "root_id") ?? null, parent: num(src, "parent", "parent_id") ?? null,
-    mid: num(member, "mid", "uid") ?? num(src, "mid") ?? 0, uname: str(member, "uname", "name") ?? str(src, "uname") ?? "",
+    rpid: num(src, "rpid", "id") ?? 0,
+    root: num(src, "root", "root_id") ?? null,
+    parent: num(src, "parent", "parent_id") ?? null,
+    mid: num(member, "mid", "uid") ?? num(src, "mid") ?? 0,
+    uname: str(member, "uname", "name") ?? str(src, "uname") ?? "",
     content: asString(content) ?? str(asRecord(content), "message") ?? str(src, "message") ?? "",
-    like: num(src, "like", "like_count") ?? 0, ctime: num(src, "ctime", "create_time") ?? 0,
+    like: num(src, "like", "like_count") ?? 0,
+    ctime: num(src, "ctime", "create_time") ?? 0,
     replies: Array.isArray(replies) ? replies.map(mapComment) : undefined,
   };
 }
+
 function mapCommentPage(raw: unknown, ref: BiliRef, fallback: number): BiliCommentPage {
   const src = asRecord(raw) ?? {};
   const items = Array.isArray(src.items) ? src.items : Array.isArray(src.replies) ? src.replies : [];
@@ -60,50 +75,88 @@ function mapCommentPage(raw: unknown, ref: BiliRef, fallback: number): BiliComme
   const next = num(src, "nextPage", "next_page");
   const more = pick(src, "hasMore", "has_more");
   return {
-    bvid: str(src, "bvid") ?? ref.bvid ?? "", page, total: num(src, "total", "total_count"),
-    hasMore: typeof more === "boolean" ? more : next !== undefined ? next > page : false, nextPage: next, items: items.map(mapComment),
+    bvid: str(src, "bvid") ?? (ref.bvid ?? (ref.cv ? `cv${ref.cv}` : "")),
+    page,
+    total: num(src, "total", "total_count"),
+    hasMore: typeof more === "boolean" ? more : next !== undefined ? next > page : false,
+    nextPage: next,
+    items: items.map(mapComment),
   };
 }
 
-function mapStream(raw: unknown, kind: MediaKind, quality: string): BiliStream {
+function mapAudio(raw: unknown): BiliAudio {
   const outer = asRecord(raw) ?? {};
-  const src = asRecord(outer[kind]) ?? outer;
-  const durl = Array.isArray(src.durl) ? src.durl[0] : undefined;
-  const url = str(src, "url", "baseUrl", "base_url", "play_url") ?? str(asRecord(durl), "url");
-  if (!url) throw new BiliError("BILI_UNAVAILABLE", "Bilibili HTTP 后端未返回播放地址");
-  return { url, contentType: str(src, "contentType", "content_type", "mimeType", "mime", "type") ?? "", size: num(src, "size", "contentLength", "content_length"), quality: str(src, "quality", "qualityLabel") ?? quality };
+  const src = asRecord(outer.audio) ?? outer;
+  const dash = asRecord(src.dash) ?? asRecord(outer.dash);
+  const stream = asRecord(asArray(dash?.audio)[0]);
+  const durl = asRecord(asArray(src.durl)[0]);
+  const url = str(src, "url", "baseUrl", "base_url", "play_url")
+    ?? str(stream, "baseUrl", "base_url", "url")
+    ?? str(durl, "url");
+  if (!url) throw new BiliError("BILI_UNAVAILABLE", "Bilibili HTTP 后端未返回音频直链");
+  return { url };
 }
+
 const cvOf = (raw: string): string | undefined => /cv(\d+)/i.exec(raw)?.[1] ?? (/^\d+$/.test(raw.trim()) ? raw.trim() : undefined);
 
 function mapArticle(raw: unknown, ref: BiliRef): BiliArticle {
   const outer = asRecord(raw) ?? {};
   const src = asRecord(outer.article) ?? outer;
-  return { cv: str(src, "cv", "cvid") ?? ref.cv ?? cvOf(ref.raw) ?? "", title: str(src, "title"), content: str(src, "content", "body", "text") ?? "", meta: asRecord(src.meta) };
+  const meta = asRecord(src.meta);
+  const cover = str(src, "cover", "banner_url") ?? str(meta, "cover");
+  return {
+    cv: str(src, "cv", "cvid") ?? ref.cv ?? cvOf(ref.raw) ?? "",
+    title: str(src, "title"),
+    content: str(src, "content", "body", "text") ?? "",
+    meta: cover ? { ...meta, cover } : meta,
+  };
 }
 
 class HttpBackend implements BiliBackend {
   readonly id = HTTP_ID;
-  private readonly baseUrl: string; private readonly token: string; private readonly timeoutMs: number;
-  private readonly startupTimeoutMs: number; private readonly managed?: ManagedProcess;
-  private ready = false; private readying: Promise<void> | null = null;
+  private readonly baseUrl: string;
+  private readonly token: string;
+  private readonly timeoutMs: number;
+  private readonly startupTimeoutMs: number;
+  private readonly managed?: ManagedProcess;
+  private ready = false;
+  private readying: Promise<void> | null = null;
 
   constructor(config: GatewayConfig, logger?: Logger) {
     const http = config.bilibili.http;
-    this.baseUrl = http.baseUrl; this.token = http.token; this.timeoutMs = http.requestTimeoutMs; this.startupTimeoutMs = http.startupTimeoutMs;
-    this.managed = http.command.length > 0 ? new ManagedProcess({ command: http.command, env: http.token ? { BILI_HTTP_TOKEN: http.token } : undefined, logger }) : undefined;
+    this.baseUrl = http.baseUrl;
+    this.token = http.token;
+    this.timeoutMs = http.requestTimeoutMs;
+    this.startupTimeoutMs = http.startupTimeoutMs;
+    this.managed = http.command.length > 0
+      ? new ManagedProcess({ command: http.command, env: http.token ? { BILI_HTTP_TOKEN: http.token } : undefined, logger })
+      : undefined;
   }
+
   supports(_cap: BiliCapability): boolean { return true; }
+
   async probe(): Promise<BiliProbe> {
-    try { return mapProbe(await this.request("/health", {})); }
-    catch (err) { return { ok: false, loggedIn: false, error: err instanceof Error ? err.message : String(err) }; }
+    try {
+      return mapProbe(await this.request("/health", {}));
+    } catch (err) {
+      return { ok: false, loggedIn: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
-  async detail(ref: BiliRef): Promise<BiliDetail> { return mapDetail(await this.request("/detail", { target: ref.raw }), ref); }
+
+  async detail(ref: BiliRef): Promise<BiliDetail> {
+    return mapDetail(await this.request("/detail", { target: ref.raw }), ref);
+  }
+
   async comments(ref: BiliRef, opts: { page: number; sort: "hot" | "time" }): Promise<BiliCommentPage> {
-    return mapCommentPage(await this.request("/comments", { target: ref.raw, page: opts.page, sort: opts.sort }), ref, opts.page);
+    return mapCommentPage(
+      await this.request("/comments", { target: ref.raw, page: opts.page, sort: opts.sort }),
+      ref,
+      opts.page,
+    );
   }
-  async media(ref: BiliRef, opts: { kind: MediaKind; quality: string }): Promise<BiliStream> {
-    const data = await this.request("/playurl", { target: ref.raw, kind: opts.kind, quality: opts.quality, p: ref.page });
-    return mapStream(data, opts.kind, opts.quality);
+
+  async audio(ref: BiliRef): Promise<BiliAudio> {
+    return mapAudio(await this.request("/playurl", { target: ref.raw, kind: "audio", p: ref.page }));
   }
 
   async article(ref: BiliRef): Promise<BiliArticle> {
@@ -113,7 +166,10 @@ class HttpBackend implements BiliBackend {
   dispose(): Promise<void> { return this.managed?.dispose() ?? Promise.resolve(); }
 
   private async ensureReady(): Promise<void> {
-    if (this.managed) { await this.managed.ensureStarted(`${this.baseUrl}/health`, this.startupTimeoutMs); return; }
+    if (this.managed) {
+      await this.managed.ensureStarted(`${this.baseUrl}/health`, this.startupTimeoutMs);
+      return;
+    }
     if (this.ready) return;
     if (!this.readying) {
       this.readying = this.send("/health", {}).then((res) => {
@@ -137,7 +193,8 @@ class HttpBackend implements BiliBackend {
   private async send(path: string, params: Query): Promise<{ ok: boolean; status: number; body: unknown }> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of Object.entries(params)) if (value !== undefined) url.searchParams.set(key, String(value));
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const headers: Record<string, string> = { accept: "application/json" };
       if (this.token) headers.authorization = `Bearer ${this.token}`;
@@ -149,7 +206,9 @@ class HttpBackend implements BiliBackend {
     } catch (err) {
       if (controller.signal.aborted) throw new BiliError("BILI_UNAVAILABLE", `请求 Bilibili HTTP 后端超时（${this.timeoutMs}ms，${path}）`, "可调大 bilibili.http.request_timeout_ms");
       throw new BiliError("BILI_UNAVAILABLE", `无法连接 Bilibili HTTP 后端（${path}）：${err instanceof Error ? err.message : String(err)}`, "请确认 bilibili.http.base_url 可达，或配置 bilibili.http.command 托管启动");
-    } finally { clearTimeout(timer); }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

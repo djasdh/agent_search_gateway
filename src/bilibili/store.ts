@@ -1,4 +1,4 @@
-/** 评论本地库（node:sqlite）：落库、楼中楼展开、断点、FTS/LIKE 检索。 */
+/** 评论本地库（node:sqlite）：落库、楼中楼展开、断点、LIKE 检索。 */
 
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -16,8 +16,6 @@ interface Row {
   like_count: number;
   ctime: number;
 }
-
-interface Flat extends Row {}
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS bili_comment (
@@ -49,7 +47,7 @@ function fromRow(row: Row): BiliComment {
   };
 }
 
-function flatten(items: BiliComment[], root: number | undefined, parent: number | undefined, out: Flat[]): void {
+function flatten(items: BiliComment[], root: number | undefined, parent: number | undefined, out: Row[]): void {
   for (const item of items) {
     const rpid = n(item.rpid);
     if (rpid <= 0) continue;
@@ -95,7 +93,7 @@ export function createCommentStore(path: string, logger?: Logger): BiliCommentSt
 
   return {
     upsertPage({ bvid, page, items, hasMore }) {
-      const rows: Flat[] = [];
+      const rows: Row[] = [];
       flatten(items, undefined, undefined, rows);
       const now = Date.now();
       db.exec("BEGIN IMMEDIATE");

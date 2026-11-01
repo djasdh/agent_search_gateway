@@ -1,6 +1,6 @@
 # bilibili-article-server
 
-最小的 B 站专栏正文 HTTP 服务，供 `agent_search_gateway` 的 `bilibili` HTTP 后端拉起并转发 `/article?cv=xxx`。只返回标题和正文纯文本。
+最小的 B 站视频详情、专栏正文、评论与音频直链 HTTP 服务，供 `agent_search_gateway` 的 `bilibili` HTTP 后端拉起，转发 `/detail`、`/article`、`/comments` 与 `/playurl`。
 
 ## 安装
 
@@ -36,6 +36,12 @@ curl -s http://127.0.0.1:8010/health
 # {"ok":true,"loggedIn":false,"maxQuality":"n/a","service":"bilibili-article-server"}
 ```
 
+`GET /detail?target=BV1xx411c7mD`（视频详情，`pages` 全量标题）：
+
+```bash
+curl -s 'http://127.0.0.1:8010/detail?target=BV1xx411c7mD'
+```
+
 `GET /article?cv=123`（`cv` 也接受 `cv123` 或含 `cv123` 的链接）：
 
 ```bash
@@ -45,7 +51,25 @@ curl -s 'http://127.0.0.1:8010/article?cv=123'
 {"ok":true,"data":{"cv":"123","title":"专栏标题","content":"正文纯文本……","meta":{"mid":123456,"author":"UP 主","publishTime":1700000000,"words":1234,"category":{"id":1,"name":"动画"},"stats":{"view":1000,"like":10},"url":"https://www.bilibili.com/read/cv123"}}}
 ```
 
-失败统一返回 HTTP 200：`{"ok":false,"error":{"code":"BILI_ARTICLE_FAIL","message":"..."}}`；鉴权失败返回 401，单次抓取超时 20 秒。
+`GET /comments?target=BV1xx411c7mD&page=1&sort=hot`（`target` 也接受 av 号或含 cv 的链接）：
+
+```bash
+curl -s 'http://127.0.0.1:8010/comments?target=BV1xx411c7mD&page=1&sort=hot'
+```
+```json
+{"ok":true,"data":{"bvid":"BV1xx411c7mD","page":1,"total":100,"hasMore":true,"nextPage":2,"items":[{"rpid":1,"mid":123,"uname":"UP","content":"评论","like":10,"ctime":1700000000,"replies":[]}]}}
+```
+
+`GET /playurl?target=BV1xx411c7mD&p=1`（只返回音频直链）：
+
+```bash
+curl -s 'http://127.0.0.1:8010/playurl?target=BV1xx411c7mD&p=1'
+```
+```json
+{"ok":true,"data":{"url":"https://.../audio.m4s?...","bandwidth":132000,"contentType":"audio/mp4"}}
+```
+
+失败统一返回 HTTP 200：`{"ok":false,"error":{"code":"...","message":"..."}}`；鉴权失败返回 401，单次抓取超时 20 秒。
 
 ## 游客限制
 

@@ -1,12 +1,13 @@
-/** Bilibili 后端：kukemc 系 CLI（`bili`），只提供详情与评论。 */
+/** Bilibili 后端：kukemc 系 CLI（`bili`），提供详情与评论。 */
 import type { GatewayConfig } from "../../config.js";
 import type { Logger } from "../../logger.js";
 import { envelope, runCli } from "../cli.js";
 import { cliFailure } from "../errors.js";
 import { asArray, asRecord, num, numRecord, str } from "../json.js";
 import {
-  BiliError, type BiliArticle, type BiliBackend, type BiliCapability, type BiliComment,
-  type BiliCommentPage, type BiliDetail, type BiliProbe, type BiliRef, type BiliStream,
+  BiliError, type BiliArticle, type BiliAudio, type BiliBackend, type BiliCapability,
+  type BiliComment, type BiliCommentPage, type BiliDetail, type BiliPage, type BiliProbe,
+  type BiliRef,
 } from "../types.js";
 
 export const KUKEMC_ID = "cli-kukemc";
@@ -42,12 +43,15 @@ function mapComment(raw: unknown, depth = 0): BiliComment | null {
   return comment;
 }
 
-function mapPages(raw: unknown): BiliDetail["pages"] {
+function mapPages(raw: unknown): BiliPage[] {
   return asArray(raw).map((value, index) => {
     const page = asRecord(value);
-    return { page: num(page, "page") ?? index + 1, cid: num(page, "cid"), title: str(page, "title"), duration: num(page, "duration") };
+    return { page: num(page, "page") ?? index + 1, title: str(page, "title") ?? "" };
   });
 }
+
+const targetOf = (ref: BiliRef): string =>
+  ref.bvid ?? (ref.cv ? `cv${ref.cv}` : ref.aid ? `av${ref.aid}` : "");
 
 export function createKukemcBackend(config: GatewayConfig, logger?: Logger): BiliBackend {
   const { command, timeoutMs } = config.bilibili.cliKukemc;
@@ -78,16 +82,19 @@ export function createKukemcBackend(config: GatewayConfig, logger?: Logger): Bil
       const data = envelope(result.stdout, result.stderr, "video info");
       const bvid = str(data, "bvid") ?? ref.bvid ?? "";
       const owner = asRecord(data.owner);
-      const zone = asRecord(data.zone);
-      const tid = num(zone, "tid");
-      const zoneName = str(zone, "name");
-      const fallback = ref.raw.startsWith("http") ? ref.raw : `https://www.bilibili.com/video/${bvid}`;
+      const pages = mapPages(data.pages);
+      if (pages.length === 0) pages.push({ page: ref.page, title: str(data, "title") ?? "" });
       return {
-        bvid, aid: num(data, "aid") ?? ref.aid, title: str(data, "title") ?? "", desc: str(data, "desc") ?? "",
+        bvid,
+        aid: num(data, "aid") ?? ref.aid,
+        title: str(data, "title") ?? "",
+        desc: str(data, "desc") ?? "",
         owner: { mid: num(owner, "mid"), name: str(owner, "name") },
-        pubdate: str(data, "pubdate"), duration: num(data, "duration"),
-        zone: tid !== undefined || zoneName !== undefined ? { tid, name: zoneName } : undefined,
-        stat: numRecord(data.stat), pages: mapPages(data.pages), url: str(data, "url") ?? fallback,
+        stat: numRecord(data.stat),
+        cover: str(data, "cover", "pic"),
+        pages,
+        currentPage: ref.page,
+        pageCount: pages.length,
       };
     },
 
@@ -99,17 +106,20 @@ export function createKukemcBackend(config: GatewayConfig, logger?: Logger): Bil
       const total = num(data, "total");
       const items = asArray(data.items).map((item) => mapComment(item)).filter((item): item is BiliComment => item !== null);
       return {
-        bvid: ref.bvid ?? str(data, "bvid") ?? "", page, total,
-        hasMore: total !== undefined ? page * PAGE_SIZE < total : items.length > 0,
-        nextPage: page + 1, items,
+        bvid: targetOf(ref),
+        page,
+        total,
+        hasMore: total !== undefined ? page * PAGE_SIZE < total : items.length >= PAGE_SIZE,
+        nextPage: page + 1,
+        items,
       };
     },
 
-    async media(): Promise<BiliStream> {
-      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-kukemc 不支持该动作");
+    async audio(): Promise<BiliAudio> {
+      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-kukemc 不支持音频直链");
     },
     async article(): Promise<BiliArticle> {
-      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-kukemc 不支持该动作");
+      throw new BiliError("BILI_CAPABILITY_UNSUPPORTED", "cli-kukemc 不支持专栏");
     },
   };
 }
