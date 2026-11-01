@@ -159,6 +159,31 @@ describe("createSearchService", () => {
     expect(r1.ok && r2.ok && r1.text === r2.text).toBe(true);
   });
 
+  it("域过滤器 getter：每次搜索现取，刷新后无需重建服务即可生效", async () => {
+    let current: DomainFilter = domainFilter;
+    let calls = 0;
+    const svc = createSearchService(
+      makeConfig(),
+      () => {
+        calls++;
+        return current;
+      },
+      silentLogger,
+    );
+
+    const r1 = await svc.search({ query: "filter-before" });
+    expect(r1.ok).toBe(true);
+    expect(r1.text).not.toContain("Spam X");
+    expect(calls).toBe(1);
+
+    // 模拟 adlist 刷新：只替换过滤器引用，不重建 searchService
+    current = { enabled: false, blocked: new Set(), allowlist: new Set(), count: 0 };
+    const r2 = await svc.search({ query: "filter-after" });
+    expect(r2.ok).toBe(true);
+    expect(r2.text).toContain("Spam X");
+    expect(calls).toBe(2);
+  });
+
   it("不同参数不同缓存键", async () => {
     const svc = createSearchService(makeConfig(), domainFilter, silentLogger);
     await svc.search({ query: "k1" });

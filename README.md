@@ -181,6 +181,8 @@ embedding:      # enabled/provider(openai|ollama)/base_url/api_key/model/dim/tim
 corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 ```
 
+> 并发作用域：`flaresolverr.max_concurrent` 是**全进程**上限（所有 MCP 会话合计，防止 Chromium 内存线性放大）；`search.max_concurrent` 仍是**每会话**上限（多会话聚合为 N×值，只影响延迟）。
+
 ### fetch 全类型与产物落盘
 
 `fetch` 按响应的 `Content-Type` 分派，不再只认网页：

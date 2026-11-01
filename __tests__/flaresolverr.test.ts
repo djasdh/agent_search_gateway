@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { GatewayConfig } from "../src/config.js";
 import { createFlareSolverrClient } from "../src/fetch/flaresolverr.js";
+import { Semaphore } from "../src/utils/semaphore.js";
 
 function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   return {
@@ -175,5 +176,46 @@ describe("createFlareSolverrClient", () => {
     setBehavior({ status: "ok", response: "<html><body>ok</body></html>" });
     const r = await client.requestGet("http://127.0.0.1:8080/");
     expect(r.ok).toBe(true);
+  });
+
+  it("共享信号量：两个客户端（模拟两个会话）并发不超过 max_concurrent", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const mock = createHttpServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        setTimeout(() => {
+          active--;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              status: "ok",
+              solution: { url: "https://target.example/", status: 200, response: "<html><body>ok</body></html>" },
+            }),
+          );
+        }, 30);
+      });
+    });
+    await new Promise<void>((r) => mock.listen(0, "127.0.0.1", r));
+    const mockUrl = `http://127.0.0.1:${(mock.address() as AddressInfo).port}`;
+    try {
+      const cfg = makeConfig({ flaresolverrUrl: mockUrl, flaresolverrMaxConcurrent: 2 });
+      // 进程级共享一个 sem（等价于 server.ts 的 getFlareSolverrClient）
+      const sem = new Semaphore(2);
+      const clientA = createFlareSolverrClient(cfg, sem);
+      const clientB = createFlareSolverrClient(cfg, sem);
+      await Promise.all([
+        clientA.requestGet("https://target.example/1"),
+        clientA.requestGet("https://target.example/2"),
+        clientB.requestGet("https://target.example/3"),
+        clientB.requestGet("https://target.example/4"),
+      ]);
+      // 若各自 new Semaphore，这里会是 4
+      expect(maxActive).toBe(2);
+    } finally {
+      await new Promise<void>((r) => mock.close(() => r()));
+    }
   });
 });

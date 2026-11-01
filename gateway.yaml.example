@@ -21,7 +21,7 @@ flaresolverr:
   url: http://127.0.0.1:8192
   enabled: true            # 路由②（CF/JS 渲染）总开关
   timeout_ms: 60000        # FlareSolverr 请求超时
-  max_concurrent: 2        # 并发信号量（保护浏览器资源）
+  max_concurrent: 2        # 全进程并发上限（保护 FlareSolverr / Chromium；所有 MCP 会话合计）
   trigger_status: [403, 405, 429]   # direct 这些状态 → 升级 FlareSolverr
   fallback_on_empty: true  # direct 200 但空壳 JS → 升级
 

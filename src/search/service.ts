@@ -56,6 +56,13 @@ export interface SearchService {
   search(params: SearchParams): Promise<SearchOutcome>;
 }
 
+/**
+ * 广告过滤器来源：固定值（单测/独立使用），或每次搜索时现取。
+ * 进程级共享时用 getter，adlist 刷新后所有会话的 searchService 都能看到新过滤器，
+ * 不必重建服务（重建会连带清空缓存和并发闸门）。
+ */
+export type DomainFilterSource = DomainFilter | (() => DomainFilter);
+
 /** 配额台账里的单引擎条目（由 searxng 的 quota 插件写入）。 */
 export interface QuotaEntry {
   type: "daily" | "monthly" | "once";
@@ -450,12 +457,13 @@ function createQuotaLoader(config: GatewayConfig, logger: Logger) {
 
 export function createSearchService(
   config: GatewayConfig,
-  domainFilter: DomainFilter,
+  domainFilter: DomainFilterSource,
   logger: Logger,
   deps: SearchDeps = {},
 ): SearchService {
   const cache = new StringCache(config.searchCacheMaxEntries, config.searchCacheTtlMs);
   const sem = new Semaphore(config.searchMaxConcurrent);
+  const resolveDomainFilter = typeof domainFilter === "function" ? domainFilter : () => domainFilter;
   const getEnabledEngines = createEnabledEnginesLoader(config, logger);
   const getQuota = createQuotaLoader(config, logger);
   const provider = deps.embeddingProvider ?? null;
@@ -792,11 +800,12 @@ export function createSearchService(
         engineBoost: config.rerankEngineBoost,
       });
 
+      const filter = resolveDomainFilter();
       const { results: cleaned, blockedCount } = cleanResults(reranked, {
         maxResultChars: config.searchMaxResultChars,
         minScore: params.minScore,
-        shouldBlock: domainFilter.enabled
-          ? (host) => isBlocked(host, domainFilter.blocked, domainFilter.allowlist)
+        shouldBlock: filter.enabled
+          ? (host) => isBlocked(host, filter.blocked, filter.allowlist)
           : undefined,
       });
       const localMs = performance.now() - tLocal;

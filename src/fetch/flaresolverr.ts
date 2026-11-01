@@ -1,4 +1,5 @@
 import type { GatewayConfig } from "../config.js";
+import { Semaphore } from "../utils/semaphore.js";
 import { assertPublicHttpUrl } from "./ssrf.js";
 
 export interface FlareSolverrResult {
@@ -24,39 +25,20 @@ interface V1Response {
   solution?: Solution;
 }
 
-/** 简单信号量：限制并发数，超出排队等待。 */
-class Semaphore {
-  private queue: Array<() => void> = [];
-  private active = 0;
-
-  constructor(private max: number) {}
-
-  async acquire(): Promise<() => void> {
-    if (this.active < this.max) {
-      this.active++;
-      return this.release;
-    }
-    await new Promise<void>((resolve) => this.queue.push(resolve));
-    this.active++;
-    return this.release;
-  }
-
-  private release = (): void => {
-    this.active--;
-    const next = this.queue.shift();
-    if (next) next();
-  };
-}
-
 const MAX_BODY_BYTES = 20 * 1024 * 1024; // 渲染 HTML 上限 20MB
 
 /**
  * 调用 FlareSolverr /v1 request.get，获取浏览器渲染后的 HTML。
  * 关键：returnOnlyCookies=false → solution.response 返回渲染后 DOM。
+ *
+ * 并发闸门必须由调用方注入**进程级共享**实例：FlareSolverr 自身无并发上限、
+ * 无排队，且无 session 时每个请求都会新建浏览器。若每个 MCP 会话各建一个
+ * 信号量，聚合并发会变成 N × max_concurrent，Chromium 内存线性放大。
  */
-export function createFlareSolverrClient(config: GatewayConfig) {
-  const sem = new Semaphore(config.flaresolverrMaxConcurrent);
-
+export function createFlareSolverrClient(
+  config: GatewayConfig,
+  sem: Semaphore = new Semaphore(config.flaresolverrMaxConcurrent),
+) {
   async function requestGet(url: string): Promise<FlareSolverrResult> {
     const release = await sem.acquire();
     try {

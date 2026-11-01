@@ -7,7 +7,7 @@ import { Semaphore } from "../utils/semaphore.js";
 import { FetchCache, type RenderMode } from "./cache.js";
 import { baseContentType, formatBytes, renderTextBody } from "./convert.js";
 import { directFetch, type DirectFetchResult } from "./direct.js";
-import { createFlareSolverrClient } from "./flaresolverr.js";
+import { createFlareSolverrClient, type FlareSolverrClient } from "./flaresolverr.js";
 import { htmlToMarkdown } from "./html2md.js";
 import { pdfToText } from "./pdf.js";
 import type { FetchStore } from "./store.js";
@@ -67,8 +67,10 @@ export function createFetchService(
   logger: Logger,
   browserPool?: BrowserPool,
   store?: FetchStore,
+  /** 进程级共享的 FlareSolverr 客户端；缺省时自建（单测 / 独立使用）。 */
+  flareSolverr?: FlareSolverrClient,
 ): FetchService {
-  const fsClient = createFlareSolverrClient(config);
+  const fsClient = flareSolverr ?? createFlareSolverrClient(config);
   const cache = new FetchCache(config.fetchCacheMaxEntries, config.fetchCacheTtlMs);
 
   async function renderWithHtml(html: string, baseUrl: string, maxChars?: number): Promise<string> {

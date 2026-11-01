@@ -1,6 +1,6 @@
 import { loadConfig } from "./config.js";
 import { Logger } from "./logger.js";
-import { createServer, startHttpServer } from "./server.js";
+import { closeGatewayRuntime, createServer, startHttpServer } from "./server.js";
 
 function loadConfigOrExit() {
   try {
@@ -26,6 +26,11 @@ async function main(): Promise<void> {
         await http.close();
       } catch (err) {
         logger.error(`error closing http server: ${String(err)}`);
+      }
+      try {
+        await closeGatewayRuntime();
+      } catch (err) {
+        logger.error(`error closing gateway runtime: ${String(err)}`);
       }
       logger.close();
       process.exit(0);

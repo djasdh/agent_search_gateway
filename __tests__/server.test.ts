@@ -213,3 +213,114 @@ describe("token 认证", () => {
     expect(status).toBe(200);
   });
 });
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** initialize 并返回会话 id（响应体读空，避免连接悬挂）。 */
+async function initSession(base: string): Promise<string> {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "1" } },
+    }),
+  });
+  const sid = res.headers.get("mcp-session-id");
+  expect(sid).toBeTruthy();
+  await res.text();
+  return sid!;
+}
+
+/** 打开 GET /mcp 的 standalone SSE 流（保持不读 body，模拟客户端挂长连接）。 */
+async function openSse(base: string, sessionId: string, signal: AbortSignal): Promise<Response> {
+  return fetch(`${base}/mcp`, {
+    method: "GET",
+    headers: { Accept: "text/event-stream", "Mcp-Session-Id": sessionId },
+    signal,
+  });
+}
+
+describe("session 空闲清扫", () => {
+  let base = "";
+  let closeFn: (() => Promise<void>) | undefined;
+
+  // 短 TTL / 短 tick：不用真等 1 小时
+  const TTL_MS = 250;
+  const SWEEP_MS = 20;
+
+  beforeAll(async () => {
+    const http = await startHttpServer(
+      {
+        config: makeConfig(),
+        logger: silentLogger,
+        sessionIdleTtlMs: TTL_MS,
+        sessionSweepIntervalMs: SWEEP_MS,
+      },
+      createServer,
+    );
+    closeFn = http.close;
+    base = `http://127.0.0.1:${new URL(http.url).port}`;
+  });
+
+  afterAll(async () => {
+    await closeFn?.();
+  });
+
+  it("GET /mcp 的 SSE 流开着时，即使超过 TTL 也不被清扫", async () => {
+    const sid = await initSession(base);
+    const ac = new AbortController();
+    const sse = await openSse(base, sid, ac.signal);
+    expect(sse.status).toBe(200);
+
+    // > 3×TTL，修复前这里会话已经被扫掉
+    await sleep(TTL_MS * 3);
+
+    const { status } = await mcpRequest(base, { jsonrpc: "2.0", id: 2, method: "tools/list" }, { sessionId: sid });
+    expect(status).toBe(200);
+
+    ac.abort();
+    await sse.body?.cancel().catch(() => {});
+  });
+
+  it("没有 SSE 流的空闲会话仍会被清扫", async () => {
+    const sid = await initSession(base);
+    await sleep(TTL_MS * 3);
+
+    const { status } = await mcpRequest(base, { jsonrpc: "2.0", id: 3, method: "tools/list" }, { sessionId: sid });
+    expect(status).toBe(404);
+  });
+
+  it("SSE 流关闭后 TTL 重新计时", async () => {
+    const sid = await initSession(base);
+    const ac = new AbortController();
+    const sse = await openSse(base, sid, ac.signal);
+    expect(sse.status).toBe(200);
+
+    // 流开着远超 TTL
+    await sleep(TTL_MS * 3);
+    ac.abort();
+    await sse.body?.cancel().catch(() => {});
+    await sleep(TTL_MS / 2);
+
+    // 关流后重新获得一个完整 TTL
+    const ok = await mcpRequest(base, { jsonrpc: "2.0", id: 4, method: "tools/list" }, { sessionId: sid });
+    expect(ok.status).toBe(200);
+
+    // 再超过 TTL（且无新活动）才被清扫
+    await sleep(TTL_MS * 3);
+    const gone = await mcpRequest(base, { jsonrpc: "2.0", id: 5, method: "tools/list" }, { sessionId: sid });
+    expect(gone.status).toBe(404);
+  });
+
+  it("未知 session id 的 GET 返回 404", async () => {
+    const res = await fetch(`${base}/mcp`, {
+      method: "GET",
+      headers: { Accept: "text/event-stream", "Mcp-Session-Id": "not-a-real-session" },
+    });
+    await res.body?.cancel().catch(() => {});
+    expect(res.status).toBe(404);
+  });
+});
