@@ -88,6 +88,18 @@ search:
       timeout_ms: 15000
       max_results: 8
 
+  # 微博搜索/热搜（ADR-0014）：网关侧文本源（OpenCLI），不经过 searxng。
+  # categories=weibo 只搜微博；categories=weibo_hot 返回热搜（query 可空）。
+  # 还需要 weibo.enabled=true；本开关默认关闭。
+  weibo:
+    enabled: false
+    category: weibo
+    hot_category: weibo_hot
+    limit: 10                # 单次最多返回条数（1-50）
+    timeout_ms: 30000
+    cache_ttl_ms: 60000
+    retry: 1                 # 空结果重试次数（微博搜索页异步加载，首跑常为空）
+
 rerank:
   enabled: true
   # 轻量重排层：绕过 searxng 的 category 分组排序，按「score × boost」降序重排，
@@ -193,6 +205,36 @@ bilibili:
     page_size: 20
     search_limit: 50
     max_pages_per_fetch: 20           # 单次 fetch 最多抓多少页，没抓完下次续传
+
+# 微博抓取（全部走 fetch；单 CLI 后端 OpenCLI；默认关闭）。
+# 普通页面 URL 带 ?weibo= 才接管；sinaimg.cn 图片 CDN URL 自动接管为附件。
+# 前置：安装 @jackwener/opencli；Chrome 登录 weibo.com（推荐 CDP 模式，
+# 设置 OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222），或安装 Browser Bridge 扩展；
+# 并执行 scripts/install-weibo-override.sh（给 post 补图片外链字段）。
+weibo:
+  enabled: false
+  cli:
+    command: opencli                 # 或绝对路径
+    timeout_ms: 30000                # 浏览器命令较慢；需 ≥ OPENCLI_BROWSER_CONNECT_TIMEOUT
+  defaults:
+    comments_limit: 20               # 评论条数（1-50）
+    user_posts_limit: 100            # 单次 user-posts 拉取条数（1-100）
+  # 时间段抓取：?weibo=user-posts&days=30 或 start/end。
+  # 整段先拉 100 条；满了就二分区间递归，直到每段不足 100 条。
+  user_posts:
+    default_days: 7                  # 不传 days/start/end 时的窗口
+    max_days: 90                     # 时间段跨度上限
+    max_items: 500                   # 本次返回条数上限
+    max_calls: 30                    # 单次 fetch 最多调用 CLI 次数
+    budget_ms: 120000                # 单次 fetch 抓取预算
+    max_chars: 500                   # 每条正文在 Markdown 里的长度上限
+  images:
+    enabled: true                    # 关闭时图片 URL 返回 WEIBO_UNAVAILABLE
+    referer: https://weibo.com/      # sinaimg 防盗链所需
+    max_bytes: 20971520              # 单张 20MB
+    timeout_ms: 20000
+    retry_tvax: true                 # wx*.sinaimg.cn 失败时换 tvax* 重试一次
+  cache_ttl_ms: 60000                # 同一 URL 短期缓存；0=不缓存
 
 browser:
   enabled: true            # 浏览器能力（fetch 路由③ + browser_* 工具）

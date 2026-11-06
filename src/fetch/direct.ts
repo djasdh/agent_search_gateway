@@ -248,7 +248,7 @@ export async function directFetch(
   }
 
   // 取件插件优先（ADR-0007 D5）：匹配表由插件提供，网关无条件信任
-  const plugin = findPlugin(url);
+  const plugin = findPlugin(url, config);
   if (plugin) {
     logger?.debug(`fetch plugin matched: ${plugin.name} ${url.toString()}`);
     return await fetchViaPlugin(plugin, url, config, logger);

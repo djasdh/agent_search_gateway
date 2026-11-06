@@ -94,6 +94,138 @@ gateway (本服务, :3000/mcp)
 - 评论按页抓取直到结束或 60 秒预算；没拉完返回 `complete: false`，再次 fetch 同一 URL 续传，不提供翻页参数。
 - 未安装后端或 `bilibili.enabled=false` 时，B 站 URL 会明确返回 `BILI_UNAVAILABLE`，不会静默回退成抓网页。
 
+## 微博抓取
+
+全部走 `fetch`，不新增工具；默认关闭。普通微博页面 URL 带 `?weibo=` 才接管；`sinaimg.cn` 图片 URL 自动接管为附件。
+
+### 前置
+
+1. Node ≥ 20.18.1，安装 OpenCLI（基线版本 `2.0.2`）：
+
+```bash
+npm install -g @jackwener/opencli
+```
+
+2. 浏览器登录 `weibo.com`。**推荐 CDP 模式**（Chrome 137+ 已移除 `--load-extension`）：
+
+```bash
+google-chrome-stable \
+  --user-data-dir="$PWD/data/weibo-chrome-profile" \
+  --remote-debugging-port=9222 \
+  --remote-allow-origins='*' \
+  --no-first-run \
+  "https://weibo.com/login"
+# 扫码登录后，在网关进程环境里设置：
+export OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222
+```
+
+旧版 Chrome 也可以改用 Browser Bridge 扩展（`opencli doctor` 显示扩展已连接即可）。
+
+3. 安装 post adapter override（给 `weibo post` 补图片外链字段）：
+
+```bash
+./scripts/install-weibo-override.sh
+```
+
+4. `gateway.yaml` 里把 `weibo.enabled` 设为 `true`。
+
+### 请求
+
+| 请求 | 说明 |
+|---|---|
+| `https://weibo.com/{uid}/{mblogid}?weibo=post` | 正文/转发 + 图片外链（默认动作） |
+| `https://m.weibo.cn/detail/{id}?weibo=comments&limit=20` | 评论（最多 50） |
+| `https://weibo.com/u/{uid}?weibo=user` | 用户信息 |
+| `https://weibo.com/u/{uid}?weibo=user-posts&days=30` | 博主最近 30 天微博（Markdown） |
+| `https://weibo.com/u/{uid}?weibo=user-posts&start=2026-10-01&end=2026-10-31` | 博主指定时间段微博 |
+| `https://wx1.sinaimg.cn/large/xxx.jpg` | 图片附件（自动落盘，返回 `/files/<sha256>`） |
+| `https://t.cn/xxxx?weibo=post` | 短链先解析再抓取 |
+
+时间段参数：
+
+| 参数 | 说明 |
+|---|---|
+| `days=N` | 最近 N 天（1–90），与 `start`/`end` 互斥；默认 7 |
+| `start` / `end` | `YYYY-MM-DD`，含边界；只给一端时自动补另一端 |
+| `include_retweets=1` | 包含转发 |
+| `max_items=N` | 本次返回上限（默认 500） |
+
+抓取策略：先整段拉 100 条；返回满 100 条说明可能被截断，就二分区间继续，直到每段不足 100 条。低频博主通常一次调用即可。单日超过 100 条时会在结果末尾提示（adapter 只支持日期粒度）。图片只有数量 `pic_count`，要图请对单条再 `?weibo=post`。
+
+### 微博搜索 / 热搜
+
+搜索走 `search` 工具，不新增工具：
+
+| 请求 | 说明 |
+|---|---|
+| `search(query="洛天依", categories="weibo")` | 只搜微博帖子，不查普通网页 |
+| `search(query="", categories="weibo_hot")` | 微博热搜榜 |
+
+- 需要同时开启 `weibo.enabled` 和 `search.weibo.enabled`。
+- 微博源是网关侧文本源，直接调 OpenCLI，不经过 searxng；自定义类别也不会转发给 searxng。
+- 空结果会自动重试一次（搜索页异步加载），结果缓存 60 秒。
+- 微博搜索只保留微博候选，不召回本地语料，避免混入普通网页。
+
+`?weibo=search` / `?weibo=hot` 不支持的抓取动作仍会返回 `WEIBO_INVALID`；搜索请用上面的 `categories`。
+
+### 图片
+
+- `post` 的 Markdown 里按实际数量列 `![](url)`；转发帖的图片也列。
+- 图片 CDN URL 直接 `fetch`：插件带 `Referer` 下载，走现有 fetch store，返回 `/files/<sha256>`。
+- 不做多图 zip；需要多张就分别 fetch 各图片外链。
+- `wx*.sinaimg.cn` 失败时自动换 `tvax*` 重试一次。
+
+### 服务器部署
+
+```bash
+sudo apt install -y xvfb google-chrome-stable
+Xvfb :99 -screen 0 1280x900x24 &
+DISPLAY=:99 google-chrome-stable \
+  --user-data-dir="$PWD/data/weibo-chrome-profile" \
+  --remote-debugging-port=9222 \
+  --remote-allow-origins='*' \
+  --no-first-run \
+  "https://weibo.com/login"
+# 通过 VNC/远程桌面扫码登录；保持 Chrome 运行
+export OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222
+opencli weibo whoami -f json
+```
+
+网关与 Chrome 分离时，把 `OPENCLI_CDP_ENDPOINT` 指向 Chrome 所在机器的 `http://<host>:9222`。
+
+登录完成后可以改用无头模式复用同一 profile，不需要 Xvfb/桌面：
+
+```bash
+google-chrome-stable \
+  --headless=new \
+  --user-data-dir="$PWD/data/weibo-chrome-profile" \
+  --remote-debugging-port=9222 \
+  --remote-allow-origins='*' \
+  --no-first-run \
+  about:blank
+export OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222
+opencli weibo whoami -f json
+```
+
+注意：
+
+- 同一个 `user-data-dir` 同时只能被一个 Chrome 实例使用；切换前先退出有头实例。
+- 首次扫码登录仍建议用有头模式（或 Xvfb + VNC）；登录态写入 profile 后，无头模式可直接复用。
+- 无头模式的 UA 会带 `HeadlessChrome/...`。当前微博抓取/搜索实测可用；若以后遇到风控，可加 `--user-agent` 覆盖成普通 Chrome UA。
+
+### 错误码
+
+| 错误码 | 含义 | 处理 |
+|---|---|---|
+| `WEIBO_UNAVAILABLE` | 未启用 / OpenCLI 不存在 | 检查 `weibo.enabled` 与 `opencli` 命令 |
+| `WEIBO_AUTH_REQUIRED` | 微博未登录 | 在 Chrome 登录 weibo.com，或 `opencli weibo login` |
+| `WEIBO_BRIDGE_DOWN` | Browser Bridge 未连接 | 启动 Chrome/扩展，跑 `opencli doctor` |
+| `WEIBO_TIMEOUT` | 浏览器命令超时 | 调大 `weibo.cli.timeout_ms` |
+| `WEIBO_EMPTY` | 无结果 | 确认帖子可见/有权限 |
+| `WEIBO_IMAGE_FAIL` | 图片下载失败 | 检查 Referer、`max_bytes`、`retry_tvax` |
+
+> `weibo post` 是浏览器操作，单次可能 5–10s。若 Chrome 未连接，OpenCLI 默认会等 45s；把 `OPENCLI_BROWSER_CONNECT_TIMEOUT` 调小（如 20）或把 `weibo.cli.timeout_ms` 设为 45s 以上，才能得到 `WEIBO_BRIDGE_DOWN` 而不是 `WEIBO_TIMEOUT`。
+
 ## 快速开始
 
 ```bash

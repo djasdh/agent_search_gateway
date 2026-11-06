@@ -137,6 +137,27 @@ const configSchema = z.object({
           saucenao: { api_key: "", url: "https://saucenao.com", timeout_ms: 15000, max_results: 8, minsim: 30 },
           baidu: { enabled: true, url: "https://graph.baidu.com", timeout_ms: 15000, max_results: 8 },
         }),
+      // 微博搜索/热搜（ADR-0014）：网关侧文本源，categories 命中才启用；
+      // 命中时不请求 searxng，也不会把自定义类别转发给 searxng。
+      weibo: z
+        .object({
+          enabled: z.boolean().default(false),
+          category: z.string().default("weibo"),
+          hot_category: z.string().default("weibo_hot"),
+          limit: z.number().int().positive().max(50).default(10),
+          timeout_ms: z.number().int().positive().default(30000),
+          cache_ttl_ms: z.number().int().nonnegative().default(60000),
+          retry: z.number().int().min(0).max(3).default(1),
+        })
+        .default({
+          enabled: false,
+          category: "weibo",
+          hot_category: "weibo_hot",
+          limit: 10,
+          timeout_ms: 30000,
+          cache_ttl_ms: 60000,
+          retry: 1,
+        }),
     })
     .catch({
       max_results: 10,
@@ -167,6 +188,15 @@ const configSchema = z.object({
         },
         saucenao: { api_key: "", url: "https://saucenao.com", timeout_ms: 15000, max_results: 8, minsim: 30 },
         baidu: { enabled: true, url: "https://graph.baidu.com", timeout_ms: 15000, max_results: 8 },
+      },
+      weibo: {
+        enabled: false,
+        category: "weibo",
+        hot_category: "weibo_hot",
+        limit: 10,
+        timeout_ms: 30000,
+        cache_ttl_ms: 60000,
+        retry: 1,
       },
     }),
   rerank: z
@@ -327,6 +357,79 @@ const configSchema = z.object({
       comment_db: "data/bilibili.sqlite",
       comments: { page_size: 20, search_limit: 50, max_pages_per_fetch: 20 },
     }),
+  // 微博抓取（全部走 fetch；单 CLI 后端 OpenCLI；默认关闭）。
+  weibo: z
+    .object({
+      enabled: z.boolean().default(false),
+      cli: z
+        .object({
+          command: z.string().default("opencli"),
+          timeout_ms: z.number().int().positive().default(30000),
+        })
+        .default({ command: "opencli", timeout_ms: 30000 }),
+      defaults: z
+        .object({
+          comments_limit: z.number().int().positive().max(50).default(20),
+          // OpenCLI user-posts adapter 的 limit 上限为 100；时间段抓取按 100 逐段拉取。
+          user_posts_limit: z.number().int().positive().max(100).default(100),
+        })
+        .default({ comments_limit: 20, user_posts_limit: 100 }),
+      // 时间段抓取：递归二分区间，直到每段 < limit；单次有调用次数/时间预算。
+      user_posts: z
+        .object({
+          default_days: z.number().int().positive().max(90).default(7),
+          max_days: z.number().int().positive().max(3650).default(90),
+          max_items: z.number().int().positive().max(5000).default(500),
+          max_calls: z.number().int().positive().max(500).default(30),
+          budget_ms: z.number().int().positive().default(120000),
+          max_chars: z.number().int().positive().default(500),
+        })
+        .default({
+          default_days: 7,
+          max_days: 90,
+          max_items: 500,
+          max_calls: 30,
+          budget_ms: 120000,
+          max_chars: 500,
+        }),
+      images: z
+        .object({
+          enabled: z.boolean().default(true),
+          referer: z.string().default("https://weibo.com/"),
+          max_bytes: z.number().int().positive().default(20971520),
+          timeout_ms: z.number().int().positive().default(20000),
+          retry_tvax: z.boolean().default(true),
+        })
+        .default({
+          enabled: true,
+          referer: "https://weibo.com/",
+          max_bytes: 20971520,
+          timeout_ms: 20000,
+          retry_tvax: true,
+        }),
+      cache_ttl_ms: z.number().int().nonnegative().default(60000),
+    })
+    .default({
+      enabled: false,
+      cli: { command: "opencli", timeout_ms: 30000 },
+      defaults: { comments_limit: 20, user_posts_limit: 100 },
+      user_posts: {
+        default_days: 7,
+        max_days: 90,
+        max_items: 500,
+        max_calls: 30,
+        budget_ms: 120000,
+        max_chars: 500,
+      },
+      images: {
+        enabled: true,
+        referer: "https://weibo.com/",
+        max_bytes: 20971520,
+        timeout_ms: 20000,
+        retry_tvax: true,
+      },
+      cache_ttl_ms: 60000,
+    }),
   browser: z
     .object({
       enabled: z.boolean().default(true),
@@ -432,6 +535,29 @@ export interface BilibiliConfig {
   authProbeTtlMs: number;
   commentDb: string;
   comments: { pageSize: number; searchLimit: number; maxPagesPerFetch: number };
+}
+
+/** 微博抓取：单 CLI 后端（OpenCLI）+ 图片 CDN 自动下载。 */
+export interface WeiboConfig {
+  enabled: boolean;
+  cli: { command: string; timeoutMs: number };
+  defaults: { commentsLimit: number; userPostsLimit: number };
+  userPosts: {
+    defaultDays: number;
+    maxDays: number;
+    maxItems: number;
+    maxCalls: number;
+    budgetMs: number;
+    maxChars: number;
+  };
+  images: {
+    enabled: boolean;
+    referer: string;
+    maxBytes: number;
+    timeoutMs: number;
+    retryTvax: boolean;
+  };
+  cacheTtlMs: number;
 }
 
 export interface GatewayConfig {
@@ -541,6 +667,23 @@ export interface GatewayConfig {
   fetchFilesRoute: boolean;
   /** Bilibili 抓取（默认关闭）。 */
   bilibili: BilibiliConfig;
+  /** 微博抓取（默认关闭）。 */
+  weibo: WeiboConfig;
+  /** user-posts 时间段抓取。 */
+  weiboUserPostsDefaultDays: number;
+  weiboUserPostsMaxDays: number;
+  weiboUserPostsMaxItems: number;
+  weiboUserPostsMaxCalls: number;
+  weiboUserPostsBudgetMs: number;
+  weiboUserPostsMaxChars: number;
+  /** 微博搜索/热搜（网关侧文本源，ADR-0014）。 */
+  searchWeiboEnabled: boolean;
+  searchWeiboCategory: string;
+  searchWeiboHotCategory: string;
+  searchWeiboLimit: number;
+  searchWeiboTimeoutMs: number;
+  searchWeiboCacheTtlMs: number;
+  searchWeiboRetry: number;
   browserEnabled: boolean;
   browserHeadless: boolean;
   browserPoolSize: number;
@@ -725,6 +868,43 @@ export function loadConfig(configPath: string = defaultConfigPath()): GatewayCon
         maxPagesPerFetch: v.bilibili.comments.max_pages_per_fetch,
       },
     },
+    weibo: {
+      enabled: v.weibo.enabled,
+      cli: { command: v.weibo.cli.command, timeoutMs: v.weibo.cli.timeout_ms },
+      defaults: {
+        commentsLimit: v.weibo.defaults.comments_limit,
+        userPostsLimit: v.weibo.defaults.user_posts_limit,
+      },
+      userPosts: {
+        defaultDays: v.weibo.user_posts.default_days,
+        maxDays: v.weibo.user_posts.max_days,
+        maxItems: v.weibo.user_posts.max_items,
+        maxCalls: v.weibo.user_posts.max_calls,
+        budgetMs: v.weibo.user_posts.budget_ms,
+        maxChars: v.weibo.user_posts.max_chars,
+      },
+      images: {
+        enabled: v.weibo.images.enabled,
+        referer: v.weibo.images.referer,
+        maxBytes: v.weibo.images.max_bytes,
+        timeoutMs: v.weibo.images.timeout_ms,
+        retryTvax: v.weibo.images.retry_tvax,
+      },
+      cacheTtlMs: v.weibo.cache_ttl_ms,
+    },
+    weiboUserPostsDefaultDays: v.weibo.user_posts.default_days,
+    weiboUserPostsMaxDays: v.weibo.user_posts.max_days,
+    weiboUserPostsMaxItems: v.weibo.user_posts.max_items,
+    weiboUserPostsMaxCalls: v.weibo.user_posts.max_calls,
+    weiboUserPostsBudgetMs: v.weibo.user_posts.budget_ms,
+    weiboUserPostsMaxChars: v.weibo.user_posts.max_chars,
+    searchWeiboEnabled: v.search.weibo.enabled,
+    searchWeiboCategory: v.search.weibo.category,
+    searchWeiboHotCategory: v.search.weibo.hot_category,
+    searchWeiboLimit: v.search.weibo.limit,
+    searchWeiboTimeoutMs: v.search.weibo.timeout_ms,
+    searchWeiboCacheTtlMs: v.search.weibo.cache_ttl_ms,
+    searchWeiboRetry: v.search.weibo.retry,
     browserEnabled: v.browser.enabled,
     browserHeadless: v.browser.headless,
     browserPoolSize: v.browser.pool_size,

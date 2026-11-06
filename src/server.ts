@@ -298,7 +298,8 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
     "search",
     {
       description:
-        "搜索网页，返回 markdown 文本结果。查询会聚合多个搜索引擎（searxng），自动过滤广告/垃圾域名，并置顶直接回答/建议等元数据。指定 categories 非 general 类别（如 images、academic）时只走该类别的引擎；images 类别返回图片直链（markdown 图片），可再交给 fetch 落盘。以图搜图用 categories=search_by_image：query 给图片 URL，或改用 image_path 给本地图片路径；会并发走 searxng 的 tineye 与网关侧附加源（trace.moe 动画截图、SauceNAO 插画出处、百度识图中文图），候选按 URL 合并去重。本地图会发布到公网图床以喂 tineye，见 README。",
+        "搜索网页，返回 markdown 文本结果。查询会聚合多个搜索引擎（searxng），自动过滤广告/垃圾域名，并置顶直接回答/建议等元数据。指定 categories 非 general 类别（如 images、academic）时只走该类别的引擎；images 类别返回图片直链（markdown 图片），可再交给 fetch 落盘。以图搜图用 categories=search_by_image：query 给图片 URL，或改用 image_path 给本地图片路径；会并发走 searxng 的 tineye 与网关侧附加源（trace.moe 动画截图、SauceNAO 插画出处、百度识图中文图），候选按 URL 合并去重。本地图会发布到公网图床以喂 tineye，见 README。\n\n" +
+        "微博：categories=weibo 只搜微博帖子（不查普通网页，query 必填）；categories=weibo_hot 返回微博热搜榜（query 可空）。两者都要求 weibo.enabled 与 search.weibo.enabled 为 true。",
       inputSchema: {
         query: z
           .string()
@@ -310,7 +311,7 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
           .describe("以图搜图：本地图片路径（网关可读），与 query 里的图片 URL 二选一；需配合 categories=search_by_image"),
         language: z.string().optional().describe("语言代码，如 en/zh-CN，默认按 searxng 实例"),
         safesearch: z.enum(["0", "1", "2"]).optional().describe("安全搜索：0 无/1 中/2 严"),
-        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；images（图片直链）、science（学术/知网）、search_by_image（以图搜图）"),
+        categories: z.string().optional().describe("搜索类别，逗号分隔，如 general,news；images（图片直链）、science（学术/知网）、search_by_image（以图搜图）、weibo（只搜微博）、weibo_hot（微博热搜）"),
         engines: z.string().optional().describe("指定搜索引擎，逗号分隔"),
         min_score: z.number().min(0).max(1).optional().describe("最低相关度分数 0-1"),
         num_results: z
@@ -350,9 +351,13 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
       description:
         "抓取一个 URL。网页（HTML）转 markdown；纯文本/JSON/CSV/XML 直接返回；PDF 抽取正文；图片等二进制文件落盘并返回本地路径与 /files/<id> 下载链接（正文不注入上下文）。网页遇到反爬会自动升级浏览器渲染。\n\n" +
         "B 站视频/专栏 URL 会自动返回结构化摘要（标题、链接、音频直链、封面、简介/正文、UP、统计、分P、评论区链接）。" +
-        "评论区链接是 URL 加 #reply（视频）或 #comment（专栏），fetch 它可抓全量评论；再加 q=关键词 可在本地评论库检索。",
+        "评论区链接是 URL 加 #reply（视频）或 #comment（专栏），fetch 它可抓全量评论；再加 q=关键词 可在本地评论库检索。\n\n" +
+        "微博 URL 加 ?weibo= 触发：?weibo=post（单条正文/转发 + 图片外链）、?weibo=comments&limit=20（评论）、" +
+        "?weibo=user（用户信息）、?weibo=user-posts&days=30（博主时间线，最近 N 天，1-90，默认 7）、" +
+        "?weibo=user-posts&start=2026-10-01&end=2026-10-31（绝对日期区间，含边界）。" +
+        "微博搜索/热搜用 search 工具的 categories=weibo / weibo_hot。",
       inputSchema: {
-        url: z.string().url().describe("要抓取的网页 URL"),
+        url: z.string().url().describe("要抓取的网页 URL；微博可带 ?weibo= 动作参数（见工具说明）"),
         max_chars: z
           .number()
           .int()

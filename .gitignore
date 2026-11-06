@@ -6,6 +6,10 @@ data/adblock/hosts
 data/corpus/
 data/downloads/
 data/bilibili.sqlite*
+data/weibo-chrome-profile/
+data/opencli-extension/
+data/opencli-extension-*.zip
+data/chrome.log
 # 实例配置（含环境相关项，不入库；模板见 gateway.yaml.example）
 gateway.yaml
 .tmp/

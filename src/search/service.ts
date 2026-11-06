@@ -16,6 +16,7 @@ import { loadLocalImage, publishImage, type LocalImage, type PublishResult } fro
 import { renderResults, renderSearchMarkdown } from "./render.js";
 import { rerankResults } from "./rerank.js";
 import { searchBaiduReverse } from "./baidu-reverse.js";
+import { searchWeibo, searchWeiboHot, type WeiboSourceResult } from "./weibo.js";
 import {
   extractImageUrl,
   searchTraceMoe,
@@ -174,6 +175,16 @@ export function isImageQuery(categories: string | undefined, extra: string[] = [
     .split(",")
     .map((c) => c.trim().toLowerCase())
     .some((c) => want.has(c));
+}
+
+/** 请求类别里是否出现指定类别名（大小写不敏感，按逗号分隔）。 */
+export function hasCategory(categories: string | undefined, name: string): boolean {
+  const want = (name ?? "").trim().toLowerCase();
+  if (!want) return false;
+  return (categories ?? "")
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .some((c) => c === want);
 }
 
 /**
@@ -490,6 +501,134 @@ export function createSearchService(
     metricsSink?.(m);
   };
 
+  /**
+   * 微博搜索/热搜（ADR-0014）：网关侧文本源，完全不经过 searxng。
+   * 只保留微博候选 —— 不召回本地语料，避免把普通网页混进「只搜微博」的结果。
+   */
+  async function searchWeiboSource(
+    params: SearchParams,
+    hot: boolean,
+    tStart: number,
+  ): Promise<SearchOutcome> {
+    const requested = params.numResults ?? config.searchMaxResults;
+    const limit = Math.min(requested, config.searchMaxResultsCap, config.searchWeiboLimit);
+    const query = (params.query ?? "").trim();
+    const displayQuery = hot ? "微博热搜" : query;
+    const release = await sem.acquire();
+    const preMs = performance.now() - tStart;
+    try {
+      const tUp = performance.now();
+      let source: WeiboSourceResult;
+      if (hot) {
+        source = await searchWeiboHot(
+          {
+            limit,
+            timeoutMs: config.searchWeiboTimeoutMs,
+            retry: config.searchWeiboRetry,
+            cacheTtlMs: config.searchWeiboCacheTtlMs,
+          },
+          config.weibo.cli.command,
+        );
+      } else {
+        if (query === "") {
+          return {
+            ok: false,
+            code: ErrorCodes.SEARCH_INVALID,
+            text: withCode(ErrorCodes.SEARCH_INVALID, "微博搜索需要一个关键词。"),
+          };
+        }
+        source = await searchWeibo(
+          query,
+          {
+            limit,
+            timeoutMs: config.searchWeiboTimeoutMs,
+            retry: config.searchWeiboRetry,
+            cacheTtlMs: config.searchWeiboCacheTtlMs,
+          },
+          config.weibo.cli.command,
+        );
+      }
+      const upstreamMs = performance.now() - tUp;
+
+      if (!source.ok) {
+        const code =
+          source.error.kind === "timeout" ? ErrorCodes.SEARCH_TIMEOUT : ErrorCodes.SEARCH_UPSTREAM;
+        const hint =
+          source.error.kind === "auth"
+            ? "\n\n处理：在 Chrome 登录 weibo.com 后重试。"
+            : "";
+        return {
+          ok: false,
+          code,
+          text: withCode(
+            code,
+            `微博${hot ? "热搜" : "搜索"}失败（${source.error.kind}）：${source.error.message}${hint}`,
+          ),
+        };
+      }
+
+      const data: SearxngResponse = { query: displayQuery, results: source.results };
+      const engineCounts: Record<string, number> = {};
+      for (const r of data.results) {
+        const name = r.engine ?? "weibo";
+        engineCounts[name] = (engineCounts[name] ?? 0) + 1;
+      }
+
+      const tLocal = performance.now();
+      const reranked = rerankResults(data.results, {
+        enabled: config.rerankEnabled,
+        engineBoost: config.rerankEngineBoost,
+      });
+      const filter = resolveDomainFilter();
+      const { results: cleaned, blockedCount } = cleanResults(reranked, {
+        maxResultChars: config.searchMaxResultChars,
+        minScore: params.minScore,
+        shouldBlock: filter.enabled
+          ? (host) => isBlocked(host, filter.blocked, filter.allowlist)
+          : undefined,
+      });
+      const ranked = cleaned.slice(0, limit);
+      const localMs = performance.now() - tLocal;
+
+      const tRender = performance.now();
+      const rendered = renderSearchMarkdown({
+        query: displayQuery,
+        raw: data,
+        results: ranked,
+        latencyMs: source.latencyMs,
+        skipped: blockedCount > 0 ? blockedCount : undefined,
+        cappedAt: requested > limit ? limit : undefined,
+        availableCount: cleaned.length,
+      });
+      const renderMs = performance.now() - tRender;
+
+      const totalMs = performance.now() - tStart;
+      emitMetrics({
+        query: displayQuery,
+        cacheHit: false,
+        totalMs,
+        preMs,
+        upstreamMs,
+        upstreamBatches: 1,
+        upstreamRaw: data.results.length,
+        engineCounts,
+        localMs,
+        mergeMs: 0,
+        renderMs,
+        residualMs: totalMs - preMs - upstreamMs - localMs - renderMs,
+        semantic: null,
+        degraded: false,
+      });
+
+      logger.debug(
+        `weibo ${hot ? "hot" : "search"} done: "${displayQuery}" (${ranked.length}/${cleaned.length} results)`,
+      );
+      return { ok: true, text: rendered, cacheHit: false };
+    } finally {
+      release();
+    }
+  }
+
   async function search(params: SearchParams): Promise<SearchOutcome> {
     const tStart = performance.now();
     // 反向图搜（ADR-0010）：类别命中才拉起网关侧附加源。命中时把类别名归一成
@@ -520,6 +659,17 @@ export function createSearchService(
         ),
       };
     }
+
+    // 微博搜索/热搜（ADR-0014）：类别命中即走网关侧文本源，完全不请求 searxng。
+    // 注意顺序：在 getEnabledEngines() 之前返回，避免为微博查询白打一次 searxng /config。
+    // 老单测会构造不含 weibo 字段的 GatewayConfig，这里做防御性读取。
+    const weiboAvailable = !!config.weibo?.enabled && !!config.searchWeiboEnabled;
+    if (weiboAvailable && !reverseImage) {
+      const hot = hasCategory(params.categories, config.searchWeiboHotCategory);
+      const only = !hot && hasCategory(params.categories, config.searchWeiboCategory);
+      if (hot || only) return searchWeiboSource(effParams, hot, tStart);
+    }
+
     const enabled = await getEnabledEngines();
     const quota = await getQuota();
     const batches = planEngineBatches(effParams, config, enabled, quota);

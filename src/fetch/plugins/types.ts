@@ -30,7 +30,7 @@ export interface FetchPluginResult {
 export interface FetchPlugin {
   /** 插件名，出现在日志与结果标注里。 */
   name: string;
-  /** 是否接管该 URL（先匹配、后走 generic 链）。 */
-  match(url: URL): boolean;
+  /** 是否接管该 URL（先匹配、后走 generic 链）。config 可选，便于测试直接调用。 */
+  match(url: URL, config?: GatewayConfig): boolean;
   fetch(url: URL, ctx: FetchPluginContext): Promise<FetchPluginResult>;
 }

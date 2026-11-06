@@ -37,6 +37,7 @@
 | 组件 | 许可证 | 说明 |
 |---|---|---|
 | [bilibili-api-python](https://pypi.org/project/bilibili-api-python/) | GPL-3.0-or-later | `scripts/bilibili-article-server/` 的运行时依赖；该目录整体按 GPL-3.0 发布，网关核心（src/）不导入它 |
+| [OpenCLI](https://github.com/jackwener/opencli) | Apache-2.0 | 微博取件的 CLI 后端。`scripts/opencli-overrides/weibo/{post,utils}.js` 是其 adapter 的 vendored override（保留版权/许可声明），通过 `scripts/install-weibo-override.sh` 安装到 `~/.opencli/clis/weibo/`；网关核心通过 `execFile` 调用，不修改 npm 包 |
 
 ## 引用的数据与代码借鉴
 
