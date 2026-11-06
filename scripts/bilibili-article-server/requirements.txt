@@ -1,3 +1,0 @@
-bilibili-api-python>=17.0
-# bilibili-api-python 自身不捆绑 HTTP 客户端，需要 httpx/aiohttp/curl_cffi 之一。
-httpx>=0.27

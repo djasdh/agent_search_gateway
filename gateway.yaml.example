@@ -196,7 +196,7 @@ bilibili:
   http:
     base_url: http://127.0.0.1:8010
     token: ""                         # 与后端约定的 Bearer；只走环境变量注入更好
-    command: []                       # 非空时由插件拉起/回收，如 ["python","server.py","--port","8010"]
+    command: []                       # 非空时由插件拉起/回收；指向用户自行安装的 http 后端
     startup_timeout_ms: 10000
     request_timeout_ms: 15000
   auth_probe_ttl_ms: 60000

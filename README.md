@@ -84,7 +84,7 @@ gateway (本服务, :3000/mcp)
 
 - `cli-kukemc`（`bili` CLI）：详情、评论
 - `cli-ytdlp`（`yt-dlp`）：详情、音频直链
-- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`
+- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`。该后端不随本仓库分发，请从上游项目自行安装并独立运行。
 
 要点：
 
