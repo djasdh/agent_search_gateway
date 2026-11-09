@@ -10,6 +10,8 @@ data/weibo-chrome-profile/
 data/opencli-extension/
 data/opencli-extension-*.zip
 data/chrome.log
+# 运行时数据整体不入库（语料/缓存/下载/浏览器 profile/后端安装等）
+data/
 # 实例配置（含环境相关项，不入库；模板见 gateway.yaml.example）
 gateway.yaml
 # 密钥（不入库；模板见 secrets.yaml.example）

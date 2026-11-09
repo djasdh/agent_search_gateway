@@ -1,0 +1,125 @@
+name: release
+
+# 公开仓库打 v* tag 时，为各平台构建「完整包」并发布到 GitHub Release。
+# 完整包内含 dist/ 与生产 node_modules/，目标机器无需 npm/tsc 即可运行。
+# 私有仓库（仓库名不匹配）只跑构建前就被 if 跳过，不会发布。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要重新发布的 tag（v 开头）"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.repository == 'djasdh/agent_search_gateway'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-latest
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+          - platform: darwin-x64
+            os: macos-13
+          - platform: darwin-arm64
+            os: macos-14
+          - platform: win32-x64
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖并构建
+        run: |
+          npm ci
+          npm run build
+
+      - name: 只保留生产依赖
+        run: npm ci --omit=dev
+
+      - name: 打包完整包
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          NAME="agent-search-gateway-${VERSION}-${{ matrix.platform }}"
+          STAGE="release/${NAME}"
+          mkdir -p "$STAGE"
+          cp -r dist node_modules package.json package-lock.json \
+            gateway.yaml.example secrets.yaml.example scripts \
+            README.md LICENSE THIRD_PARTY_LICENSES.md "$STAGE/"
+          node -e "
+            const fs = require('node:fs');
+            fs.writeFileSync(
+              process.argv[1],
+              JSON.stringify({
+                version: process.argv[2],
+                platform: process.argv[3],
+                commit: process.env.GITHUB_SHA || '',
+                built_at: new Date().toISOString(),
+              }, null, 2) + '\n',
+            );
+          " "$STAGE/version.json" "$VERSION" "${{ matrix.platform }}"
+          if [ "${{ matrix.platform }}" = "win32-x64" ]; then
+            tar -a -c -f "release/${NAME}.zip" -C release "$NAME"
+          else
+            tar -czf "release/${NAME}.tar.gz" -C release "$NAME"
+          fi
+          ls -lh release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            release/*.tar.gz
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: github.repository == 'djasdh/agent_search_gateway'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 生成 SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          gh release create "$TAG" artifacts/*.tar.gz artifacts/*.zip artifacts/SHA256SUMS \
+            --title "$TAG" --generate-notes

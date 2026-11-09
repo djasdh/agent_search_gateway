@@ -76,6 +76,35 @@ flaresolverr_stop() {
 }
 
 # ---------- gateway ----------
+# 查找 node：优先自更新下载的便携 Node，其次系统 PATH。
+node_bin() {
+  if [ -x "$DIR/data/toolchain/node/bin/node" ]; then
+    echo "$DIR/data/toolchain/node/bin/node"
+  elif command -v node >/dev/null 2>&1; then
+    command -v node
+  fi
+}
+
+# 当前 release 的入口：data/current symlink 优先，其次 data/current.json。
+current_entry() {
+  if [ -f "$DIR/data/current/dist/index.js" ]; then
+    echo "$DIR/data/current/dist/index.js"
+    return
+  fi
+  if [ -f "$DIR/data/current.json" ]; then
+    python3 - "$DIR/data/current.json" <<'PY' 2>/dev/null || true
+import json, os, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    p = os.path.join(d.get("dir", ""), "dist", "index.js")
+    if d.get("dir") and os.path.isfile(p):
+        print(p)
+except Exception:
+    pass
+PY
+  fi
+}
+
 gateway_start() {
   local gp
   gp=$(gateway_port)
@@ -93,22 +122,40 @@ gateway_start() {
     chmod 600 "$DIR/secrets.yaml" 2>/dev/null || true
     log "已从 secrets.yaml.example 创建 secrets.yaml（请填入密钥）"
   fi
-  # 开发模式用 tsx；生产可先 npm run build 后 node dist/index.js
-  if [ -x "$DIR/node_modules/.bin/tsx" ]; then
+  # 优先启动自更新切换后的 release；没有 release 时回退开发模式 tsx。
+  local entry node
+  entry=$(current_entry)
+  node=$(node_bin)
+  mkdir -p "$DIR/data"
+  if [ -n "$entry" ] && [ -n "$node" ]; then
+    nohup "$node" "$entry" >> "$LOG" 2>&1 < /dev/null &
+    echo $! > "$DIR/data/gateway.pid"
+    log "gateway 已启动（release: $entry，PID $!），日志: $LOG"
+  elif [ -x "$DIR/node_modules/.bin/tsx" ]; then
     nohup "$DIR/node_modules/.bin/tsx" src/index.ts >> "$LOG" 2>&1 < /dev/null &
+    echo $! > "$DIR/data/gateway.pid"
+    log "gateway 已启动（开发模式 tsx，PID $!），日志: $LOG"
   else
-    log "未找到 tsx，请先 npm install"
+    log "未找到可运行的 release，也没有 tsx；请先跑 scripts/self-update 或 npm install"
     return 1
   fi
-  log "gateway 已启动 (PID $!)，日志: $LOG"
   sleep 4
 }
 gateway_stop() {
-  local pid
+  local pid=""
+  # 优先用自更新/启动时记录的 pid，避免误杀
+  if [ -f "$DIR/data/gateway.pid" ]; then
+    pid=$(cat "$DIR/data/gateway.pid" 2>/dev/null || true)
+  fi
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    pid=$(pgrep -f "dist/index.js|src/index.ts" | head -1 || true)
+  fi
   # 先杀网关主进程（其 chromium 子进程会随之退出）
-  pid=$(pgrep -f "src/index.ts" | head -1 || true)
-  if [ -n "$pid" ]; then
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
     kill "$pid" 2>/dev/null && log "gateway 已停止 (PID $pid)" || log "停止失败"
+    rm -f "$DIR/data/gateway.pid"
+  else
+    log "gateway 未在运行"
   fi
   sleep 1
   # 清理可能残留的 playwright chromium（孤儿）
@@ -117,9 +164,6 @@ gateway_stop() {
   if [ -n "$chromes" ]; then
     kill -9 $chromes 2>/dev/null || true
     log "已清理 playwright chromium"
-  fi
-  if [ -z "$pid" ]; then
-    log "gateway 未在运行"
   fi
 }
 

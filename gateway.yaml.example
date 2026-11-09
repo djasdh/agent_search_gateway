@@ -192,7 +192,7 @@ bilibili:
   http:
     base_url: http://127.0.0.1:8010
     # 与后端约定的 Bearer 写在 secrets.yaml 的 bilibili.http.token
-    command: []                       # 非空时由插件拉起/回收；指向用户自行安装的 http 后端
+    command: []                       # 非空时由插件拉起/回收；用 scripts/backends/article.sh install 自动填
     startup_timeout_ms: 10000
     request_timeout_ms: 15000
   auth_probe_ttl_ms: 60000

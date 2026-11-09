@@ -84,7 +84,7 @@ gateway (本服务, :3000/mcp)
 
 - `cli-kukemc`（`bili` CLI）：详情、评论
 - `cli-ytdlp`（`yt-dlp`）：详情、音频直链
-- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`。该后端不随本仓库分发，请从上游项目自行安装并独立运行。
+- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`。服务端已拆到独立仓库 [djasdh/bilibili-article-server](https://github.com/djasdh/bilibili-article-server)，可用 `./scripts/backends/article.sh install` 安装。
 
 要点：
 
@@ -473,10 +473,56 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 依赖：`sqlite-vec` 随 npm 安装自带平台二进制，无需手动装扩展。
 - 模型切换：命名空间为 `provider:model@dim`；换模型产生新命名空间，旧向量保留但不参与（多命名空间并存，见 `docs/adr/0001`–`0006`）。
 
+## 后端安装（一个后端一个）
+
+外部后端统一装到 `data/backends/<name>/`，安装/更新后自动把可执行文件路径写回 `gateway.yaml`。每个脚本都支持 `install | update | status | uninstall`（默认 `install`）。
+
+| 后端 | Linux/macOS | Windows | 说明 |
+|---|---|---|---|
+| B 站 `bili` CLI | `./scripts/backends/bili.sh` | `scripts\backends\bili.ps1` | PyPI `bili-agent`，需要 Python ≥3.10 |
+| `yt-dlp` | `./scripts/backends/ytdlp.sh` | `scripts\backends\ytdlp.ps1` | 官方独立二进制，自动校验 SHA256 |
+| 微博 `OpenCLI` | `./scripts/backends/opencli.sh` | `scripts\backends\opencli.ps1` | npm 包；微博 override 会复制到 `~/.opencli/clis/weibo/` |
+| B 站专栏 HTTP 服务 | `./scripts/backends/article.sh` | `scripts\backends\article.ps1` | 独立仓库 `djasdh/bilibili-article-server`（GPL-3.0） |
+
+```bash
+./scripts/backends/bili.sh install
+./scripts/backends/ytdlp.sh update
+./scripts/backends/article.sh status
+./scripts/backends/opencli.sh uninstall
+```
+
+- 安装目录、版本、原配置值都在 `data/backends/<name>/`，`uninstall` 会还原 `gateway.yaml`。
+- `opencli` 只在 `gateway.yaml` 已有 `weibo` 段时写 `weibo.cli.command`；私有分支没有该段时只安装、不写配置。
+- 专栏服务需要登录态：在启动网关的环境里设置 `BILI_COOKIE` 或 `BILI_COOKIE_FILE`，不要写进 `gateway.yaml`。
+- 如果 PATH 里没有 Node，薄包装会自动下载官方 LTS 到 `data/toolchain/node/`。
+
+## 网关自更新（一个平台一个）
+
+```bash
+./scripts/self-update/linux.sh            # Linux
+./scripts/self-update/macos.sh            # macOS
+scripts\self-update\windows.cmd           # Windows
+```
+
+流程：从公开仓库最新正式 Release 下载对应平台完整包 → SHA256 校验 → 解压到 `data/releases/<version>-<platform>/` → 切换 `data/current` → 重启并健康检查 → 失败自动回滚。
+
+```bash
+./scripts/self-update/linux.sh --check               # 只检查新版本
+./scripts/self-update/linux.sh --version v0.2.0      # 指定版本
+./scripts/self-update/linux.sh --no-restart          # 只更新不重启
+./scripts/self-update/linux.sh --repo <owner>/<name> # 换发布源
+```
+
+- `gateway.yaml`、`secrets.yaml`、`data/` 不随版本切换；更新前请确认已备份密钥。
+- 自更新只切换 `dist/` 与 `node_modules/`；`scripts/` 属于安装器，不随版本覆盖（升级安装器请重新拉取仓库）。
+- 只保留最近 3 个版本；当前/上一版本记录在 `data/installed.json`。
+- 完整包包含生产 `node_modules`，目标机器不需要 npm/tsc；Playwright 浏览器仍需首次 `npx playwright install chromium` 或已有浏览器。
+
 ## 管理脚本
 
 ```bash
 ./scripts/gateway.sh start|stop|restart|status|logs [searxng|flaresolverr|gateway|all]
+./scripts/gateway.ps1 start|stop|restart|status|logs        # Windows（只管理 gateway）
 ./scripts/update-adlist.sh [ads|ads+tracking|full]   # 更新广告过滤列表
 ./scripts/bench.sh                                    # 本机压测（内存/延迟）
 ```
