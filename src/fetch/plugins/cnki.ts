@@ -14,7 +14,7 @@
  *   `%PDF` 魔数判定产物，不能只看状态码或 Content-Type。
  */
 import { createHash } from "node:crypto";
-import type { GatewayConfig } from "../../config.js";
+import type { FetchSettings } from "../../settings/index.js";
 import type { Logger } from "../../logger.js";
 import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./types.js";
 
@@ -143,10 +143,10 @@ async function readLimited(
 /** 零凭据 IP 登录；成功返回会话 cookie，失败返回 undefined。 */
 async function openSession(
   jar: CookieJar,
-  config: GatewayConfig,
+  fetchSettings: FetchSettings,
   logger?: Logger,
 ): Promise<boolean> {
-  const timeout = Math.max(config.fetchTimeoutMs, 10_000);
+  const timeout = Math.max(fetchSettings.timeout_ms, 10_000);
   try {
     const res = await cnkiFetch(endpoints.clientId, jar, timeout);
     jar.store(res);
@@ -197,10 +197,11 @@ function classifyNonPdf(bytes: Buffer, finalUrl: string): { errorCode: string; e
 }
 
 async function fetchCnki(url: URL, ctx: FetchPluginContext): Promise<FetchPluginResult> {
-  const { config, logger } = ctx;
+  const { settings, logger } = ctx;
+  const fetchSettings = settings.fetch;
   const jar = new CookieJar();
 
-  if (!(await openSession(jar, config, logger))) {
+  if (!(await openSession(jar, fetchSettings, logger))) {
     return {
       ok: false,
       finalUrl: url.toString(),
@@ -212,7 +213,7 @@ async function fetchCnki(url: URL, ctx: FetchPluginContext): Promise<FetchPlugin
   // 摘要页 → 先取出下载链接（实测 #pdfDown / #cajDown → bar/download/order?id=…）
   let target = url.toString();
   if (url.pathname.includes(ABSTRACT_PATH)) {
-    const page = await cnkiFetch(target, jar, config.fetchTimeoutMs);
+    const page = await cnkiFetch(target, jar, fetchSettings.timeout_ms);
     const html = await page.text();
     const href = extractAnchorHref(html, "pdfDown") ?? extractAnchorHref(html, "cajDown");
     if (!href) {
@@ -234,15 +235,15 @@ async function fetchCnki(url: URL, ctx: FetchPluginContext): Promise<FetchPlugin
     return { ok: false, finalUrl: target, errorCode: "BAD_TARGET", errorMessage: `非知网下载地址：${targetUrl.hostname}` };
   }
 
-  const res = await cnkiFetch(target, jar, Math.max(config.fetchTimeoutMs, DOWNLOAD_MIN_TIMEOUT_MS));
-  const { bytes, tooLarge } = await readLimited(res, config.fetchMaxDownloadBytes);
+  const res = await cnkiFetch(target, jar, Math.max(fetchSettings.timeout_ms, DOWNLOAD_MIN_TIMEOUT_MS));
+  const { bytes, tooLarge } = await readLimited(res, fetchSettings.max_download_bytes);
   if (tooLarge) {
     return {
       ok: false,
       status: res.status,
       finalUrl: res.url,
       errorCode: "TOO_LARGE",
-      errorMessage: `文件超过 ${config.fetchMaxDownloadBytes} 字节上限（fetch.max_download_bytes）`,
+      errorMessage: `文件超过 ${fetchSettings.max_download_bytes} 字节上限（fetch.max_download_bytes）`,
     };
   }
   if (bytes.byteLength === 0) {

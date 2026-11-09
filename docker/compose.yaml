@@ -55,6 +55,8 @@ services:
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./gateway.docker.yaml:/app/gateway.yaml:ro
+      # 可选：用自己的 secrets.yaml 替代 .env 注入（挂载前 chmod 600）
+      # - ./secrets.yaml:/app/secrets.yaml:ro
       - quota:/quota
       - corpus:/data
     ports:

@@ -4,7 +4,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import type { DomainFilter } from "../src/filter/domain-filter.js";
 import type { Logger } from "../src/logger.js";
 import {
@@ -20,7 +19,10 @@ import {
   createSearchService,
   isImageQuery,
   isReverseImageQuery,
+  type SearchSettingsDeps,
 } from "../src/search/service.js";
+import type { Secrets, Settings } from "../src/settings/index.js";
+import { deepMerge, makeSecrets, makeSettings, searchServiceDeps, type DeepPartial } from "./helpers/settings.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -298,64 +300,61 @@ let baiduPort = 0;
 let baiduMode: "ok" | "reject" = "ok";
 let baiduUploads = 0;
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: `http://127.0.0.1:${searxPort}`,
-    searxngTimeoutMs: 5000,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 0,
-    searchCacheMaxEntries: 0,
-    searchMaxConcurrent: 2,
-    searchEngines: ["exaapi"],
-    searchEnginesResident: [],
-    searchFanoutDefault: 1,
-    searchQuotaEnabled: false,
-    searchQuotaLedgerPath: "",
-    searchQuotaTightThreshold: 0.1,
-    searchResidentQuotaFloor: 0.2,
-    searchCategoryTimeoutMs: {},
-    searchReverseImageEnabled: true,
-    searchReverseImageCategory: "search_by_image",
-    searchReverseImageSources: ["tracemoe"],
-    searchTraceMoeUrl: `http://127.0.0.1:${tracePort}`,
-    searchTraceMoeTimeoutMs: 3000,
-    searchTraceMoeMaxResults: 8,
-    searchReverseImageLocalMaxBytes: 5 * 1024 * 1024,
-    searchReverseImagePublishEnabled: true,
-    searchReverseImagePublishEndpoint: `http://127.0.0.1:${publishPort}/upload?output=json`,
-    searchReverseImagePublishTimeoutMs: 3000,
-    searchSaucenaoApiKey: "test-key",
-    searchSaucenaoUrl: `http://127.0.0.1:${saucenaoPort}`,
-    searchSaucenaoTimeoutMs: 3000,
-    searchSaucenaoMaxResults: 8,
-    searchSaucenaoMinsim: 0,
-    searchBaiduReverseEnabled: true,
-    searchBaiduReverseUrl: `http://127.0.0.1:${baiduPort}`,
-    searchBaiduReverseTimeoutMs: 3000,
-    searchBaiduReverseMaxResults: 8,
-    rerankEnabled: true,
-    rerankEngineBoost: {},
-    rerankDiversityEnabled: false,
-    rerankDiversityMmrLambda: 1,
-    rerankDiversityMaxPerDomain: 3,
-    rerankAuthorityEnabled: false,
-    rerankAuthorityWeight: 0.5,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    ...overrides,
-  } as GatewayConfig;
+function makeConfig(
+  overrides: DeepPartial<Settings> = {},
+  secretOverrides: DeepPartial<Secrets> = {},
+): SearchSettingsDeps {
+  const base: DeepPartial<Settings> = {
+    searxng: { url: `http://127.0.0.1:${searxPort}`, timeout_ms: 5000 },
+    search: {
+      cache_ttl_ms: 0,
+      cache_max_entries: 0,
+      max_concurrent: 2,
+      engines: { rotating: ["exaapi"], resident: [] },
+      fanout_default: 1,
+      quota_enabled: false,
+      quota_ledger_path: "",
+      quota_tight_threshold: 0.1,
+      resident_quota_floor: 0.2,
+      category_timeout_ms: {},
+      reverse_image: {
+        enabled: true,
+        category: "search_by_image",
+        sources: ["tracemoe"],
+        tracemoe_url: `http://127.0.0.1:${tracePort}`,
+        tracemoe_timeout_ms: 3000,
+        tracemoe_max_results: 8,
+        local_max_bytes: 5 * 1024 * 1024,
+        publish: {
+          enabled: true,
+          endpoint: `http://127.0.0.1:${publishPort}/upload?output=json`,
+          timeout_ms: 3000,
+        },
+        saucenao: {
+          url: `http://127.0.0.1:${saucenaoPort}`,
+          timeout_ms: 3000,
+          max_results: 8,
+          minsim: 0,
+        },
+        baidu: {
+          enabled: true,
+          url: `http://127.0.0.1:${baiduPort}`,
+          timeout_ms: 3000,
+          max_results: 8,
+        },
+      },
+    },
+    rerank: {
+      enabled: true,
+      engine_boost: {},
+      diversity: { enabled: false, mmr_lambda: 1, max_per_domain: 3 },
+      authority: { enabled: false, weight: 0.5 },
+    },
+  };
+  const secrets = makeSecrets(
+    deepMerge({ search: { reverse_image: { saucenao: { api_key: "test-key" } } } }, secretOverrides),
+  );
+  return searchServiceDeps(makeSettings(deepMerge(base, overrides)), secrets);
 }
 
 beforeAll(async () => {
@@ -569,7 +568,7 @@ describe("createSearchService 反向图搜扇出（ADR-0010）", () => {
     searxCategories = [];
     searxResults = [];
     lastTraceQuery = undefined;
-    const svc = createSearchService(makeConfig({ searchReverseImageEnabled: false }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { reverse_image: { enabled: false } } }), domainFilter, silentLogger);
     const r = await svc.search({ query: IMG, categories: "search_by_image" });
     expect(r.ok).toBe(true);
     expect(lastTraceQuery).toBeUndefined();
@@ -659,7 +658,7 @@ describe("createSearchService 本地图片（image_path）", () => {
 
   it("publish 关闭 → 只走 trace.moe，并说明 tineye 未参与", async () => {
     reset("ok");
-    const svc = createSearchService(makeConfig({ searchReverseImagePublishEnabled: false }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { reverse_image: { publish: { enabled: false } } } }), domainFilter, silentLogger);
     const r = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
     expect(r.ok).toBe(true);
     expect(publishCalls).toBe(0);
@@ -720,7 +719,7 @@ describe("createSearchService 本地图片（image_path）", () => {
 
   it("本地图请求不进搜索缓存（同一路径改了文件也不会命中旧结果）", async () => {
     reset("ok");
-    const svc = createSearchService(makeConfig({ searchCacheTtlMs: 60000 }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { cache_ttl_ms: 60000 } }), domainFilter, silentLogger);
     const a = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
     const b = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
     expect(a.cacheHit).toBe(false);
@@ -767,7 +766,7 @@ describe("createSearchService 多源扇出（ADR-0012）", () => {
   it("三源并发：URL 输入 → 各源候选合并进结果", async () => {
     resetAll();
     const q = imgUrl();
-    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { reverse_image: { sources: all } } }), domainFilter, silentLogger);
     const r = await svc.search({ query: q, categories: "search_by_image" });
     expect(r.ok).toBe(true);
     expect(searxQueries).toEqual([q]); // searxng（tineye）用 query 里的图片 URL
@@ -782,7 +781,10 @@ describe("createSearchService 多源扇出（ADR-0012）", () => {
   it("SauceNAO 未配 api_key → 跳过该源（不发请求）", async () => {
     resetAll();
     const svc = createSearchService(
-      makeConfig({ searchReverseImageSources: all, searchSaucenaoApiKey: "" }),
+      makeConfig(
+      { search: { reverse_image: { sources: all } } },
+      { search: { reverse_image: { saucenao: { api_key: "" } } } },
+    ),
       domainFilter,
       silentLogger,
     );
@@ -795,7 +797,7 @@ describe("createSearchService 多源扇出（ADR-0012）", () => {
   it("百度识图被拒 → 其它源结果照常 + 提示 baidu 不可用", async () => {
     resetAll();
     baiduMode = "reject";
-    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { reverse_image: { sources: all } } }), domainFilter, silentLogger);
     const r = await svc.search({ query: imgUrl(), categories: "search_by_image" });
     expect(r.ok).toBe(true);
     expect(r.text).toContain("某番");
@@ -806,7 +808,7 @@ describe("createSearchService 多源扇出（ADR-0012）", () => {
   it("SauceNAO 匿名拒绝（status<0）→ 提示 + 其它源照常", async () => {
     resetAll();
     saucenaoMode = "apierror";
-    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { reverse_image: { sources: all } } }), domainFilter, silentLogger);
     const r = await svc.search({ query: imgUrl(), categories: "search_by_image" });
     expect(r.ok).toBe(true);
     expect(r.text).toContain("图源 saucenao 不可用");
@@ -816,7 +818,7 @@ describe("createSearchService 多源扇出（ADR-0012）", () => {
 
   it("本地图：三源直传（不经图床）+ searxng 用发布后的公网 URL", async () => {
     resetAll();
-    const svc = createSearchService(makeConfig({ searchReverseImageSources: all }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { reverse_image: { sources: all } } }), domainFilter, silentLogger);
     const r = await svc.search({ query: "", imagePath: imgPath, categories: "search_by_image" });
     expect(r.ok).toBe(true);
     expect(saucenaoQueries).toEqual([""]); // 本地直传 → 没有 url 参数

@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { AdFilterLevel } from "../config.js";
+import type { AdFilterLevel } from "../settings/index.js";
 
 /**
  * StevenBlack hosts 各 level 对应的源 URL。

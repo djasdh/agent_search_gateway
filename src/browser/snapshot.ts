@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { GatewayConfig } from "../config.js";
+import type { ScreenshotSettings } from "../settings/index.js";
 
 export interface SnapshotResult {
   ok: boolean;
@@ -29,22 +29,25 @@ export async function pageSnapshot(page: Page, target?: string): Promise<Snapsho
 }
 
 /** 截图 → base64。max_size 可配边长，enabled 控制开关。 */
-export async function pageScreenshot(page: Page, config: GatewayConfig): Promise<ScreenshotResult> {
-  if (!config.browserScreenshotEnabled) {
+export async function pageScreenshot(
+  page: Page,
+  screenshot: ScreenshotSettings,
+): Promise<ScreenshotResult> {
+  if (!screenshot.enabled) {
     return { ok: false, error: "截图功能未启用（browser.screenshot.enabled=false）" };
   }
   try {
     const buf = await page.screenshot({
-      type: config.browserScreenshotImageType,
-      quality: config.browserScreenshotImageType === "jpeg" ? 80 : undefined,
+      type: screenshot.image_type,
+      quality: screenshot.image_type === "jpeg" ? 80 : undefined,
       scale: "css",
     });
     // 限制最大边长：若超过 max_size，缩小
     let data = buf;
-    if (config.browserScreenshotMaxSize < 2000) {
+    if (screenshot.max_size < 2000) {
       // 用 viewport 控制已足够；若需缩放用更复杂逻辑，这里简单限制尺寸由视口决定
     }
-    const mimeType = config.browserScreenshotImageType === "jpeg" ? "image/jpeg" : "image/png";
+    const mimeType = screenshot.image_type === "jpeg" ? "image/jpeg" : "image/png";
     return { ok: true, mimeType, base64: data.toString("base64") };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

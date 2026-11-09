@@ -5,11 +5,14 @@
  * 匹配规则由插件提供，网关**无条件信任**（安全边界在插件作者，见 TODO「取件插件安全」）。
  * 插件产物一律走"bytes + contentType"返回，由 service 层决定落盘还是转文本。
  */
-import type { GatewayConfig } from "../../config.js";
 import type { Logger } from "../../logger.js";
+import type { FetchPluginSecrets, FetchPluginSettings } from "../../settings/index.js";
 
 export interface FetchPluginContext {
-  config: GatewayConfig;
+  /** 插件可见的设置切片（按需自取，不传全量配置）。 */
+  settings: FetchPluginSettings;
+  /** 插件可见的密钥切片。 */
+  secrets: FetchPluginSecrets;
   logger?: Logger;
 }
 
@@ -30,7 +33,7 @@ export interface FetchPluginResult {
 export interface FetchPlugin {
   /** 插件名，出现在日志与结果标注里。 */
   name: string;
-  /** 是否接管该 URL（先匹配、后走 generic 链）。config 可选，便于测试直接调用。 */
-  match(url: URL, config?: GatewayConfig): boolean;
+  /** 是否接管该 URL（先匹配、后走 generic 链）。settings 可选，便于测试直接调用。 */
+  match(url: URL, settings?: FetchPluginSettings): boolean;
   fetch(url: URL, ctx: FetchPluginContext): Promise<FetchPluginResult>;
 }

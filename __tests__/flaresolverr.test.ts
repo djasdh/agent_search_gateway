@@ -1,67 +1,15 @@
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import { createFlareSolverrClient } from "../src/fetch/flaresolverr.js";
+import type { FlareSolverrSettingsDeps } from "../src/fetch/flaresolverr.js";
+import { deepMerge, flareSolverrDeps, makeSettings, type DeepPartial } from "./helpers/settings.js";
+import type { Settings } from "../src/settings/index.js";
 import { Semaphore } from "../src/utils/semaphore.js";
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: "http://127.0.0.1:1",
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: true,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    fetchTimeoutMs: 3000,
-    fetchMaxBytes: 65536,
-    fetchUserAgent: "",
-    fetchBlockPrivateIps: false,
-    fetchStructural: "clean",
-    fetchMaxOutputChars: 20000,
-    fetchCacheTtlMs: 600000,
-    fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 1073741824,
-    fetchDownloadDir: "data/downloads",
-    fetchDownloadTtlMs: 604800000,
-    fetchDownloadMaxTotalBytes: 4294967296,
-    fetchFilesRoute: true,
-    browserEnabled: true,
-    browserHeadless: true,
-    browserPoolSize: 1,
-    browserIdleTtlMs: 360000,
-    browserTimeoutMs: 30000,
-    browserMaxConcurrent: 2,
-    browserEngine: "chromium",
-    browserProxyServer: "",
-    browserProxyUsername: "",
-    browserProxyPassword: "",
-    browserWaitForSelector: "",
-    browserScreenshotEnabled: true,
-    browserScreenshotMaxSize: 512,
-    browserScreenshotImageType: "jpeg",
-    ...overrides,
-  };
+function makeConfig(overrides: DeepPartial<Settings> = {}): FlareSolverrSettingsDeps {
+  const base: DeepPartial<Settings> = { fetch: { block_private_ips: false } };
+  return flareSolverrDeps(makeSettings(deepMerge(base, overrides)));
 }
 
 interface MockBehavior {
@@ -116,7 +64,7 @@ function setBehavior(b: MockBehavior): void {
 
 describe("createFlareSolverrClient", () => {
   it("请求体：request.get + returnOnlyCookies=false", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: base });
+    const cfg = makeConfig({ flaresolverr: { url: base } });
     const client = createFlareSolverrClient(cfg);
     setBehavior({ status: "ok", response: "<html><body>r</body></html>" });
     await client.requestGet("https://target.example/");
@@ -128,7 +76,7 @@ describe("createFlareSolverrClient", () => {
   });
 
   it("成功返回渲染 HTML", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: base });
+    const cfg = makeConfig({ flaresolverr: { url: base } });
     const client = createFlareSolverrClient(cfg);
     setBehavior({ status: "ok", response: "<html><body>RENDERED</body></html>" });
     const r = await client.requestGet("https://target.example/");
@@ -138,7 +86,7 @@ describe("createFlareSolverrClient", () => {
   });
 
   it("error 状态返回 not_ok", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: base });
+    const cfg = makeConfig({ flaresolverr: { url: base } });
     const client = createFlareSolverrClient(cfg);
     setBehavior({ status: "error", message: "challenge failed" });
     const r = await client.requestGet("https://target.example/");
@@ -147,7 +95,7 @@ describe("createFlareSolverrClient", () => {
   });
 
   it("FlareSolverr 不可达返回 network", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: "http://127.0.0.1:1" });
+    const cfg = makeConfig({ flaresolverr: { url: "http://127.0.0.1:1" } });
     const client = createFlareSolverrClient(cfg);
     const r = await client.requestGet("https://target.example/");
     expect(r.ok).toBe(false);
@@ -155,7 +103,7 @@ describe("createFlareSolverrClient", () => {
   });
 
   it("SSRF：内网 URL 被拦截（不发请求到 FlareSolverr）", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: base, fetchBlockPrivateIps: true });
+    const cfg = makeConfig({ flaresolverr: { url: base }, fetch: { block_private_ips: true } });
     const client = createFlareSolverrClient(cfg);
     const r = await client.requestGet("http://169.254.169.254/latest/meta-data/");
     expect(r.ok).toBe(false);
@@ -163,7 +111,7 @@ describe("createFlareSolverrClient", () => {
   });
 
   it("SSRF：非 http/https 协议被拦截", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: base, fetchBlockPrivateIps: true });
+    const cfg = makeConfig({ flaresolverr: { url: base }, fetch: { block_private_ips: true } });
     const client = createFlareSolverrClient(cfg);
     const r = await client.requestGet("file:///etc/passwd");
     expect(r.ok).toBe(false);
@@ -171,7 +119,7 @@ describe("createFlareSolverrClient", () => {
   });
 
   it("fetchBlockPrivateIps=false 时内网 URL 放行（仅协议检查）", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: base, fetchBlockPrivateIps: false });
+    const cfg = makeConfig({ flaresolverr: { url: base }, fetch: { block_private_ips: false } });
     const client = createFlareSolverrClient(cfg);
     setBehavior({ status: "ok", response: "<html><body>ok</body></html>" });
     const r = await client.requestGet("http://127.0.0.1:8080/");
@@ -201,7 +149,7 @@ describe("createFlareSolverrClient", () => {
     await new Promise<void>((r) => mock.listen(0, "127.0.0.1", r));
     const mockUrl = `http://127.0.0.1:${(mock.address() as AddressInfo).port}`;
     try {
-      const cfg = makeConfig({ flaresolverrUrl: mockUrl, flaresolverrMaxConcurrent: 2 });
+      const cfg = makeConfig({ flaresolverr: { url: mockUrl, max_concurrent: 2 } });
       // 进程级共享一个 sem（等价于 server.ts 的 getFlareSolverrClient）
       const sem = new Semaphore(2);
       const clientA = createFlareSolverrClient(cfg, sem);

@@ -3,8 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Buffer } from "node:buffer";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import { directFetch } from "../src/fetch/direct.js";
+import type { DirectFetchDeps } from "../src/fetch/direct.js";
+import { deepMerge, directDeps, makeSettings, type DeepPartial } from "./helpers/settings.js";
+import type { Settings } from "../src/settings/index.js";
 
 /**
  * GBK 编码的 HTML（header 不带 charset，只在 <meta> 声明）。
@@ -15,63 +17,11 @@ import { directFetch } from "../src/fetch/direct.js";
 const GBK_HTML_HEX =
   "3c68746d6c3e3c686561643e3c6d65746120636861727365743d2267626b223e3c7469746c653ed6d0cec43c2f7469746c653e3c2f686561643e3c626f64793e3c703ed6d0cec4b2e2cad43c2f703e3c2f626f64793e3c2f68746d6c3e";
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: "http://127.0.0.1:1",
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: true,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    fetchTimeoutMs: 3000,
-    fetchMaxBytes: 65536,
-    fetchUserAgent: "",
-    fetchBlockPrivateIps: false, // mock 服务在 127.0.0.1
-    fetchStructural: "clean",
-    fetchMaxOutputChars: 20000,
-    fetchCacheTtlMs: 600000,
-    fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 1073741824,
-    fetchDownloadDir: "data/downloads",
-    fetchDownloadTtlMs: 604800000,
-    fetchDownloadMaxTotalBytes: 4294967296,
-    fetchFilesRoute: true,
-    browserEnabled: true,
-    browserHeadless: true,
-    browserPoolSize: 1,
-    browserIdleTtlMs: 360000,
-    browserTimeoutMs: 30000,
-    browserMaxConcurrent: 2,
-    browserEngine: "chromium",
-    browserProxyServer: "",
-    browserProxyUsername: "",
-    browserProxyPassword: "",
-    browserWaitForSelector: "",
-    browserScreenshotEnabled: true,
-    browserScreenshotMaxSize: 512,
-    browserScreenshotImageType: "jpeg",
-    ...overrides,
+function makeConfig(overrides: DeepPartial<Settings> = {}): DirectFetchDeps {
+  const base: DeepPartial<Settings> = {
+    fetch: { timeout_ms: 3000, max_bytes: 65536, block_private_ips: false },
   };
+  return directDeps(makeSettings(deepMerge(base, overrides)));
 }
 
 let server: ReturnType<typeof createHttpServer>;
@@ -162,13 +112,13 @@ describe("directFetch", () => {
   });
 
   it("二进制超 max_download_bytes 返回 too_large", async () => {
-    const r = await directFetch(makeConfig({ fetchMaxDownloadBytes: 1024 }), `${base}/bigbin`);
+    const r = await directFetch(makeConfig({ fetch: { max_download_bytes: 1024 } }), `${base}/bigbin`);
     expect(r.ok).toBe(false);
     expect(r.errorKind).toBe("too_large");
   });
 
   it("Content-Length 预检：超上限立即返回，不等 body 也不阻塞", async () => {
-    const cfg = makeConfig({ fetchMaxDownloadBytes: 1024, fetchTimeoutMs: 3000 });
+    const cfg = makeConfig({ fetch: { max_download_bytes: 1024, timeout_ms: 3000 } });
     const t0 = Date.now();
     const r = await directFetch(cfg, `${base}/declared-big`);
     const cost = Date.now() - t0;
@@ -181,7 +131,7 @@ describe("directFetch", () => {
   });
 
   it("超限文案按量级显示（1.0KB）", async () => {
-    const r = await directFetch(makeConfig({ fetchMaxDownloadBytes: 1024 }), `${base}/bigbin`);
+    const r = await directFetch(makeConfig({ fetch: { max_download_bytes: 1024 } }), `${base}/bigbin`);
     expect(r.ok).toBe(false);
     expect(r.errorMessage).toContain("1.0KB");
   });
@@ -213,13 +163,13 @@ describe("directFetch", () => {
   });
 
   it("自定义 User-Agent 生效", async () => {
-    const r = await directFetch(makeConfig({ fetchUserAgent: "CustomAgent/1.0" }), `${base}/ua`);
+    const r = await directFetch(makeConfig({ fetch: { user_agent: "CustomAgent/1.0" } }), `${base}/ua`);
     expect(r.ok).toBe(true);
     expect(r.html).toContain("CustomAgent/1.0");
   });
 
   it("SSRF：block_private_ips=true 时拒绝内网 hostname", async () => {
-    const cfg = makeConfig({ fetchBlockPrivateIps: true });
+    const cfg = makeConfig({ fetch: { block_private_ips: true } });
     const r = await directFetch(cfg, "http://localhost:1/");
     expect(r.ok).toBe(false);
     expect(r.errorKind).toBe("blocked_private_ip");
@@ -227,7 +177,7 @@ describe("directFetch", () => {
 
   it("SSRF：重定向到内网地址被拒绝（绕过防护）", async () => {
     // 公网 URL → 302 → 内网 URL（如云 metadata），必须被拦截
-    const cfg = makeConfig({ fetchBlockPrivateIps: true, fetchTimeoutMs: 2000 });
+    const cfg = makeConfig({ fetch: { block_private_ips: true, timeout_ms: 2000 } });
     const r = await directFetch(cfg, `${base}/redirect`);
     expect(r.ok).toBe(false);
     expect(r.errorKind).toBe("blocked_private_ip");

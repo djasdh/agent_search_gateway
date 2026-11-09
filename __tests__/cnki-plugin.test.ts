@@ -4,11 +4,13 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import { cnkiPlugin, endpoints, policy } from "../src/fetch/plugins/cnki.js";
 import { createFetchService } from "../src/fetch/service.js";
 import { FetchStore } from "../src/fetch/store.js";
 import type { Logger } from "../src/logger.js";
+import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
+import type { Settings } from "../src/settings/index.js";
+import { deepMerge, fetchServiceDeps, makeSettings, type DeepPartial } from "./helpers/settings.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -18,50 +20,27 @@ const silentLogger: Logger = {
   close: () => {},
 } as Logger;
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
+function makeConfig(overrides: DeepPartial<Settings> = {}): Settings {
+  const base: DeepPartial<Settings> = {
+    fetch: {
+      timeout_ms: 4000,
+      max_bytes: 5 * 1024 * 1024,
+      block_private_ips: false,
+      private_ip_exempt_cidrs: [],
+      max_download_bytes: 4 * 1024 * 1024,
+    },
+    flaresolverr: { enabled: false },
+  };
+  return makeSettings(deepMerge(base, overrides));
+}
+
+function pluginCtx(overrides: DeepPartial<Settings> = {}): FetchPluginContext {
+  const settings = makeConfig(overrides);
   return {
-    host: "127.0.0.1",
-    port: 3210,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: "http://127.0.0.1:1",
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: false,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    fetchTimeoutMs: 4000,
-    fetchMaxBytes: 5 * 1024 * 1024,
-    fetchUserAgent: "",
-    fetchBlockPrivateIps: false,
-    fetchPrivateIpExemptCidrs: [],
-    fetchStructural: "clean",
-    fetchMaxOutputChars: 20000,
-    fetchCacheTtlMs: 600000,
-    fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 4 * 1024 * 1024,
-    fetchDownloadDir: "data/downloads",
-    fetchDownloadTtlMs: 604800000,
-    fetchDownloadMaxTotalBytes: 4294967296,
-    fetchFilesRoute: true,
-    ...overrides,
-  } as GatewayConfig;
+    settings: { fetch: settings.fetch, bilibili: settings.bilibili },
+    secrets: { bilibili: { http: { token: "" } } },
+    logger: silentLogger,
+  };
 }
 
 const PDF = Buffer.concat([Buffer.from("%PDF-1.6\n"), Buffer.alloc(512, 0x20)]);
@@ -166,10 +145,7 @@ describe("cnkiPlugin.match", () => {
 
 describe("cnkiPlugin.fetch", () => {
   it("摘要页 → #pdfDown → 跟随重定向拿到 %PDF", async () => {
-    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), {
-      config: makeConfig(),
-      logger: silentLogger,
-    });
+    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), pluginCtx());
     expect(r.ok).toBe(true);
     expect(r.contentType).toBe("application/pdf");
     expect(r.bytes?.subarray(0, 5).toString("latin1")).toBe("%PDF-");
@@ -177,60 +153,42 @@ describe("cnkiPlugin.fetch", () => {
   });
 
   it("直接给下载链接也能取件", async () => {
-    const r = await cnkiPlugin.fetch(new URL(`${base}/bar/download/order?id=pdf`), {
-      config: makeConfig(),
-      logger: silentLogger,
-    });
+    const r = await cnkiPlugin.fetch(new URL(`${base}/bar/download/order?id=pdf`), pluginCtx());
     expect(r.ok).toBe(true);
     expect(r.bytes?.subarray(0, 5).toString("latin1")).toBe("%PDF-");
   });
 
   it("IP 登录拿不到 LID → CNKI_NO_SESSION（不静默返回 HTML）", async () => {
     behaviour = "no-lid";
-    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), {
-      config: makeConfig(),
-      logger: silentLogger,
-    });
+    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), pluginCtx());
     expect(r.ok).toBe(false);
     expect(r.errorCode).toBe("CNKI_NO_SESSION");
   });
 
   it("未订购的摘要页 → NOT_SUBSCRIBED", async () => {
     behaviour = "not-subscribed";
-    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), {
-      config: makeConfig(),
-      logger: silentLogger,
-    });
+    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), pluginCtx());
     expect(r.ok).toBe(false);
     expect(r.errorCode).toBe("NOT_SUBSCRIBED");
   });
 
   it("只有 HTML 阅读版（无 PDF 版）→ NO_PDF", async () => {
     behaviour = "htmlread";
-    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), {
-      config: makeConfig(),
-      logger: silentLogger,
-    });
+    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), pluginCtx());
     expect(r.ok).toBe(false);
     expect(r.errorCode).toBe("NO_PDF");
   });
 
   it("超过 fetch.max_download_bytes → TOO_LARGE（不把大文件读进内存）", async () => {
     behaviour = "huge";
-    const r = await cnkiPlugin.fetch(new URL(`${base}/bar/download/order?id=pdf`), {
-      config: makeConfig({ fetchMaxDownloadBytes: 1024 }),
-      logger: silentLogger,
-    });
+    const r = await cnkiPlugin.fetch(new URL(`${base}/bar/download/order?id=pdf`), pluginCtx({ fetch: { max_download_bytes: 1024 } }));
     expect(r.ok).toBe(false);
     expect(r.errorCode).toBe("TOO_LARGE");
   });
 
   it("摘要页指向站外地址 → BAD_TARGET（不跟随到非知网域名）", async () => {
     behaviour = "bad-target";
-    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), {
-      config: makeConfig(),
-      logger: silentLogger,
-    });
+    const r = await cnkiPlugin.fetch(new URL(`${base}/kcms2/article/abstract?v=abc`), pluginCtx());
     expect(r.ok).toBe(false);
     expect(r.errorCode).toBe("BAD_TARGET");
   });
@@ -239,7 +197,12 @@ describe("cnkiPlugin.fetch", () => {
 describe("service 集成：插件产物落盘而非抽正文", () => {
   it("返回本地路径 + /files 链接", async () => {
     const store = tmpStore();
-    const svc = createFetchService(makeConfig({ fetchDownloadDir: "data/downloads" }), silentLogger, undefined, store);
+    const svc = createFetchService(
+      fetchServiceDeps(makeConfig({ fetch: { download_dir: "data/downloads" } })),
+      silentLogger,
+      undefined,
+      store,
+    );
     const r = await svc.fetch({ url: `${base}/kcms2/article/abstract?v=abc` });
     expect(r.ok).toBe(true);
     expect(r.text).toContain("已下载文件");

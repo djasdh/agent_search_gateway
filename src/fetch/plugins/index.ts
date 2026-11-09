@@ -9,7 +9,7 @@
 import { bilibiliPlugin } from "../../bilibili/index.js";
 import { weiboPlugin } from "../../weibo/index.js";
 import { cnkiPlugin } from "./cnki.js";
-import type { GatewayConfig } from "../../config.js";
+import type { FetchPluginSettings } from "../../settings/index.js";
 import type { FetchPlugin } from "./types.js";
 
 export type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./types.js";
@@ -17,10 +17,10 @@ export type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./types
 const plugins: FetchPlugin[] = [cnkiPlugin, bilibiliPlugin, weiboPlugin];
 
 /** 返回接管该 URL 的插件（按注册顺序取第一个命中者）。 */
-export function findPlugin(url: URL, config?: GatewayConfig): FetchPlugin | undefined {
+export function findPlugin(url: URL, settings?: FetchPluginSettings): FetchPlugin | undefined {
   for (const p of plugins) {
     try {
-      if (p.match(url, config)) return p;
+      if (p.match(url, settings)) return p;
     } catch {
       /* 插件 match 抛错视为不接管，不影响通用路径 */
     }

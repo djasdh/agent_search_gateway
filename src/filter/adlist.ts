@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
-import type { AdFilterLevel, GatewayConfig } from "../config.js";
+import type { AdFilterSettings } from "../settings/index.js";
 import { HOSTS_SOURCES } from "./domain-filter.js";
 import type { Logger } from "../logger.js";
 
@@ -8,12 +8,12 @@ import type { Logger } from "../logger.js";
  * 拉取 StevenBlack hosts 到本地。失败不抛异常（保留本地缓存，供 buildDomainFilter 兜底）。
  * 返回是否成功。
  */
-export async function fetchAdList(config: GatewayConfig): Promise<boolean> {
-  if (!config.adFilterEnabled || config.adFilterLevel === "off") return false;
-  const src = HOSTS_SOURCES[config.adFilterLevel];
+export async function fetchAdList(adFilter: AdFilterSettings): Promise<boolean> {
+  if (!adFilter.enabled || adFilter.level === "off") return false;
+  const src = HOSTS_SOURCES[adFilter.level];
   if (!src) return false;
 
-  const dir = dirname(config.adFilterHostsFile);
+  const dir = dirname(adFilter.hosts_file);
   mkdirSync(dir, { recursive: true });
 
   try {
@@ -21,7 +21,7 @@ export async function fetchAdList(config: GatewayConfig): Promise<boolean> {
     if (!res.ok) return false;
     const text = await res.text();
     const { writeFileSync } = await import("node:fs");
-    writeFileSync(config.adFilterHostsFile, text, "utf-8");
+    writeFileSync(adFilter.hosts_file, text, "utf-8");
     return true;
   } catch {
     return false;
@@ -29,11 +29,11 @@ export async function fetchAdList(config: GatewayConfig): Promise<boolean> {
 }
 
 /** hosts 文件是否缺失或过期（超过 auto_update_interval_ms 未更新） */
-export function isAdListStale(config: GatewayConfig): boolean {
-  if (!existsSync(config.adFilterHostsFile)) return true;
+export function isAdListStale(adFilter: AdFilterSettings): boolean {
+  if (!existsSync(adFilter.hosts_file)) return true;
   try {
-    const mtime = statSync(config.adFilterHostsFile).mtimeMs;
-    return Date.now() - mtime > config.adFilterAutoUpdateIntervalMs;
+    const mtime = statSync(adFilter.hosts_file).mtimeMs;
+    return Date.now() - mtime > adFilter.auto_update_interval_ms;
   } catch {
     return true;
   }
@@ -43,14 +43,14 @@ export function isAdListStale(config: GatewayConfig): boolean {
  * 启动时确保 adlist 最新：缺失或过期则异步拉取。
  * 异步执行，不阻塞服务启动；失败仅记录日志（继续用本地/空列表）。
  */
-export function ensureAdList(config: GatewayConfig, logger: Logger): void {
-  if (!config.adFilterEnabled || config.adFilterLevel === "off") return;
-  if (!isAdListStale(config)) return;
+export function ensureAdList(adFilter: AdFilterSettings, logger: Logger): void {
+  if (!adFilter.enabled || adFilter.level === "off") return;
+  if (!isAdListStale(adFilter)) return;
 
-  logger.info(`adlist 缺失或过期，后台拉取 ${config.adFilterLevel}...`);
-  void fetchAdList(config).then((ok) => {
+  logger.info(`adlist 缺失或过期，后台拉取 ${adFilter.level}...`);
+  void fetchAdList(adFilter).then((ok) => {
     if (ok) {
-      logger.info(`adlist 已更新: ${config.adFilterHostsFile}`);
+      logger.info(`adlist 已更新: ${adFilter.hosts_file}`);
     } else {
       logger.warn("adlist 拉取失败，使用本地/空列表");
     }
@@ -63,21 +63,21 @@ export function ensureAdList(config: GatewayConfig, logger: Logger): void {
  * 返回停止函数（优雅关闭时调用）。
  */
 export function startAdListScheduler(
-  config: GatewayConfig,
+  adFilter: AdFilterSettings,
   logger: Logger,
   onRefresh: () => void,
 ): () => void {
-  if (!config.adFilterEnabled || config.adFilterLevel === "off" || !config.adFilterAutoUpdate) {
+  if (!adFilter.enabled || adFilter.level === "off" || !adFilter.auto_update) {
     return () => {};
   }
 
-  const intervalMs = config.adFilterAutoUpdateIntervalMs;
+  const intervalMs = adFilter.auto_update_interval_ms;
   const timer = setInterval(() => {
-    if (!isAdListStale(config)) return;
-    logger.info(`adlist 定期检查：过期，拉取 ${config.adFilterLevel}...`);
-    void fetchAdList(config).then((ok) => {
+    if (!isAdListStale(adFilter)) return;
+    logger.info(`adlist 定期检查：过期，拉取 ${adFilter.level}...`);
+    void fetchAdList(adFilter).then((ok) => {
       if (ok) {
-        logger.info(`adlist 已更新: ${config.adFilterHostsFile}`);
+        logger.info(`adlist 已更新: ${adFilter.hosts_file}`);
         onRefresh();
       } else {
         logger.warn("adlist 定期拉取失败");

@@ -1,9 +1,15 @@
 import type { Page } from "playwright";
-import type { GatewayConfig } from "../config.js";
 import type { BrowserPool } from "./pool.js";
 import type { Logger } from "../logger.js";
 import { assertPublicHttpUrl } from "../fetch/ssrf.js";
 import { pageScreenshot, pageSnapshot } from "./snapshot.js";
+import type { BrowserSettings, SsrfSettings } from "../settings/index.js";
+
+/** browser_* 工具所需设置切片。 */
+export interface BrowserToolSettings {
+  browser: BrowserSettings;
+  ssrf: SsrfSettings;
+}
 
 export interface ToolResult {
   ok: boolean;
@@ -23,7 +29,7 @@ function errResult(err: unknown): ToolResult {
 export class BrowserTools {
   constructor(
     private pool: BrowserPool,
-    private config: GatewayConfig,
+    private deps: BrowserToolSettings,
     private logger: Logger,
   ) {}
 
@@ -31,8 +37,8 @@ export class BrowserTools {
     if (!this.pool.enabled) return errResult(new Error("浏览器功能未启用"));
     // SSRF：浏览器会自行解析并访问 URL，导航前校验协议 + 内网
     const check = await assertPublicHttpUrl(url, {
-      exemptCidrs: this.config.fetchPrivateIpExemptCidrs,
-      enabled: this.config.fetchBlockPrivateIps,
+      exemptCidrs: this.deps.ssrf.private_ip_exempt_cidrs,
+      enabled: this.deps.ssrf.block_private_ips,
     });
     if (!check.ok) {
       return errResult(
@@ -43,7 +49,7 @@ export class BrowserTools {
     }
     try {
       const { page } = await this.pool.acquireSession();
-      await page.goto(url, { waitUntil: "networkidle", timeout: this.config.browserTimeoutMs });
+      await page.goto(url, { waitUntil: "networkidle", timeout: this.deps.browser.timeout_ms });
       const snap = await pageSnapshot(page);
       if (!snap.ok) return errResult(new Error(snap.error));
       return okText(`已导航到 ${page.url()}\n\n${snap.snapshot}`);
@@ -66,7 +72,7 @@ export class BrowserTools {
   async takeScreenshot(): Promise<ToolResult> {
     try {
       const { page } = await this.pool.acquireSession();
-      const shot = await pageScreenshot(page, this.config);
+      const shot = await pageScreenshot(page, this.deps.browser.screenshot);
       if (!shot.ok) return errResult(new Error(shot.error));
       return { ok: true, screenshot: { mimeType: shot.mimeType!, base64: shot.base64! } };
     } catch (err) {
@@ -77,7 +83,7 @@ export class BrowserTools {
   async click(target: string): Promise<ToolResult> {
     try {
       const { page } = await this.pool.acquireSession();
-      await page.locator(target).first().click({ timeout: this.config.browserTimeoutMs });
+      await page.locator(target).first().click({ timeout: this.deps.browser.timeout_ms });
       const snap = await pageSnapshot(page);
       if (!snap.ok) return okText(`已点击 ${target}`);
       return okText(`已点击 ${target}\n\n${snap.snapshot}`);
@@ -89,7 +95,7 @@ export class BrowserTools {
   async type(target: string, text: string): Promise<ToolResult> {
     try {
       const { page } = await this.pool.acquireSession();
-      await page.locator(target).first().fill(text, { timeout: this.config.browserTimeoutMs });
+      await page.locator(target).first().fill(text, { timeout: this.deps.browser.timeout_ms });
       const snap = await pageSnapshot(page);
       if (!snap.ok) return okText(`已输入 ${target}`);
       return okText(`已输入 ${target}\n\n${snap.snapshot}`);

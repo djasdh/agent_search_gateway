@@ -1,4 +1,4 @@
-import type { GatewayConfig } from "./config.js";
+import type { EmbeddingSettings, FlaresolverrSettings, SearxngSettings } from "./settings/index.js";
 
 export interface BackendProbe {
   status: "up" | "down";
@@ -19,6 +19,13 @@ export interface HealthReport {
   flaresolverr: BackendProbe;
   embedding?: { status: "up" | "down"; model?: string; dim?: number };
   corpus?: { namespace: string; entries: number };
+}
+
+/** 健康检查只关心各后端地址与 embedding 开关。 */
+export interface HealthSettings {
+  searxng: SearxngSettings;
+  flaresolverr: FlaresolverrSettings;
+  embedding: EmbeddingSettings;
 }
 
 async function probe(url: string, timeoutMs = 3000): Promise<BackendProbe> {
@@ -42,13 +49,13 @@ async function probe(url: string, timeoutMs = 3000): Promise<BackendProbe> {
 }
 
 export async function getHealth(
-  config: GatewayConfig,
+  deps: HealthSettings,
   startedAt: number,
   semantic?: SemanticHealth,
 ): Promise<HealthReport> {
   const [searxng, flaresolverr] = await Promise.all([
-    probe(config.searxngUrl),
-    probe(config.flaresolverrUrl),
+    probe(deps.searxng.url),
+    probe(deps.flaresolverr.url),
   ]);
   const report: HealthReport = {
     gateway: {
@@ -58,7 +65,7 @@ export async function getHealth(
     searxng,
     flaresolverr,
   };
-  if (config.embeddingEnabled) {
+  if (deps.embedding.enabled) {
     report.embedding = {
       status: semantic?.embeddingUp ? "up" : "down",
       model: semantic?.model,

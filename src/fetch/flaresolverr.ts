@@ -1,6 +1,6 @@
-import type { GatewayConfig } from "../config.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { assertPublicHttpUrl } from "./ssrf.js";
+import type { FlaresolverrSettings, SsrfSettings } from "../settings/index.js";
 
 export interface FlareSolverrResult {
   ok: boolean;
@@ -27,6 +27,12 @@ interface V1Response {
 
 const MAX_BODY_BYTES = 20 * 1024 * 1024; // 渲染 HTML 上限 20MB
 
+/** FlareSolverr 客户端所需设置切片。 */
+export interface FlareSolverrSettingsDeps {
+  flaresolverr: FlaresolverrSettings;
+  ssrf: SsrfSettings;
+}
+
 /**
  * 调用 FlareSolverr /v1 request.get，获取浏览器渲染后的 HTML。
  * 关键：returnOnlyCookies=false → solution.response 返回渲染后 DOM。
@@ -36,8 +42,8 @@ const MAX_BODY_BYTES = 20 * 1024 * 1024; // 渲染 HTML 上限 20MB
  * 信号量，聚合并发会变成 N × max_concurrent，Chromium 内存线性放大。
  */
 export function createFlareSolverrClient(
-  config: GatewayConfig,
-  sem: Semaphore = new Semaphore(config.flaresolverrMaxConcurrent),
+  deps: FlareSolverrSettingsDeps,
+  sem: Semaphore = new Semaphore(deps.flaresolverr.max_concurrent),
 ) {
   async function requestGet(url: string): Promise<FlareSolverrResult> {
     const release = await sem.acquire();
@@ -51,8 +57,8 @@ export function createFlareSolverrClient(
   async function doRequest(url: string): Promise<FlareSolverrResult> {
     // FlareSolverr 会自行解析并访问 URL，网关必须前置校验协议 + 内网（SSRF）
     const check = await assertPublicHttpUrl(url, {
-      exemptCidrs: config.fetchPrivateIpExemptCidrs,
-      enabled: config.fetchBlockPrivateIps,
+      exemptCidrs: deps.ssrf.private_ip_exempt_cidrs,
+      enabled: deps.ssrf.block_private_ips,
     });
     if (!check.ok) {
       return {
@@ -66,16 +72,16 @@ export function createFlareSolverrClient(
     }
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), config.flaresolverrTimeoutMs);
+    const timer = setTimeout(() => controller.abort(), deps.flaresolverr.timeout_ms);
     try {
-      const res = await fetch(`${config.flaresolverrUrl}/v1`, {
+      const res = await fetch(`${deps.flaresolverr.url}/v1`, {
         method: "POST",
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           cmd: "request.get",
           url,
-          maxTimeout: config.flaresolverrTimeoutMs,
+          maxTimeout: deps.flaresolverr.timeout_ms,
           returnOnlyCookies: false,
         }),
       });
@@ -128,7 +134,7 @@ export function createFlareSolverrClient(
     } catch (err) {
       const e = err as Error;
       if (e.name === "AbortError") {
-        return { ok: false, errorKind: "timeout", errorMessage: `FlareSolverr 超时 (>${config.flaresolverrTimeoutMs}ms)` };
+        return { ok: false, errorKind: "timeout", errorMessage: `FlareSolverr 超时 (>${deps.flaresolverr.timeout_ms}ms)` };
       }
       return { ok: false, errorKind: "network", errorMessage: e.message };
     } finally {

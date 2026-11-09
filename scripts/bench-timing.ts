@@ -14,7 +14,7 @@
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig } from "../src/config.js";
+import { loadSettings } from "../src/settings/index.js";
 import { buildDomainFilter } from "../src/filter/domain-filter.js";
 import { Logger } from "../src/logger.js";
 import { createEmbeddingProvider } from "../src/search/embedding/provider.js";
@@ -49,21 +49,22 @@ function round(n: number): number {
 
 async function main(): Promise<void> {
   mkdirSync(OUT_DIR, { recursive: true });
-  const config = loadConfig();
+  const { settings, secrets } = loadSettings();
+  const embedding = settings.embedding;
   const logger = new Logger("error"); // 静默；指标走 metricsSink
   const provider = createEmbeddingProvider(
     {
-      provider: config.embeddingProvider,
-      baseUrl: config.embeddingBaseUrl,
-      apiKey: config.embeddingApiKey,
-      model: config.embeddingModel,
-      dim: config.embeddingDim,
-      timeoutMs: config.embeddingTimeoutMs,
-      batchSize: config.embeddingBatchSize,
-      concurrency: config.embeddingConcurrency,
-      maxInputChars: config.embeddingMaxInputChars,
-      queryPrefix: config.embeddingQueryPrefix,
-      passagePrefix: config.embeddingPassagePrefix,
+      provider: embedding.provider,
+      baseUrl: embedding.base_url,
+      apiKey: secrets.embedding.api_key,
+      model: embedding.model,
+      dim: embedding.dim,
+      timeoutMs: embedding.timeout_ms,
+      batchSize: embedding.batch_size,
+      concurrency: embedding.concurrency,
+      maxInputChars: embedding.max_input_chars,
+      queryPrefix: embedding.query_prefix,
+      passagePrefix: embedding.passage_prefix,
     },
     logger,
   );
@@ -71,18 +72,18 @@ async function main(): Promise<void> {
   if (!pr.ok || !pr.dim) throw new Error(`embedding 探针失败: ${pr.detail}`);
   const dim = pr.dim;
   const namespace = `${provider.name}:${provider.model}@${dim}`;
-  console.log(`provider=${namespace} batch=${config.embeddingBatchSize} maxInputChars=${config.embeddingMaxInputChars} recallK=${config.corpusRecallK} maxResults=${config.searchMaxResults}`);
-  console.log(`searxng=${config.searxngUrl} url=${config.embeddingBaseUrl}`);
+  console.log(`provider=${namespace} batch=${embedding.batch_size} maxInputChars=${embedding.max_input_chars} recallK=${settings.corpus.recall_k} maxResults=${settings.search.max_results}`);
+  console.log(`searxng=${settings.searxng.url} url=${embedding.base_url}`);
 
   const domainFilter = buildDomainFilter(
-    config.adFilterEnabled,
-    config.adFilterLevel,
-    config.adFilterExtraDomains,
-    config.adFilterHostsFile,
-    config.adFilterAllowlist,
+    settings.ad_filter.enabled,
+    settings.ad_filter.level,
+    settings.ad_filter.extra_domains,
+    settings.ad_filter.hosts_file,
+    settings.ad_filter.allowlist,
   );
   // 禁用结果缓存：TTL=-1 → 每次 get 必过期（测搜索路径本身）
-  const benchConfig = { ...config, searchCacheTtlMs: -1 };
+  const benchSearch = { ...settings.search, cache_ttl_ms: -1 };
 
   const tmpRoot = mkdtempSync(join(OUT_DIR, "searchbench-"));
   const all: Array<Record<string, unknown>> = [];
@@ -92,7 +93,7 @@ async function main(): Promise<void> {
     const dir = join(tmpRoot, name);
     mkdirSync(dir, { recursive: true });
     return createCorpusStore(
-      { path: join(dir, "corpus.db"), namespace, dim, ttlMs: config.corpusTtlMs },
+      { path: join(dir, "corpus.db"), namespace, dim, ttlMs: settings.corpus.ttl_ms },
       logger,
     );
   };
@@ -103,19 +104,30 @@ async function main(): Promise<void> {
     label: string,
   ): Promise<SearchMetrics | null> => {
     let captured: SearchMetrics | null = null;
-    const svc = createSearchService(benchConfig, domainFilter, logger, {
-      embeddingProvider: provider,
-      corpus,
-      recallK: config.corpusRecallK,
-      metricsSink: (m) => {
-        captured = m;
+    const svc = createSearchService(
+      {
+        search: benchSearch,
+        rerank: settings.rerank,
+        searxng: settings.searxng,
+        saucenao_api_key: secrets.search.reverse_image.saucenao.api_key,
+        weibo: settings.weibo,
       },
-    });
+      domainFilter,
+      logger,
+      {
+        embeddingProvider: provider,
+        corpus,
+        recallK: settings.corpus.recall_k,
+        metricsSink: (m) => {
+          captured = m;
+        },
+      },
+    );
     await svc.search({
       query: spec.query,
       language: spec.language,
       categories: spec.categories,
-      numResults: config.searchMaxResults,
+      numResults: settings.search.max_results,
     });
     if (captured) {
       const rec = { label, ...(captured as SearchMetrics) };
@@ -129,14 +141,16 @@ async function main(): Promise<void> {
     // ---- 冷语料：每个 rep 一个全新空库 ----
     for (let r = 0; r < COLD_REPS; r++) {
       const corpus = makeCorpus(`cold-${spec.id}-${r}`);
+      if (!corpus) throw new Error("语料库初始化失败");
       await runOnce(corpus, spec, "cold");
-      corpus?.close();
+      corpus.close();
     }
     // ---- 热语料：预跑一次填充，再计 3 次 ----
     const hot = makeCorpus(`hot-${spec.id}`);
+    if (!hot) throw new Error("语料库初始化失败");
     for (let w = 0; w < HOT_WARMUP; w++) await runOnce(hot, spec, "hot-warmup");
     for (let r = 0; r < HOT_REPS; r++) await runOnce(hot, spec, "hot");
-    hot?.close();
+    hot.close();
   }
 
   writeFileSync(OUT_JSONL, lines.join("\n") + "\n");

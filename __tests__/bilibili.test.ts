@@ -3,7 +3,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, type GatewayConfig } from "../src/config.js";
+import { loadSettings } from "../src/settings/index.js";
+import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
 import { bilibiliPlugin, buildArticleSummary, buildVideoSummary } from "../src/bilibili/index.js";
 import { createCommentStore } from "../src/bilibili/store.js";
 import { isBiliContentUrl, parseBiliRequest } from "../src/bilibili/parse.js";
@@ -11,12 +12,16 @@ import type { BiliArticle, BiliComment, BiliDetail } from "../src/bilibili/types
 
 const dirs: string[] = [];
 
-function cfg(yaml = "gateway: { host: 127.0.0.1 }\nbilibili: { enabled: true }\n"): GatewayConfig {
+function cfg(yaml = "gateway: { host: 127.0.0.1 }\nbilibili: { enabled: true }\n"): FetchPluginContext {
   const d = mkdtempSync(join(tmpdir(), "bili-test-"));
   dirs.push(d);
   const p = join(d, "gateway.yaml");
   writeFileSync(p, yaml);
-  return loadConfig(p);
+  const { settings, secrets } = loadSettings({ configPath: p, secretsPath: join(d, "secrets.yaml"), env: {} });
+  return {
+    settings: { fetch: settings.fetch, bilibili: settings.bilibili },
+    secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+  };
 }
 
 afterEach(() => {
@@ -85,7 +90,7 @@ describe("plugin match", () => {
 
   it("enabled=false 明确报不可用", async () => {
     const config = cfg("gateway: { host: 127.0.0.1 }\nbilibili: { enabled: false }\n");
-    const r = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD"), { config });
+    const r = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD"), config);
     expect(r).toMatchObject({ ok: false, errorCode: "BILI_UNAVAILABLE" });
   });
 });
@@ -188,7 +193,7 @@ bilibili:
 `);
 
     try {
-      const video = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD?p=2"), { config });
+      const video = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD?p=2"), config);
       expect(video.ok).toBe(true);
       const body = JSON.parse(video.bytes!.toString("utf8"));
       expect(body.audio_url).toBe("https://cdn.example/audio.m4s");
@@ -196,12 +201,12 @@ bilibili:
       expect(body.detail.page_count).toBe(2);
       expect(body.comments_url).toBe("https://www.bilibili.com/video/BV1xx411c7mD?p=2#reply");
 
-      const comments = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD#reply"), { config });
+      const comments = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD#reply"), config);
       const cbody = JSON.parse(comments.bytes!.toString("utf8"));
       expect(cbody).toMatchObject({ kind: "comments", fetched: 1, complete: true });
       expect(cbody.sample[0].content).toBe("hello world");
 
-      const search = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD#reply?q=hello"), { config });
+      const search = await bilibiliPlugin.fetch(new URL("https://www.bilibili.com/video/BV1xx411c7mD#reply?q=hello"), config);
       const sbody = JSON.parse(search.bytes!.toString("utf8"));
       expect(sbody).toMatchObject({ kind: "comments_search", q: "hello", count: 1 });
     } finally {

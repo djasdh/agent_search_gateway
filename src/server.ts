@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { BrowserPool } from "./browser/pool.js";
 import { BrowserTools } from "./browser/tools.js";
-import type { GatewayConfig } from "./config.js";
+import { ssrfOf, type GatewaySettings, type Secrets, type Settings } from "./settings/index.js";
 import { fetchAdList, isAdListStale, startAdListScheduler } from "./filter/adlist.js";
 import { buildDomainFilter, type DomainFilter } from "./filter/domain-filter.js";
 import { createFlareSolverrClient, type FlareSolverrClient } from "./fetch/flaresolverr.js";
@@ -26,9 +26,16 @@ const PROCESS_STARTED_AT = Date.now();
 // 浏览器池全局单例（跨 MCP 会话共享，避免每个 session 各开浏览器进程）
 let sharedBrowserPool: BrowserPool | null = null;
 
-function getBrowserPool(config: GatewayConfig, logger: Logger): BrowserPool {
+function getBrowserPool(settings: Settings, secrets: Secrets, logger: Logger): BrowserPool {
   if (!sharedBrowserPool) {
-    sharedBrowserPool = new BrowserPool(config, logger);
+    sharedBrowserPool = new BrowserPool(
+      {
+        browser: settings.browser,
+        ssrf: ssrfOf(settings.fetch),
+        proxy_password: secrets.browser.proxy_password,
+      },
+      logger,
+    );
   }
   return sharedBrowserPool;
 }
@@ -37,9 +44,12 @@ function getBrowserPool(config: GatewayConfig, logger: Logger): BrowserPool {
 // 必须跨 MCP 会话共享，否则聚合并发会变成 N × max_concurrent，Chromium 内存线性放大。
 let sharedFlareSolverrClient: FlareSolverrClient | null = null;
 
-function getFlareSolverrClient(config: GatewayConfig): FlareSolverrClient {
+function getFlareSolverrClient(settings: Settings): FlareSolverrClient {
   if (!sharedFlareSolverrClient) {
-    sharedFlareSolverrClient = createFlareSolverrClient(config);
+    sharedFlareSolverrClient = createFlareSolverrClient({
+      flaresolverr: settings.flaresolverr,
+      ssrf: ssrfOf(settings.fetch),
+    });
   }
   return sharedFlareSolverrClient;
 }
@@ -51,10 +61,11 @@ let fetchStoreSweep: ReturnType<typeof setInterval> | null = null;
 /** 产物 TTL/配额清扫周期（与语料库清扫同节奏）。 */
 const FETCH_STORE_SWEEP_INTERVAL_MS = 3600000;
 
-export function getFetchStore(config: GatewayConfig, logger: Logger): FetchStore {
+export function getFetchStore(settings: Settings, logger: Logger): FetchStore {
   if (!sharedFetchStore) {
-    const dir = resolve(config.fetchDownloadDir);
-    sharedFetchStore = new FetchStore(dir, config.fetchDownloadTtlMs, config.fetchDownloadMaxTotalBytes, logger);
+    const fetch = settings.fetch;
+    const dir = resolve(fetch.download_dir);
+    sharedFetchStore = new FetchStore(dir, fetch.download_ttl_ms, fetch.download_max_total_bytes, logger);
     fetchStoreSweep = setInterval(() => {
       try {
         sharedFetchStore?.gc(Date.now());
@@ -63,7 +74,7 @@ export function getFetchStore(config: GatewayConfig, logger: Logger): FetchStore
       }
     }, FETCH_STORE_SWEEP_INTERVAL_MS);
     fetchStoreSweep.unref?.();
-    logger.info(`fetch 产物目录: ${dir} (TTL ${Math.round(config.fetchDownloadTtlMs / 86400000)}d, 配额 ${Math.round(config.fetchDownloadMaxTotalBytes / 1024 / 1024)}MB)`);
+    logger.info(`fetch 产物目录: ${dir} (TTL ${Math.round(fetch.download_ttl_ms / 86400000)}d, 配额 ${Math.round(fetch.download_max_total_bytes / 1024 / 1024)}MB)`);
   }
   return sharedFetchStore;
 }
@@ -74,16 +85,16 @@ let sharedDomainFilter: DomainFilter | null = null;
 let adListInit: Promise<void> | null = null;
 let stopAdListScheduler: (() => void) | null = null;
 
-function rebuildDomainFilter(config: GatewayConfig, logger: Logger): DomainFilter {
+function rebuildDomainFilter(adFilter: Settings["ad_filter"], logger: Logger): DomainFilter {
   sharedDomainFilter = buildDomainFilter(
-    config.adFilterEnabled,
-    config.adFilterLevel,
-    config.adFilterExtraDomains,
-    config.adFilterHostsFile,
-    config.adFilterAllowlist,
+    adFilter.enabled,
+    adFilter.level,
+    adFilter.extra_domains,
+    adFilter.hosts_file,
+    adFilter.allowlist,
   );
   if (sharedDomainFilter.enabled) {
-    logger.info(`广告过滤已启用: level=${config.adFilterLevel} 域名数=${sharedDomainFilter.count}`);
+    logger.info(`广告过滤已启用: level=${adFilter.level} 域名数=${sharedDomainFilter.count}`);
   } else {
     logger.info("广告过滤未启用 (off 或 hosts 文件缺失)");
   }
@@ -94,24 +105,24 @@ function rebuildDomainFilter(config: GatewayConfig, logger: Logger): DomainFilte
  * 进程启动时只执行一次：初次拉取 adlist、构建过滤器、启动定期刷新。
  * 由 createServer 的首次调用触发；后续会话 await 同一个 Promise。
  */
-function initAdListOnce(config: GatewayConfig, logger: Logger): Promise<void> {
+function initAdListOnce(adFilter: Settings["ad_filter"], logger: Logger): Promise<void> {
   if (!adListInit) {
     adListInit = (async () => {
       // adlist 自动更新：缺失/过期时先拉取（保证广告过滤就绪）
-      if (config.adFilterAutoUpdate && config.adFilterEnabled && config.adFilterLevel !== "off") {
-        if (isAdListStale(config)) {
-          const ok = await fetchAdList(config);
+      if (adFilter.auto_update && adFilter.enabled && adFilter.level !== "off") {
+        if (isAdListStale(adFilter)) {
+          const ok = await fetchAdList(adFilter);
           if (ok) {
-            logger.info(`adlist 已更新: ${config.adFilterHostsFile}`);
+            logger.info(`adlist 已更新: ${adFilter.hosts_file}`);
           } else {
             logger.warn("adlist 拉取失败，使用本地/空列表");
           }
         }
       }
-      rebuildDomainFilter(config, logger);
+      rebuildDomainFilter(adFilter, logger);
       if (!stopAdListScheduler) {
-        stopAdListScheduler = startAdListScheduler(config, logger, () => {
-          rebuildDomainFilter(config, logger);
+        stopAdListScheduler = startAdListScheduler(adFilter, logger, () => {
+          rebuildDomainFilter(adFilter, logger);
         });
       }
     })().catch((err) => {
@@ -123,8 +134,8 @@ function initAdListOnce(config: GatewayConfig, logger: Logger): Promise<void> {
 }
 
 /** 每次搜索时现取当前过滤器：adlist 刷新后所有会话立即看到新值。 */
-function getDomainFilter(config: GatewayConfig, logger: Logger): DomainFilter {
-  return sharedDomainFilter ?? rebuildDomainFilter(config, logger);
+function getDomainFilter(adFilter: Settings["ad_filter"], logger: Logger): DomainFilter {
+  return sharedDomainFilter ?? rebuildDomainFilter(adFilter, logger);
 }
 
 /**
@@ -156,24 +167,25 @@ let sharedSemantic: Promise<SemanticRuntime> | null = null;
 let semanticSweep: ReturnType<typeof setInterval> | null = null;
 let semanticClosed = false;
 
-async function initSemantic(config: GatewayConfig, logger: Logger): Promise<SemanticRuntime> {
+async function initSemantic(settings: Settings, secrets: Secrets, logger: Logger): Promise<SemanticRuntime> {
   let provider: EmbeddingProvider | null = null;
   let dim = 0;
-  if (config.embeddingEnabled && config.embeddingModel) {
+  const embedding = settings.embedding;
+  if (embedding.enabled && embedding.model) {
     try {
       provider = createEmbeddingProvider(
         {
-          provider: config.embeddingProvider,
-          baseUrl: config.embeddingBaseUrl,
-          apiKey: config.embeddingApiKey,
-          model: config.embeddingModel,
-          dim: config.embeddingDim,
-          timeoutMs: config.embeddingTimeoutMs,
-          batchSize: config.embeddingBatchSize,
-          concurrency: config.embeddingConcurrency,
-          maxInputChars: config.embeddingMaxInputChars,
-          queryPrefix: config.embeddingQueryPrefix,
-          passagePrefix: config.embeddingPassagePrefix,
+          provider: embedding.provider,
+          baseUrl: embedding.base_url,
+          apiKey: secrets.embedding.api_key,
+          model: embedding.model,
+          dim: embedding.dim,
+          timeoutMs: embedding.timeout_ms,
+          batchSize: embedding.batch_size,
+          concurrency: embedding.concurrency,
+          maxInputChars: embedding.max_input_chars,
+          queryPrefix: embedding.query_prefix,
+          passagePrefix: embedding.passage_prefix,
         },
         logger,
       );
@@ -183,7 +195,7 @@ async function initSemantic(config: GatewayConfig, logger: Logger): Promise<Sema
         throw new Error(pr.detail ?? "embedding 探针失败");
       }
       dim = pr.dim;
-      logger.info(`embedding 已启用: ${config.embeddingProvider}:${config.embeddingModel} (dim=${dim})`);
+      logger.info(`embedding 已启用: ${embedding.provider}:${embedding.model} (dim=${dim})`);
     } catch (err) {
       logger.warn(`embedding 探针失败，已禁用语义召回: ${err instanceof Error ? err.message : String(err)}`);
       provider = null;
@@ -191,15 +203,16 @@ async function initSemantic(config: GatewayConfig, logger: Logger): Promise<Sema
   }
 
   let corpus: CorpusStore | null = null;
-  if (provider && config.corpusEnabled) {
+  const corpusSettings = settings.corpus;
+  if (provider && corpusSettings.enabled) {
     try {
       const namespace = `${provider.name}:${provider.model}@${dim}`;
       corpus = createCorpusStore(
-        { path: config.corpusStorePath, namespace, dim, ttlMs: config.corpusTtlMs },
+        { path: corpusSettings.store_path, namespace, dim, ttlMs: corpusSettings.ttl_ms },
         logger,
       );
       if (corpus) {
-        logger.info(`语料库已启用: ${namespace} @ ${config.corpusStorePath} (${corpus.stats().entries} 条)`);
+        logger.info(`语料库已启用: ${namespace} @ ${corpusSettings.store_path} (${corpus.stats().entries} 条)`);
       }
     } catch (err) {
       logger.warn(`语料库初始化失败，已禁用: ${err instanceof Error ? err.message : String(err)}`);
@@ -215,15 +228,15 @@ async function initSemantic(config: GatewayConfig, logger: Logger): Promise<Sema
       } catch (err) {
         logger.warn(`语料库清扫失败: ${String(err)}`);
       }
-    }, config.corpusSweepIntervalMs);
+    }, corpusSettings.sweep_interval_ms);
     semanticSweep.unref?.();
   }
 
   return { provider, corpus, dim };
 }
 
-function getSemanticRuntime(config: GatewayConfig, logger: Logger): Promise<SemanticRuntime> {
-  if (!sharedSemantic) sharedSemantic = initSemantic(config, logger);
+function getSemanticRuntime(settings: Settings, secrets: Secrets, logger: Logger): Promise<SemanticRuntime> {
+  if (!sharedSemantic) sharedSemantic = initSemantic(settings, secrets, logger);
   return sharedSemantic;
 }
 
@@ -245,7 +258,13 @@ function closeSemantic(): void {
     .catch(() => {});
 }
 
-export async function createServer(config: GatewayConfig, logger: Logger): Promise<McpServer> {
+function filesBaseUrl(gateway: GatewaySettings): string {
+  const host =
+    gateway.host === "0.0.0.0" || gateway.host === "::" || gateway.host === "" ? "127.0.0.1" : gateway.host;
+  return `http://${host}:${gateway.port}`;
+}
+
+export async function createServer(settings: Settings, secrets: Secrets, logger: Logger): Promise<McpServer> {
   const server = new McpServer(
     {
       name: "agent-search-gateway",
@@ -258,21 +277,51 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
 
   // 进程级资源：只初始化一次，所有 MCP 会话共享。
   // adlist 初始化 + 定期刷新、signal 清理都不再放在会话内（见 closeGatewayRuntime）。
-  await initAdListOnce(config, logger);
-  const semantic = await getSemanticRuntime(config, logger);
-  const browserPool = getBrowserPool(config, logger);
-  const fetchStore = getFetchStore(config, logger);
-  const flareSolverr = getFlareSolverrClient(config);
+  await initAdListOnce(settings.ad_filter, logger);
+  const semantic = await getSemanticRuntime(settings, secrets, logger);
+  const browserPool = getBrowserPool(settings, secrets, logger);
+  const fetchStore = getFetchStore(settings, logger);
+  const flareSolverr = getFlareSolverrClient(settings);
 
   // searchService / fetchService 仍按会话持有（缓存与搜索并发保持会话级）；
   // 但广告过滤器通过进程级 getter 现取，fetch 共享进程级 FlareSolverr 闸门。
-  const searchService = createSearchService(config, () => getDomainFilter(config, logger), logger, {
-    embeddingProvider: semantic.provider,
-    corpus: semantic.corpus,
-    recallK: config.corpusRecallK,
-  });
-  const fetchService = createFetchService(config, logger, browserPool, fetchStore, flareSolverr);
-  const browserTools = new BrowserTools(browserPool, config, logger);
+  const searchService = createSearchService(
+    {
+      search: settings.search,
+      rerank: settings.rerank,
+      searxng: settings.searxng,
+      saucenao_api_key: secrets.search.reverse_image.saucenao.api_key,
+      weibo: settings.weibo,
+    },
+    () => getDomainFilter(settings.ad_filter, logger),
+    logger,
+    {
+      embeddingProvider: semantic.provider,
+      corpus: semantic.corpus,
+      recallK: settings.corpus.recall_k,
+    },
+  );
+  const fetchService = createFetchService(
+    {
+      fetch: settings.fetch,
+      flaresolverr: settings.flaresolverr,
+      browser: settings.browser,
+      files_base_url: filesBaseUrl(settings.gateway),
+      plugins: {
+        settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
+        secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+      },
+    },
+    logger,
+    browserPool,
+    fetchStore,
+    flareSolverr,
+  );
+  const browserTools = new BrowserTools(
+    browserPool,
+    { browser: settings.browser, ssrf: ssrfOf(settings.fetch) },
+    logger,
+  );
 
   server.registerTool(
     "health",
@@ -281,14 +330,18 @@ export async function createServer(config: GatewayConfig, logger: Logger): Promi
         "检查网关与各后端（searxng、FlareSolverr）的连通状态。返回 JSON，包含每个后端的 up/down、延迟和错误信息。",
     },
     async () => {
-      const report = await getHealth(config, PROCESS_STARTED_AT, {
-        embeddingUp: semantic.provider !== null,
-        model: config.embeddingModel || undefined,
-        dim: semantic.dim || undefined,
-        corpus: semantic.corpus
-          ? { namespace: semantic.corpus.namespace, entries: semantic.corpus.stats().entries }
-          : undefined,
-      });
+      const report = await getHealth(
+        { searxng: settings.searxng, flaresolverr: settings.flaresolverr, embedding: settings.embedding },
+        PROCESS_STARTED_AT,
+        {
+          embeddingUp: semantic.provider !== null,
+          model: settings.embedding.model || undefined,
+          dim: semantic.dim || undefined,
+          corpus: semantic.corpus
+            ? { namespace: semantic.corpus.namespace, entries: semantic.corpus.stats().entries }
+            : undefined,
+        },
+      );
       logger.debug(`health probe: searxng=${report.searxng.status} flaresolverr=${report.flaresolverr.status}`);
       return { content: [{ type: "text" as const, text: JSON.stringify(report, null, 2) }] };
     },
@@ -537,15 +590,16 @@ function writeJson(res: import("node:http").ServerResponse, status: number, body
 
 export async function startHttpServer(
   deps: {
-    config: GatewayConfig;
+    settings: Settings;
+    secrets: Secrets;
     logger: Logger;
     /** 测试用：覆盖空闲 TTL / 清扫间隔，默认沿用常量。 */
     sessionIdleTtlMs?: number;
     sessionSweepIntervalMs?: number;
   },
-  createMcpServer: (config: GatewayConfig, logger: Logger) => Promise<McpServer>,
+  createMcpServer: (settings: Settings, secrets: Secrets, logger: Logger) => Promise<McpServer>,
 ): Promise<{ url: string; close: () => Promise<void> }> {
-  const { config, logger } = deps;
+  const { settings, secrets, logger } = deps;
   const idleTtlMs = deps.sessionIdleTtlMs ?? SESSION_IDLE_TTL_MS;
   const sweepIntervalMs = deps.sessionSweepIntervalMs ?? SESSION_SWEEP_INTERVAL_MS;
   const { createServer: createHttp } = await import("node:http");
@@ -564,15 +618,18 @@ export async function startHttpServer(
 
     // 健康检查端点（不经 MCP）
     if (url.pathname === "/health" && req.method === "GET") {
-      const report = await getHealth(config, Date.now());
+      const report = await getHealth(
+        { searxng: settings.searxng, flaresolverr: settings.flaresolverr, embedding: settings.embedding },
+        Date.now(),
+      );
       writeJson(res, 200, report);
       return;
     }
 
     // 产物下载端点（公开：id 是内容 sha256，不可猜；见 ADR-0009）
-    if (config.fetchFilesRoute && req.method === "GET" && url.pathname.startsWith("/files/")) {
+    if (settings.fetch.files_route && req.method === "GET" && url.pathname.startsWith("/files/")) {
       const id = decodeURIComponent(url.pathname.slice("/files/".length));
-      const store = getFetchStore(config, logger);
+      const store = getFetchStore(settings, logger);
       const ref = store.get(id);
       const stream = ref ? store.openReadStream(id) : undefined;
       if (!ref || !stream) {
@@ -601,7 +658,7 @@ export async function startHttpServer(
     }
 
     // 可选 Bearer token 认证
-    if (config.token && req.headers.authorization !== `Bearer ${config.token}`) {
+    if (secrets.gateway.token && req.headers.authorization !== `Bearer ${secrets.gateway.token}`) {
       writeJson(res, 401, { error: "unauthorized" });
       return;
     }
@@ -622,7 +679,7 @@ export async function startHttpServer(
         mcpServer = s.server;
         logger.debug(`reusing session: ${sessionId}`);
       } else if (isInitializeRequest(body)) {
-        mcpServer = await createMcpServer(config, logger);
+        mcpServer = await createMcpServer(settings, secrets, logger);
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
@@ -720,7 +777,7 @@ export async function startHttpServer(
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
-    httpServer.listen(config.port, config.host, () => resolve());
+    httpServer.listen(settings.gateway.port, settings.gateway.host, () => resolve());
   });
 
   // 空闲 session 清扫：只回收「没有活的 SSE 流」且空闲超过 TTL 的会话。
@@ -740,11 +797,11 @@ export async function startHttpServer(
   sweep.unref?.();
 
   const address = httpServer.address();
-  const port = typeof address === "object" && address ? address.port : config.port;
-  logger.info(`gateway listening on http://${config.host}:${port}/mcp`);
+  const port = typeof address === "object" && address ? address.port : settings.gateway.port;
+  logger.info(`gateway listening on http://${settings.gateway.host}:${port}/mcp`);
 
   return {
-    url: `http://${config.host}:${port}/mcp`,
+    url: `http://${settings.gateway.host}:${port}/mcp`,
     close: async () => {
       shutdown = true;
       clearInterval(sweep);

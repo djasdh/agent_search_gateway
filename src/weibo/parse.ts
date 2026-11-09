@@ -1,6 +1,6 @@
 /** 微博 URL 解析：普通页面/短链 → 抓取动作；sinaimg CDN → 图片附件。 */
 
-import type { GatewayConfig } from "../config.js";
+import type { WeiboSettings } from "../settings/index.js";
 import { WeiboError, type WeiboAction, type WeiboRef } from "./types.js";
 
 const SHORT_HOST = "t.cn";
@@ -110,10 +110,10 @@ interface UserPostsRange {
  *   - 都不给：最近 default_days 天
  * 统一按 Asia/Shanghai 计算，跨度不得超过 max_days。
  */
-function userPostsRange(url: URL, config: GatewayConfig): UserPostsRange {
+function userPostsRange(url: URL, weibo: WeiboSettings): UserPostsRange {
   const startRaw = dateOf(url, "start");
   const endRaw = dateOf(url, "end");
-  const maxDays = config.weiboUserPostsMaxDays;
+  const maxDays = weibo.user_posts.max_days;
 
   const daysRaw = url.searchParams.get("days");
   let days: number | undefined;
@@ -142,10 +142,10 @@ function userPostsRange(url: URL, config: GatewayConfig): UserPostsRange {
     end = today;
   } else if (endRaw) {
     end = endRaw;
-    start = addDays(end, -(config.weiboUserPostsDefaultDays - 1));
+    start = addDays(end, -(weibo.user_posts.default_days - 1));
   } else {
     end = today;
-    start = addDays(today, -(config.weiboUserPostsDefaultDays - 1));
+    start = addDays(today, -(weibo.user_posts.default_days - 1));
   }
 
   const span = daysBetween(start, end);
@@ -180,7 +180,7 @@ function dateOf(url: URL, key: string): string | undefined {
 }
 
 /** 解析 `?weibo=` 请求；URL 本身推不出动作时抛 WEIBO_INVALID。 */
-export function parseWeiboRequest(url: URL, config: GatewayConfig): WeiboRef {
+export function parseWeiboRequest(url: URL, weibo: WeiboSettings): WeiboRef {
   const base = baseRef(url);
   const rawAction = url.searchParams.get("weibo");
   const action: WeiboAction = rawAction ? validateAction(rawAction) : base?.action ?? "post";
@@ -192,7 +192,7 @@ export function parseWeiboRequest(url: URL, config: GatewayConfig): WeiboRef {
       throw new WeiboError("WEIBO_INVALID", "缺少微博 id", "使用 weibo.com/{uid}/{mblogid} 或 m.weibo.cn/detail/{id}");
     }
     if (action === "comments") {
-      ref.limit = limitOf(url, config.weibo.defaults.commentsLimit);
+      ref.limit = limitOf(url, weibo.defaults.comments_limit);
     }
   } else if (action === "user") {
     if (!ref.uid && !ref.screenName) {
@@ -202,17 +202,17 @@ export function parseWeiboRequest(url: URL, config: GatewayConfig): WeiboRef {
     if (!ref.uid && !ref.screenName) {
       throw new WeiboError("WEIBO_INVALID", "缺少用户 id/昵称", "使用 weibo.com/u/{uid}?weibo=user-posts");
     }
-    const range = userPostsRange(url, config);
+    const range = userPostsRange(url, weibo);
     // OpenCLI adapter 的 limit 上限固定为 100；每次抓取都按 100 调，再按 max_items 截断。
-    ref.limit = limitOf(url, config.weibo.defaults.userPostsLimit, 100);
+    ref.limit = limitOf(url, weibo.defaults.user_posts_limit, 100);
     ref.start = range.start;
     ref.end = range.end;
     ref.days = range.days;
     // `limit` 是旧参数：显式给 limit、又没给 max_items 时，沿用它作为返回上限。
-    const fallbackItems = url.searchParams.has("limit") ? ref.limit : config.weiboUserPostsMaxItems;
+    const fallbackItems = url.searchParams.has("limit") ? ref.limit : weibo.user_posts.max_items;
     ref.maxItems = Math.min(
       positiveInt(url, "max_items", fallbackItems),
-      config.weiboUserPostsMaxItems,
+      weibo.user_posts.max_items,
     );
     const include = url.searchParams.get("include_retweets");
     ref.includeRetweets = include === "1" || include === "true";

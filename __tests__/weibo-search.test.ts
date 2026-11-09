@@ -2,10 +2,11 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, type GatewayConfig } from "../src/config.js";
+import { loadSettings } from "../src/settings/index.js";
 import type { DomainFilter } from "../src/filter/domain-filter.js";
 import type { Logger } from "../src/logger.js";
 import { createSearchService } from "../src/search/service.js";
+import type { SearchSettingsDeps } from "../src/search/service.js";
 import {
   mapWeiboHotRows,
   mapWeiboSearchRows,
@@ -75,7 +76,7 @@ function writeCli(): string {
   return cli;
 }
 
-function makeConfig(cli: string, overrides: { searchWeibo?: boolean; weibo?: boolean } = {}): GatewayConfig {
+function makeConfig(cli: string, overrides: { searchWeibo?: boolean; weibo?: boolean } = {}): SearchSettingsDeps {
   const d = tmpDir();
   const path = join(d, "gateway.yaml");
   writeFileSync(
@@ -97,7 +98,14 @@ function makeConfig(cli: string, overrides: { searchWeibo?: boolean; weibo?: boo
       "",
     ].join("\n"),
   );
-  return loadConfig(path);
+  const { settings, secrets } = loadSettings({ configPath: path, secretsPath: join(d, "secrets.yaml"), env: {} });
+  return {
+    search: settings.search,
+    rerank: settings.rerank,
+    searxng: settings.searxng,
+    saucenao_api_key: secrets.search.reverse_image.saucenao.api_key,
+    weibo: settings.weibo,
+  };
 }
 
 afterEach(() => {

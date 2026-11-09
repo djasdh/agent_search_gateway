@@ -1,10 +1,12 @@
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import type { DomainFilter } from "../src/filter/domain-filter.js";
 import type { Logger } from "../src/logger.js";
 import { createSearchService, rotatingContributed } from "../src/search/service.js";
+import type { SearchSettingsDeps } from "../src/search/service.js";
+import type { Settings } from "../src/settings/index.js";
+import { deepMerge, makeSettings, searchServiceDeps, type DeepPartial } from "./helpers/settings.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -19,40 +21,17 @@ const domainFilter: DomainFilter = { enabled: false, blocked: new Set(), allowli
 // 记录每次 /search 收到的 engines 参数，用于断言引擎选择顺序
 let engineParams: string[] = [];
 
-function makeConfig(port: number, overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: `http://127.0.0.1:${port}`,
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: false,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 60000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    searchEngines: ["youcom", "exaapi", "tavily"],
-    searchFanoutDefault: 1,
-    rerankEnabled: false,
-    rerankEngineBoost: {},
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    ...overrides,
-  } as GatewayConfig;
+function makeConfig(port: number, overrides: DeepPartial<Settings> = {}): SearchSettingsDeps {
+  const base: DeepPartial<Settings> = {
+    searxng: { url: `http://127.0.0.1:${port}`, timeout_ms: 3000 },
+    search: {
+      cache_ttl_ms: 60000,
+      engines: { rotating: ["youcom", "exaapi", "tavily"], resident: [] },
+      fanout_default: 1,
+    },
+    rerank: { enabled: false, engine_boost: {} },
+  };
+  return searchServiceDeps(makeSettings(deepMerge(base, overrides)));
 }
 
 // mock searxng：youcom disabled；exaapi 返回空；tavily 返回一条结果 + unresponsive 噪声
@@ -131,7 +110,7 @@ describe("createSearchService 引擎选择 + 静默降级", () => {
 
   it("fanout 写入缓存键：fanout=1 与 fanout=2 不互相命中", async () => {
     engineParams = [];
-    const svc = createSearchService(makeConfig(mockPort, { searchCacheTtlMs: 60000 }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig(mockPort, { search: { cache_ttl_ms: 60000 } }), domainFilter, silentLogger);
     const r1 = await svc.search({ query: "cachekey", fanout: 1 });
     const r2 = await svc.search({ query: "cachekey", fanout: 2 });
     expect(r1.cacheHit).toBe(false);
@@ -141,8 +120,7 @@ describe("createSearchService 引擎选择 + 静默降级", () => {
   it("resident 有结果但 rotating 空 → 仍换下一个 rotating 候选", async () => {
     engineParams = [];
     const cfg = makeConfig(mockPort, {
-      searchEnginesResident: ["zhihu"],
-      searchEngines: ["exaapi", "tavily"],
+      search: { engines: { resident: ["zhihu"], rotating: ["exaapi", "tavily"] } },
     });
     const svc = createSearchService(cfg, domainFilter, silentLogger);
     const r = await svc.search({ query: "resident-masks-rotating" });
@@ -157,8 +135,7 @@ describe("createSearchService 引擎选择 + 静默降级", () => {
   it("resident 有结果但全部 rotating 候选都空 → 仍返回 resident 结果（不报错）", async () => {
     engineParams = [];
     const cfg = makeConfig(mockPort, {
-      searchEnginesResident: ["zhihu"],
-      searchEngines: ["exaapi"], // 无 tavily → rotating 永不贡献
+      search: { engines: { resident: ["zhihu"], rotating: ["exaapi"] } }, // 无 tavily → rotating 永不贡献
     });
     const svc = createSearchService(cfg, domainFilter, silentLogger);
     const r = await svc.search({ query: "resident-only" });

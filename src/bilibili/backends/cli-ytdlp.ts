@@ -1,8 +1,8 @@
 /** Bilibili 后端：yt-dlp CLI，提供详情与音频直链（`-g` 只打印 URL）。 */
-import type { GatewayConfig } from "../../config.js";
 import type { Logger } from "../../logger.js";
 import { runCli } from "../cli.js";
 import { cliFailure } from "../errors.js";
+import type { BilibiliSettings } from "../../settings/index.js";
 import { asArray, asRecord, asString, lastJsonObject, num, str, type Json } from "../json.js";
 import {
   BiliError, type BiliArticle, type BiliAudio, type BiliBackend, type BiliCapability,
@@ -54,8 +54,12 @@ function pagesOf(info: Json, ref: BiliRef, title: string): BiliPage[] {
   return [{ page: ref.page, title }];
 }
 
-export function createYtdlpBackend(config: GatewayConfig, logger?: Logger): BiliBackend {
-  const { command, cookiesFile, probeCommand, timeoutMs } = config.bilibili.cliYtdlp;
+export function createYtdlpBackend(
+  bilibili: BilibiliSettings,
+  _httpToken: string,
+  logger?: Logger,
+): BiliBackend {
+  const { command, cookies_file: cookiesFile, probe_command: probeCommand, timeout_ms: timeoutMs } = bilibili.cli_ytdlp;
   const baseArgs = () => (cookiesFile ? ["--cookies", cookiesFile] : []);
   const run = (args: string[]) => {
     logger?.debug(`bilibili cli-ytdlp: ${command} ${args.join(" ")}`);

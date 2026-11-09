@@ -2,9 +2,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GatewayConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
 import { closeGatewayRuntime, createServer } from "../src/server.js";
+import type { Settings } from "../src/settings/index.js";
+import { deepMerge, makeSecrets, makeSettings, type DeepPartial } from "./helpers/settings.js";
 
 /** 进程级运行时测试：adlist 目录用临时目录，避免污染仓库 data/。 */
 const DIR = mkdtempSync(join(tmpdir(), "gw-runtime-"));
@@ -19,46 +20,29 @@ const silentLogger: Logger = {
   close: () => {},
 } as Logger;
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: "http://127.0.0.1:1",
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: true,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: true,
-    adFilterLevel: "ads",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: HOSTS,
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: true,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    fetchDownloadDir: DIR,
-    fetchDownloadTtlMs: 604800000,
-    fetchDownloadMaxTotalBytes: 4294967296,
-    fetchFilesRoute: false,
-    ...overrides,
-  } as GatewayConfig;
+function makeConfig(overrides: DeepPartial<Settings> = {}): Settings {
+  const base: DeepPartial<Settings> = {
+    ad_filter: {
+      enabled: true,
+      level: "ads",
+      hosts_file: HOSTS,
+      auto_update: true,
+      auto_update_interval_ms: 86400000,
+    },
+    fetch: {
+      download_dir: DIR,
+      download_ttl_ms: 604800000,
+      download_max_total_bytes: 4294967296,
+      files_route: false,
+    },
+  };
+  return makeSettings(deepMerge(base, overrides));
 }
 
 describe("进程级运行时", () => {
   beforeAll(async () => {
     // 预热一次：adlist 调度器、fetch 产物清扫等一次性资源在此建立
-    await createServer(makeConfig(), silentLogger);
+    await createServer(makeConfig(), makeSecrets(), silentLogger);
   });
 
   afterAll(async () => {
@@ -71,8 +55,8 @@ describe("进程级运行时", () => {
     const intBefore = process.listenerCount("SIGINT");
     const intervalSpy = vi.spyOn(globalThis, "setInterval");
 
-    await createServer(makeConfig(), silentLogger);
-    await createServer(makeConfig(), silentLogger);
+    await createServer(makeConfig(), makeSecrets(), silentLogger);
+    await createServer(makeConfig(), makeSecrets(), silentLogger);
 
     expect(intervalSpy).not.toHaveBeenCalled();
     intervalSpy.mockRestore();

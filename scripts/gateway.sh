@@ -88,6 +88,11 @@ gateway_start() {
     cp "$DIR/gateway.yaml.example" "$GATEWAY_YAML"
     log "已从 gateway.yaml.example 创建 gateway.yaml"
   fi
+  if [ ! -f "$DIR/secrets.yaml" ]; then
+    cp "$DIR/secrets.yaml.example" "$DIR/secrets.yaml"
+    chmod 600 "$DIR/secrets.yaml" 2>/dev/null || true
+    log "已从 secrets.yaml.example 创建 secrets.yaml（请填入密钥）"
+  fi
   # 开发模式用 tsx；生产可先 npm run build 后 node dist/index.js
   if [ -x "$DIR/node_modules/.bin/tsx" ]; then
     nohup "$DIR/node_modules/.bin/tsx" src/index.ts >> "$LOG" 2>&1 < /dev/null &

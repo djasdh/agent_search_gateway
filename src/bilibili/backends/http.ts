@@ -1,8 +1,8 @@
-import type { GatewayConfig } from "../../config.js";
 import type { Logger } from "../../logger.js";
 import { httpFailure } from "../errors.js";
 import { asArray, asRecord, asString, num, numRecord, pick, str } from "../json.js";
 import { ManagedProcess } from "../process.js";
+import type { BilibiliSettings } from "../../settings/index.js";
 import {
   BiliError, type BiliArticle, type BiliAudio, type BiliBackend, type BiliCapability,
   type BiliComment, type BiliCommentPage, type BiliDetail, type BiliPage, type BiliProbe,
@@ -122,14 +122,14 @@ class HttpBackend implements BiliBackend {
   private ready = false;
   private readying: Promise<void> | null = null;
 
-  constructor(config: GatewayConfig, logger?: Logger) {
-    const http = config.bilibili.http;
-    this.baseUrl = http.baseUrl;
-    this.token = http.token;
-    this.timeoutMs = http.requestTimeoutMs;
-    this.startupTimeoutMs = http.startupTimeoutMs;
+  constructor(bilibili: BilibiliSettings, httpToken: string, logger?: Logger) {
+    const http = bilibili.http;
+    this.baseUrl = http.base_url;
+    this.token = httpToken;
+    this.timeoutMs = http.request_timeout_ms;
+    this.startupTimeoutMs = http.startup_timeout_ms;
     this.managed = http.command.length > 0
-      ? new ManagedProcess({ command: http.command, env: http.token ? { BILI_HTTP_TOKEN: http.token } : undefined, logger })
+      ? new ManagedProcess({ command: http.command, env: httpToken ? { BILI_HTTP_TOKEN: httpToken } : undefined, logger })
       : undefined;
   }
 
@@ -212,6 +212,10 @@ class HttpBackend implements BiliBackend {
   }
 }
 
-export function createHttpBackend(config: GatewayConfig, logger?: Logger): BiliBackend & { dispose(): Promise<void> } {
-  return new HttpBackend(config, logger);
+export function createHttpBackend(
+  bilibili: BilibiliSettings,
+  httpToken: string,
+  logger?: Logger,
+): BiliBackend & { dispose(): Promise<void> } {
+  return new HttpBackend(bilibili, httpToken, logger);
 }

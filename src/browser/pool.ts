@@ -1,10 +1,15 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { isPrivateHost } from "../fetch/ssrf.js";
 import { mcpSessionContext } from "../utils/session-context.js";
+import type { BrowserSettings, SsrfSettings } from "../settings/index.js";
 
-export class BrowserPoolError extends Error {}
+/** 浏览器池所需设置切片 + 代理密码（来自 secrets）。 */
+export interface BrowserPoolSettings {
+  browser: BrowserSettings;
+  ssrf: SsrfSettings;
+  proxy_password: string;
+}export class BrowserPoolError extends Error {}
 
 export interface BrowserSession {
   page: Page;
@@ -66,10 +71,10 @@ export class BrowserPool {
   private static readonly SSRF_CACHE_MAX = 500;
 
   constructor(
-    private config: GatewayConfig,
+    private deps: BrowserPoolSettings,
     private logger: Logger,
   ) {
-    this.sem = new Semaphore(config.browserMaxConcurrent);
+    this.sem = new Semaphore(deps.browser.max_concurrent);
   }
 
   /**
@@ -77,7 +82,7 @@ export class BrowserPool {
    * 非 http(s) 或解析为内网 IP 的一律 abort。
    */
   private async setupSsrfGuard(ctx: BrowserContext): Promise<void> {
-    if (!this.config.fetchBlockPrivateIps) return;
+    if (!this.deps.ssrf.block_private_ips) return;
     await ctx.route("**/*", async (route) => {
       const url = route.request().url();
       if (!/^https?:/i.test(url)) {
@@ -98,7 +103,7 @@ export class BrowserPool {
       } else {
         try {
           blocked = await isPrivateHost(host, {
-            exemptCidrs: this.config.fetchPrivateIpExemptCidrs,
+            exemptCidrs: this.deps.ssrf.private_ip_exempt_cidrs,
           });
         } catch {
           blocked = false;
@@ -116,12 +121,12 @@ export class BrowserPool {
   }
 
   get enabled(): boolean {
-    return this.config.browserEnabled;
+    return this.deps.browser.enabled;
   }
 
   private launchOptions(): Parameters<typeof chromium.launch>[0] {
     const opts: Parameters<typeof chromium.launch>[0] = {
-      headless: this.config.browserHeadless,
+      headless: this.deps.browser.headless,
       args: [
         "--no-zygote",
         "--disable-gpu",
@@ -132,11 +137,11 @@ export class BrowserPool {
         "--mute-audio",
       ],
     };
-    if (this.config.browserProxyServer) {
+    if (this.deps.browser.proxy_server) {
       opts.proxy = {
-        server: this.config.browserProxyServer,
-        username: this.config.browserProxyUsername || undefined,
-        password: this.config.browserProxyPassword || undefined,
+        server: this.deps.browser.proxy_server,
+        username: this.deps.browser.proxy_username || undefined,
+        password: this.deps.proxy_password || undefined,
       };
     }
     return opts;
@@ -145,7 +150,7 @@ export class BrowserPool {
   private async ensureBrowser(): Promise<Browser> {
     if (this.closed) throw new BrowserPoolError("浏览器池已关闭");
     if (this.browsers.length > 0) return this.browsers[0];
-    if (this.config.browserEngine === "camoufox") {
+    if (this.deps.browser.engine === "camoufox") {
       throw new BrowserPoolError("camoufox 引擎尚未接入（预留）。当前请使用 chromium。");
     }
     this.logger.debug("启动 playwright chromium...");
@@ -164,13 +169,13 @@ export class BrowserPool {
     if (this.ttlTimer) clearTimeout(this.ttlTimer);
     this.ttlTimer = setTimeout(() => {
       void this.closeIdle();
-    }, this.config.browserIdleTtlMs);
+    }, this.deps.browser.idle_ttl_ms);
     this.ttlTimer.unref?.();
   }
 
   private async closeIdle(): Promise<void> {
     if (this.closed || this.browsers.length === 0) return;
-    const idle = Date.now() - this.lastActiveAt >= this.config.browserIdleTtlMs;
+    const idle = Date.now() - this.lastActiveAt >= this.deps.browser.idle_ttl_ms;
     if (!idle) {
       this.resetTtl();
       return;

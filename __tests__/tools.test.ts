@@ -3,9 +3,10 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BrowserPool } from "../src/browser/pool.js";
 import { BrowserTools } from "../src/browser/tools.js";
-import type { GatewayConfig } from "../src/config.js";
 import type { Logger } from "../src/logger.js";
 import { mcpSessionContext } from "../src/utils/session-context.js";
+import type { Settings } from "../src/settings/index.js";
+import { browserPoolDeps, browserToolDeps, deepMerge, makeSettings, type DeepPartial } from "./helpers/settings.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -15,63 +16,12 @@ const silentLogger: Logger = {
   close: () => {},
 } as Logger;
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: "http://127.0.0.1:1",
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: true,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    fetchTimeoutMs: 3000,
-    fetchMaxBytes: 65536,
-    fetchUserAgent: "",
-    fetchBlockPrivateIps: false,
-    fetchStructural: "clean",
-    fetchMaxOutputChars: 20000,
-    fetchCacheTtlMs: 600000,
-    fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 1073741824,
-    fetchDownloadDir: "data/downloads",
-    fetchDownloadTtlMs: 604800000,
-    fetchDownloadMaxTotalBytes: 4294967296,
-    fetchFilesRoute: true,
-    browserEnabled: true,
-    browserHeadless: true,
-    browserPoolSize: 1,
-    browserIdleTtlMs: 360000,
-    browserTimeoutMs: 15000,
-    browserMaxConcurrent: 2,
-    browserEngine: "chromium",
-    browserProxyServer: "",
-    browserProxyUsername: "",
-    browserProxyPassword: "",
-    browserWaitForSelector: "",
-    browserScreenshotEnabled: true,
-    browserScreenshotMaxSize: 512,
-    browserScreenshotImageType: "jpeg",
-    ...overrides,
+function makeConfig(overrides: DeepPartial<Settings> = {}): Settings {
+  const base: DeepPartial<Settings> = {
+    fetch: { block_private_ips: false },
+    browser: { timeout_ms: 15000 },
   };
+  return makeSettings(deepMerge(base, overrides));
 }
 
 let server: ReturnType<typeof createHttpServer>;
@@ -108,8 +58,8 @@ describe("BrowserTools（真实 playwright）", () => {
 
   beforeAll(() => {
     const cfg = makeConfig();
-    pool = new BrowserPool(cfg, silentLogger);
-    tools = new BrowserTools(pool, cfg, silentLogger);
+    pool = new BrowserPool(browserPoolDeps(cfg), silentLogger);
+    tools = new BrowserTools(pool, browserToolDeps(cfg), silentLogger);
   });
 
   afterAll(async () => {

@@ -9,6 +9,7 @@ data
 .env
 *.log
 gateway.yaml
+secrets.yaml
 .tmp
 eval
 scripts

@@ -1,8 +1,10 @@
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import { createFetchService } from "../src/fetch/service.js";
+import type { FetchServiceDeps } from "../src/fetch/service.js";
+import { deepMerge, fetchServiceDeps, makeSettings, type DeepPartial } from "./helpers/settings.js";
+import type { Settings } from "../src/settings/index.js";
 import type { Logger } from "../src/logger.js";
 
 const silentLogger: Logger = {
@@ -13,63 +15,11 @@ const silentLogger: Logger = {
   close: () => {},
 } as Logger;
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: "http://127.0.0.1:1",
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: true,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    fetchTimeoutMs: 3000,
-    fetchMaxBytes: 65536,
-    fetchUserAgent: "",
-    fetchBlockPrivateIps: false,
-    fetchStructural: "clean",
-    fetchMaxOutputChars: 20000,
-    fetchCacheTtlMs: 600000,
-    fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 1073741824,
-    fetchDownloadDir: "data/downloads",
-    fetchDownloadTtlMs: 604800000,
-    fetchDownloadMaxTotalBytes: 4294967296,
-    fetchFilesRoute: true,
-    browserEnabled: true,
-    browserHeadless: true,
-    browserPoolSize: 1,
-    browserIdleTtlMs: 360000,
-    browserTimeoutMs: 30000,
-    browserMaxConcurrent: 2,
-    browserEngine: "chromium",
-    browserProxyServer: "",
-    browserProxyUsername: "",
-    browserProxyPassword: "",
-    browserWaitForSelector: "",
-    browserScreenshotEnabled: true,
-    browserScreenshotMaxSize: 512,
-    browserScreenshotImageType: "jpeg",
-    ...overrides,
+function makeConfig(overrides: DeepPartial<Settings> = {}): FetchServiceDeps {
+  const base: DeepPartial<Settings> = {
+    fetch: { timeout_ms: 3000, max_bytes: 65536, block_private_ips: false },
   };
+  return fetchServiceDeps(makeSettings(deepMerge(base, overrides)));
 }
 
 // ---- mock 目标站（direct 路径） ----
@@ -140,7 +90,7 @@ describe("createFetchService 路由", () => {
   });
 
   it("403 → 升级 FlareSolverr → 返回渲染 md", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: fsBase });
+    const cfg = makeConfig({ flaresolverr: { url: fsBase } });
     const svc = createFetchService(cfg, silentLogger);
     const before = fsCalled;
     const r = await svc.fetch({ url: `${targetBase}/blocked403` });
@@ -153,7 +103,7 @@ describe("createFetchService 路由", () => {
   });
 
   it("空壳 JS → 升级 FlareSolverr", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: fsBase });
+    const cfg = makeConfig({ flaresolverr: { url: fsBase } });
     const svc = createFetchService(cfg, silentLogger);
     const before = fsCalled;
     const r = await svc.fetch({ url: `${targetBase}/shell` });
@@ -162,7 +112,7 @@ describe("createFetchService 路由", () => {
   });
 
   it("404 → 不升级，返回 direct 错误", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: fsBase });
+    const cfg = makeConfig({ flaresolverr: { url: fsBase } });
     const svc = createFetchService(cfg, silentLogger);
     const before = fsCalled;
     const r = await svc.fetch({ url: `${targetBase}/missing404` });
@@ -172,7 +122,7 @@ describe("createFetchService 路由", () => {
   });
 
   it("flaresolverr.enabled=false → 403 不升级，返回 direct 错误", async () => {
-    const cfg = makeConfig({ flaresolverrUrl: fsBase, flaresolverrEnabled: false });
+    const cfg = makeConfig({ flaresolverr: { url: fsBase, enabled: false } });
     const svc = createFetchService(cfg, silentLogger);
     const before = fsCalled;
     const r = await svc.fetch({ url: `${targetBase}/blocked403` });
@@ -182,7 +132,7 @@ describe("createFetchService 路由", () => {
 
   it("FlareSolverr 失败 → 返回渲染失败错误", async () => {
     // FlareSolverr 指向不可达地址
-    const cfg = makeConfig({ flaresolverrUrl: "http://127.0.0.1:1" });
+    const cfg = makeConfig({ flaresolverr: { url: "http://127.0.0.1:1" } });
     const svc = createFetchService(cfg, silentLogger);
     const r = await svc.fetch({ url: `${targetBase}/blocked403` });
     expect(r.ok).toBe(false);

@@ -234,6 +234,7 @@ cd agent_search_gateway
 npm ci                             # 有 package-lock.json，用 ci 可复现
 npx playwright install chromium    # 首次安装浏览器
 cp gateway.yaml.example gateway.yaml
+cp secrets.yaml.example secrets.yaml && chmod 600 secrets.yaml   # 填密钥（可留空）
 ./scripts/gateway.sh start           # 启动三件套（searxng/flaresolverr/gateway）
 ./scripts/gateway.sh status
 ```
@@ -252,7 +253,7 @@ npm test               # vitest
 
 ```bash
 cd docker
-cp .env.example .env       # 填入 EXA / TAVILY / ZHIHU / EMBEDDING 等密钥
+cp .env.example .env       # 填入 EXA / TAVILY / ZHIHU / EMBEDDING / GATEWAY 等密钥
 docker compose up -d        # 本地构建；或改用下方已推送的 ghcr 镜像
 docker compose ps
 ```
@@ -274,7 +275,7 @@ GATEWAY_BIND=0.0.0.0 GATEWAY_TOKEN=<strong-token> docker compose up -d
 
 约定：
 
-- **密钥只经 `.env` → 环境变量注入，不进镜像**。searxng 的 `settings.yml` 由容器启动时从 `docker/searxng/settings.template.yml` 渲染。
+- **密钥只经 `.env` → 环境变量注入，不进镜像**。searxng 的 `settings.yml` 由容器启动时从 `docker/searxng/settings.template.yml` 渲染。也可改用 `secrets.yaml`（取消 `docker/compose.yaml` 里的注释挂载，并 `chmod 600`）。
 - **配额台账共享**：`quota` 卷同时挂进 searxng 与 gateway（同一路径 `/quota/quota.json`）。
 - 语料库 + 广告过滤缓存在 `corpus` 卷（容器内 `/data`）。
 - **fetch 产物**（图片/PDF 等非文本文件）落在 `corpus` 卷的 `/data/downloads`（`docker/gateway.docker.yaml` 已指向该路径），容器重建不丢。
@@ -313,7 +314,7 @@ docker compose up -d     # 重建容器；quota / corpus 卷保留
 }
 ```
 
-### 带 token（gateway.yaml 的 gateway.token，或 env GATEWAY_TOKEN）
+### 带 token（secrets.yaml 的 gateway.token，或 env GATEWAY_TOKEN）
 
 ```json
 {
@@ -329,12 +330,20 @@ docker compose up -d     # 重建容器；quota / corpus 卷保留
 
 > 注：不同 MCP 客户端配置字段略有差异（`type`/`headers` 等），按客户端规范调整。
 
-## 配置（gateway.yaml）
+## 配置（gateway.yaml + secrets.yaml）
 
-完整示例见 `gateway.yaml.example`。关键项：
+设置与密钥**分开存放**，两者默认同目录（可用 `GATEWAY_CONFIG_FILE` / `GATEWAY_SECRETS_FILE` 覆盖路径）：
+
+- `gateway.yaml`：非敏感设置。完整示例见 `gateway.yaml.example`，**不接受任何密钥字段**。
+- `secrets.yaml`：只放密钥。模板见 `secrets.yaml.example`，建议 `chmod 600`。
+- 环境变量（`GATEWAY_TOKEN` / `EMBEDDING_API_KEY` / `SAUCENAO_API_KEY` / `BILIBILI_HTTP_TOKEN` / `BROWSER_PROXY_PASSWORD`）优先级最高。
+
+内部实现上，每个组件只接收自己那段设置（如 `search` / `fetch` / `browser`）和需要的密钥，不再拿全量配置。配置在启动时加载一次，修改后需重启。
+
+关键项：
 
 ```yaml
-gateway:        # host/port/token
+gateway:        # host/port（token 在 secrets.yaml）
 logging:        # level/file
 searxng:        # url/timeout_ms
 flaresolverr:   # url/enabled/timeout_ms/max_concurrent/trigger_status/fallback_on_empty
@@ -342,7 +351,7 @@ search:         # max_results/max_results_cap/max_result_chars/cache_ttl_ms/cach
 fetch:          # timeout_ms/max_bytes/user_agent/block_private_ips/structural/max_output_chars/cache_ttl_ms/cache_max_entries/max_download_bytes/download_dir/download_ttl_ms/download_max_total_bytes/files_route
 ad_filter:      # enabled/level(off|ads|ads+tracking|full)/extra_domains/hosts_file/allowlist
 browser:        # enabled/headless/pool_size/idle_ttl_ms/engine(chromium|camoufox预留)/proxy_*/wait_for_selector/screenshot
-embedding:      # enabled/provider(openai|ollama)/base_url/api_key/model/dim/timeout_ms/batch_size/max_input_chars/query_prefix/passage_prefix
+embedding:      # enabled/provider(openai|ollama)/base_url/model/dim/timeout_ms/batch_size/max_input_chars/query_prefix/passage_prefix
 corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 ```
 
@@ -396,7 +405,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 |---|---|---|---|
 | searxng 的 `tineye` | searxng 引擎（上游自带） | 任意图片的"网络出现处"（近似重复匹配） | 需在 searxng 的 `settings.yml` 里给 tineye 声明 `categories: [search_by_image]`（见 `searxng-ext/settings.example.yml` / `docker/searxng/settings.template.yml`）；网关不点名引擎 |
 | `tracemoe` | 网关侧附加源 | 动画截图 → 动画出处（AniList 标题/集数/时间点） | 免费、按 IP 100 次/日 |
-| `saucenao` | 网关侧附加源 | **插画 / 同人图出处**（Pixiv / Danbooru / Twitter…） | 免费 key（实测免费账号 100 次/天、4 次/30 秒）；**需在配置里填 `api_key` 才启用** |
+| `saucenao` | 网关侧附加源 | **插画 / 同人图出处**（Pixiv / Danbooru / Twitter…） | 免费 key（实测免费账号 100 次/天、4 次/30 秒）；**需在 `secrets.yaml` 填 `search.reverse_image.saucenao.api_key` 才启用** |
 | `baidu` | 网关侧附加源 | **中文 / 国内图**（完全相同图 + 相似图） | 免费（抓网页、无 key、有风控） |
 
 ```jsonc
@@ -412,7 +421,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 失败不致命：**单个源**失败/超时/无匹配都不影响其它源，只在结果末尾各附一条提示（`反向图搜：…`）。
 - **本地图直传**：`tracemoe` / `saucenao` / `baidu` 都以 multipart 直传图片字节，**不经图床**；只有 `tineye` 需要公网 URL（见下）。
 - **部署检查**：searxng 若没声明该类别，请求会被静默过滤、回落成 `general` 搜索（不报错）。验证：`curl -s localhost:8888/config | grep search_by_image`。
-- 相关配置在 `gateway.yaml` 的 `search.reverse_image`（开关 / 触发类别 / `sources` 清单 / 各源地址与超时 / SauceNAO 的 `api_key`）。
+- 非敏感配置在 `gateway.yaml` 的 `search.reverse_image`（开关 / 触发类别 / `sources` 清单 / 各源地址与超时）；SauceNAO 的 `api_key` 在 `secrets.yaml`。
 
 #### 本地图片（`image_path`）
 

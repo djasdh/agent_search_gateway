@@ -1,11 +1,11 @@
 /** 按能力把请求路由到后端：顺序尝试、聚合失败原因、登录态 60s 缓存。 */
 
-import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { createHttpBackend, HTTP_ID } from "./backends/http.js";
 import { createKukemcBackend, KUKEMC_ID } from "./backends/cli-kukemc.js";
 import { createYtdlpBackend, YTDLP_ID } from "./backends/cli-ytdlp.js";
 import { BiliError } from "./types.js";
+import type { BilibiliSettings } from "../settings/index.js";
 import type {
   BiliArticle, BiliAttempt, BiliAudio, BiliBackend, BiliCapability, BiliCommentPage,
   BiliDetail, BiliProbe, BiliRef,
@@ -20,12 +20,12 @@ export interface BiliRouter {
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-export function createRouter(config: GatewayConfig, logger?: Logger): BiliRouter {
+export function createRouter(bilibili: BilibiliSettings, httpToken: string, logger?: Logger): BiliRouter {
   const factories = {
     [KUKEMC_ID]: createKukemcBackend,
     [YTDLP_ID]: createYtdlpBackend,
     [HTTP_ID]: createHttpBackend,
-  } as Record<string, (c: GatewayConfig, l?: Logger) => BiliBackend>;
+  } as Record<string, (b: BilibiliSettings, token: string, l?: Logger) => BiliBackend>;
   const backends = new Map<string, BiliBackend>();
   const probes = new Map<string, { at: number; probe: BiliProbe }>();
 
@@ -34,14 +34,14 @@ export function createRouter(config: GatewayConfig, logger?: Logger): BiliRouter
     if (cached) return cached;
     const factory = factories[id];
     if (!factory) return undefined;
-    const created = factory(config, logger);
+    const created = factory(bilibili, httpToken, logger);
     backends.set(id, created);
     return created;
   }
 
   async function probe(b: BiliBackend, ref: BiliRef): Promise<BiliProbe> {
     const hit = probes.get(b.id);
-    if (hit && Date.now() - hit.at < config.bilibili.authProbeTtlMs) return hit.probe;
+    if (hit && Date.now() - hit.at < bilibili.auth_probe_ttl_ms) return hit.probe;
     const result = await b.probe(ref);
     probes.set(b.id, { at: Date.now(), probe: result });
     return result;
@@ -55,7 +55,7 @@ export function createRouter(config: GatewayConfig, logger?: Logger): BiliRouter
   ): Promise<{ value: T; attempts: BiliAttempt[] }> {
     const attempts: BiliAttempt[] = [];
     const candidates: BiliBackend[] = [];
-    for (const id of config.bilibili.routes[cap]) {
+    for (const id of bilibili.routes[cap]) {
       const b = backend(id);
       if (!b) {
         attempts.push({ backend: id, ok: false, code: "BILI_UNAVAILABLE", error: `未知后端 id：${id}` });

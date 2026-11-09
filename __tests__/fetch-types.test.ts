@@ -4,9 +4,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import { formatBytes } from "../src/fetch/convert.js";
 import { createFetchService } from "../src/fetch/service.js";
+import type { FetchServiceDeps } from "../src/fetch/service.js";
+import { deepMerge, fetchServiceDeps, makeSettings, type DeepPartial } from "./helpers/settings.js";
+import type { Settings } from "../src/settings/index.js";
 import { FetchStore } from "../src/fetch/store.js";
 import type { Logger } from "../src/logger.js";
 import { makeMinimalPdf } from "./helpers/pdf-fixture.js";
@@ -19,50 +21,18 @@ const silentLogger: Logger = {
   close: () => {},
 } as Logger;
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 3210,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: "http://127.0.0.1:1",
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: false,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    fetchTimeoutMs: 3000,
-    fetchMaxBytes: 5 * 1024 * 1024,
-    fetchUserAgent: "",
-    fetchBlockPrivateIps: false,
-    fetchPrivateIpExemptCidrs: [],
-    fetchStructural: "clean",
-    fetchMaxOutputChars: 20000,
-    fetchCacheTtlMs: 600000,
-    fetchCacheMaxEntries: 200,
-    fetchMaxDownloadBytes: 1024 * 1024,
-    fetchDownloadDir: "data/downloads",
-    fetchDownloadTtlMs: 604800000,
-    fetchDownloadMaxTotalBytes: 4294967296,
-    fetchFilesRoute: true,
-    ...overrides,
-  } as GatewayConfig;
+function makeConfig(overrides: DeepPartial<Settings> = {}): FetchServiceDeps {
+  const base: DeepPartial<Settings> = {
+    fetch: {
+      timeout_ms: 3000,
+      max_bytes: 5 * 1024 * 1024,
+      max_download_bytes: 1024 * 1024,
+      block_private_ips: false,
+      private_ip_exempt_cidrs: [],
+    },
+    flaresolverr: { enabled: false },
+  };
+  return fetchServiceDeps(makeSettings(deepMerge(base, overrides)));
 }
 
 let server: ReturnType<typeof createHttpServer>;
@@ -192,7 +162,7 @@ describe("fetch 全类型分派", () => {
   });
 
   it("二进制超 max_download_bytes 报 FETCH_TOO_LARGE", async () => {
-    const svc = createFetchService(makeConfig({ fetchMaxDownloadBytes: 1024 }), silentLogger, undefined, tmpStore());
+    const svc = createFetchService(makeConfig({ fetch: { max_download_bytes: 1024 } }), silentLogger, undefined, tmpStore());
     const r = await svc.fetch({ url: `${base}/big` });
     expect(r.ok).toBe(false);
     expect(r.code).toBe("FETCH_TOO_LARGE");

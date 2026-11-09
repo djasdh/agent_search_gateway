@@ -1,8 +1,13 @@
-import type { Page } from "playwright";
-import type { GatewayConfig } from "../config.js";
 import type { BrowserPool } from "./pool.js";
 import type { Logger } from "../logger.js";
 import { assertPublicHttpUrl } from "../fetch/ssrf.js";
+import type { BrowserSettings, SsrfSettings } from "../settings/index.js";
+
+/** fetch 路由③ 渲染所需的设置切片。 */
+export interface RenderSettings {
+  browser: BrowserSettings;
+  ssrf: SsrfSettings;
+}
 
 export interface RenderResult {
   ok: boolean;
@@ -19,7 +24,7 @@ export interface RenderResult {
  */
 export async function renderWithPlaywright(
   pool: BrowserPool,
-  config: GatewayConfig,
+  deps: RenderSettings,
   logger: Logger,
   url: string,
 ): Promise<RenderResult> {
@@ -28,8 +33,8 @@ export async function renderWithPlaywright(
   }
   // SSRF：浏览器渲染会自行解析并访问 URL（含重定向），导航前校验
   const check = await assertPublicHttpUrl(url, {
-    exemptCidrs: config.fetchPrivateIpExemptCidrs,
-    enabled: config.fetchBlockPrivateIps,
+    exemptCidrs: deps.ssrf.private_ip_exempt_cidrs,
+    enabled: deps.ssrf.block_private_ips,
   });
   if (!check.ok) {
     return {
@@ -40,12 +45,12 @@ export async function renderWithPlaywright(
   }
   try {
     const { page } = await pool.acquireSession();
-    await page.goto(url, { waitUntil: "networkidle", timeout: config.browserTimeoutMs });
+    await page.goto(url, { waitUntil: "networkidle", timeout: deps.browser.timeout_ms });
 
-    const sel = config.browserWaitForSelector;
+    const sel = deps.browser.wait_for_selector;
     if (sel && sel.trim().length > 0) {
       try {
-        await page.waitForSelector(sel.trim(), { timeout: config.browserTimeoutMs });
+        await page.waitForSelector(sel.trim(), { timeout: deps.browser.timeout_ms });
       } catch {
         logger.debug(`wait_for_selector 超时: ${sel}`);
       }

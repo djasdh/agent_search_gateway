@@ -1,10 +1,10 @@
-import { loadConfig } from "./config.js";
 import { Logger } from "./logger.js";
 import { closeGatewayRuntime, createServer, startHttpServer } from "./server.js";
+import { loadSettings } from "./settings/index.js";
 
-function loadConfigOrExit() {
+function loadSettingsOrExit() {
   try {
-    return loadConfig();
+    return loadSettings();
   } catch (err) {
     console.error(`[gateway] ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
@@ -12,13 +12,18 @@ function loadConfigOrExit() {
 }
 
 async function main(): Promise<void> {
-  const config = loadConfigOrExit();
+  const { settings, secrets, warnings } = loadSettingsOrExit();
 
-  const logger = new Logger(config.logLevel, config.logFile);
-  logger.info(`config loaded: host=${config.host} port=${config.port} searxng=${config.searxngUrl} flaresolverr=${config.flaresolverrUrl} token=${config.token ? "set" : "none"}`);
+  const logger = new Logger(settings.logging.level, settings.logging.file);
+  for (const warning of warnings) logger.warn(warning);
+  logger.info(
+    `config loaded: host=${settings.gateway.host} port=${settings.gateway.port} ` +
+      `searxng=${settings.searxng.url} flaresolverr=${settings.flaresolverr.url} ` +
+      `token=${secrets.gateway.token ? "set" : "none"}`,
+  );
 
   try {
-    const http = await startHttpServer({ config, logger }, createServer);
+    const http = await startHttpServer({ settings, secrets, logger }, createServer);
 
     const shutdown = async (signal: string) => {
       logger.info(`received ${signal}, shutting down...`);

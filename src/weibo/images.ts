@@ -1,6 +1,6 @@
 /** 微博图片 CDN 下载：带 Referer，wx 前缀失败时回退 tvax。 */
 
-import type { GatewayConfig } from "../config.js";
+import type { WeiboSettings } from "../settings/index.js";
 import type { Logger } from "../logger.js";
 import { WeiboError } from "./types.js";
 
@@ -24,25 +24,26 @@ function tvaxOf(url: URL): URL | undefined {
 
 async function fetchOnce(
   url: URL,
-  config: GatewayConfig,
+  weibo: WeiboSettings,
+  userAgent: string,
   logger?: Logger,
 ): Promise<ImageDownloadResult> {
-  const max = config.weibo.images.maxBytes;
+  const max = weibo.images.max_bytes;
   let res: Response;
   try {
     res = await fetch(url, {
       redirect: "follow",
-      signal: AbortSignal.timeout(config.weibo.images.timeoutMs),
+      signal: AbortSignal.timeout(weibo.images.timeout_ms),
       headers: {
-        referer: config.weibo.images.referer,
-        "user-agent": config.fetchUserAgent || DEFAULT_UA,
+        referer: weibo.images.referer,
+        "user-agent": userAgent || DEFAULT_UA,
         accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
       },
     });
   } catch (err) {
     const name = (err as Error)?.name;
     if (name === "TimeoutError" || name === "AbortError") {
-      throw new WeiboError("WEIBO_IMAGE_FAIL", `微博图片下载超时（>${config.weibo.images.timeoutMs}ms）`);
+      throw new WeiboError("WEIBO_IMAGE_FAIL", `微博图片下载超时（>${weibo.images.timeout_ms}ms）`);
     }
     throw new WeiboError(
       "WEIBO_IMAGE_FAIL",
@@ -86,15 +87,16 @@ async function fetchOnce(
 
 export async function downloadWeiboImage(
   url: URL,
-  config: GatewayConfig,
+  weibo: WeiboSettings,
+  userAgent = "",
   logger?: Logger,
 ): Promise<ImageDownloadResult> {
   try {
-    return await fetchOnce(url, config, logger);
+    return await fetchOnce(url, weibo, userAgent, logger);
   } catch (err) {
-    const fallback = config.weibo.images.retryTvax ? tvaxOf(url) : undefined;
+    const fallback = weibo.images.retry_tvax ? tvaxOf(url) : undefined;
     if (!fallback) throw err;
     logger?.debug(`weibo image: retry via ${fallback.hostname}`);
-    return await fetchOnce(fallback, config, logger);
+    return await fetchOnce(fallback, weibo, userAgent, logger);
   }
 }

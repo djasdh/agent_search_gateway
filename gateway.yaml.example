@@ -1,13 +1,10 @@
-# agent_search_gateway 网关配置（整体 yaml）
-# 复制为 gateway.yaml 使用。token 建议用环境变量 GATEWAY_TOKEN 注入，避免写文件。
+# agent_search_gateway 网关配置（非敏感设置）
+# 复制为 gateway.yaml 使用；密钥请单独写入 secrets.yaml（模板见 secrets.yaml.example）。
+# 这里出现任何密钥字段都会在启动时被拒绝。
 
 gateway:
   host: 127.0.0.1
   port: 3000
-  # token 请勿写在此文件（会提交到仓库）。用环境变量 GATEWAY_TOKEN 注入：
-  #   export GATEWAY_TOKEN=your-secret
-  # 留空 = 不认证；设置了 env GATEWAY_TOKEN 会优先于此处。
-  token: ""
 
 logging:
   level: info          # debug | info | warn | error
@@ -35,7 +32,6 @@ search:
   max_concurrent: 2       # 搜索并发信号量
   # 引擎分档：
   #   resident 每次查询都叠加（额度接近耗尽才移出）；rotating 按 fanout 轮换、失败静默换下一家。
-  #   （也兼容旧写法：engines: [a, b, c] 平铺数组 == 全部轮换、resident 为空。）
   engines:
     resident: [zhihu, "zhihu web", bilibili]
     rotating: [exaapi, tavily, firecrawl]
@@ -74,9 +70,9 @@ search:
       enabled: true
       endpoint: https://uguu.se/upload?output=json   # 也可指向自建 pomf/uguu 实例
       timeout_ms: 20000
-    # SauceNAO：插画/同人图出处。api_key 为空 = 该源不启用（免费注册；实测免费账号 100 次/天、4 次/30 秒）
+    # SauceNAO：插画/同人图出处。api_key 写在 secrets.yaml（为空 = 该源不启用；
+    # 免费注册；实测免费账号 100 次/天、4 次/30 秒）
     saucenao:
-      api_key: ""
       url: https://saucenao.com
       timeout_ms: 15000
       max_results: 8
@@ -195,7 +191,7 @@ bilibili:
     timeout_ms: 30000
   http:
     base_url: http://127.0.0.1:8010
-    token: ""                         # 与后端约定的 Bearer；只走环境变量注入更好
+    # 与后端约定的 Bearer 写在 secrets.yaml 的 bilibili.http.token
     command: []                       # 非空时由插件拉起/回收；指向用户自行安装的 http 后端
     startup_timeout_ms: 10000
     request_timeout_ms: 15000
@@ -245,8 +241,7 @@ browser:
   max_concurrent: 2
   engine: chromium         # chromium | camoufox（camoufox 预留）
   proxy_server: ""         # 代理预留
-  proxy_username: ""
-  proxy_password: ""
+  proxy_username: ""       # 代理密码写在 secrets.yaml 的 browser.proxy_password
   wait_for_selector: ""    # 渲染前等待该选择器（复杂 SPA）
   screenshot:
     enabled: true
@@ -257,7 +252,7 @@ embedding:                 # 文本向量来源（外部服务），独立于 se
   enabled: false           # 关闭时：不召回、不语义重排，行为同旧版
   provider: openai         # openai（POST {base_url}/embeddings）| ollama（POST {base_url}/api/embed）
   base_url: http://127.0.0.1:11434/v1
-  api_key: ""              # 建议用环境变量 EMBEDDING_API_KEY 注入
+  # api_key 写在 secrets.yaml 的 embedding.api_key（或环境变量 EMBEDDING_API_KEY）
   model: BAAI/bge-m3
   dim: 0                   # 0=启动探针解析；>0 直接采用
   timeout_ms: 5000

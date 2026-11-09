@@ -1,8 +1,8 @@
 /** Bilibili 后端：kukemc 系 CLI（`bili`），提供详情与评论。 */
-import type { GatewayConfig } from "../../config.js";
 import type { Logger } from "../../logger.js";
 import { envelope, runCli } from "../cli.js";
 import { cliFailure } from "../errors.js";
+import type { BilibiliSettings } from "../../settings/index.js";
 import { asArray, asRecord, num, numRecord, str } from "../json.js";
 import {
   BiliError, type BiliArticle, type BiliAudio, type BiliBackend, type BiliCapability,
@@ -53,8 +53,12 @@ function mapPages(raw: unknown): BiliPage[] {
 const targetOf = (ref: BiliRef): string =>
   ref.bvid ?? (ref.cv ? `cv${ref.cv}` : ref.aid ? `av${ref.aid}` : "");
 
-export function createKukemcBackend(config: GatewayConfig, logger?: Logger): BiliBackend {
-  const { command, timeoutMs } = config.bilibili.cliKukemc;
+export function createKukemcBackend(
+  bilibili: BilibiliSettings,
+  _httpToken: string,
+  logger?: Logger,
+): BiliBackend {
+  const { command, timeout_ms: timeoutMs } = bilibili.cli_kukemc;
   const run = (args: string[]) => {
     logger?.debug(`bilibili cli-kukemc: ${command} ${args.join(" ")}`);
     return runCli(command, args, timeoutMs);

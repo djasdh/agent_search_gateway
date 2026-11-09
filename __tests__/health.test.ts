@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { GatewayConfig } from "../src/config.js";
 import { getHealth } from "../src/health.js";
+import type { HealthSettings } from "../src/health.js";
+import { healthDeps, makeSettings } from "./helpers/settings.js";
 
 const MOCK = {
   up: createHttpServer((_req, res) => {
@@ -29,35 +30,13 @@ afterAll(async () => {
   MOCK.down.close();
 });
 
-function makeConfig(searxngPort: number, fsPort: number): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: `http://127.0.0.1:${searxngPort}`,
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: `http://127.0.0.1:${fsPort}`,
-    flaresolverrEnabled: true,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: false,
-    adFilterLevel: "off",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-  };
+function makeConfig(searxngPort: number, fsPort: number): HealthSettings {
+  return healthDeps(
+    makeSettings({
+      searxng: { url: `http://127.0.0.1:${searxngPort}` },
+      flaresolverr: { url: `http://127.0.0.1:${fsPort}` },
+    }),
+  );
 }
 
 describe("getHealth", () => {

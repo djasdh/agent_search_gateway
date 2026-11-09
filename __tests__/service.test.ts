@@ -1,10 +1,12 @@
 import { createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { GatewayConfig } from "../src/config.js";
 import type { DomainFilter } from "../src/filter/domain-filter.js";
 import type { Logger } from "../src/logger.js";
 import { createSearchService } from "../src/search/service.js";
+import type { SearchSettingsDeps } from "../src/search/service.js";
+import type { Settings } from "../src/settings/index.js";
+import { deepMerge, makeSettings, searchServiceDeps, type DeepPartial } from "./helpers/settings.js";
 import { FakeCorpusStore, FakeEmbeddingProvider } from "./helpers/fakes.js";
 
 const silentLogger: Logger = {
@@ -86,36 +88,11 @@ afterAll(() => {
   mockServer.close();
 });
 
-function makeConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
-  return {
-    host: "127.0.0.1",
-    port: 0,
-    token: undefined,
-    logLevel: "info",
-    logFile: undefined,
-    searxngUrl: `http://127.0.0.1:${searxngPort}`,
-    searxngTimeoutMs: 3000,
-    flaresolverrUrl: "http://127.0.0.1:1",
-    flaresolverrEnabled: true,
-    flaresolverrTimeoutMs: 5000,
-    flaresolverrMaxConcurrent: 2,
-    flaresolverrTriggerStatus: [403, 405, 429],
-    flaresolverrFallbackOnEmpty: true,
-    searchMaxResults: 10,
-    searchMaxResultsCap: 50,
-    searchMaxResultChars: 500,
-    searchCacheTtlMs: 300000,
-    searchCacheMaxEntries: 200,
-    searchMaxConcurrent: 2,
-    adFilterEnabled: true,
-    adFilterLevel: "ads",
-    adFilterExtraDomains: [],
-    adFilterHostsFile: "data/adblock/hosts",
-    adFilterAllowlist: [],
-    adFilterAutoUpdate: false,
-    adFilterAutoUpdateIntervalMs: 86400000,
-    ...overrides,
+function makeConfig(overrides: DeepPartial<Settings> = {}): SearchSettingsDeps {
+  const base: DeepPartial<Settings> = {
+    searxng: { url: `http://127.0.0.1:${searxngPort}`, timeout_ms: 3000 },
   };
+  return searchServiceDeps(makeSettings(deepMerge(base, overrides)));
 }
 
 // 广告过滤：block spam.com
@@ -194,7 +171,7 @@ describe("createSearchService", () => {
 
   it("searxng 失败返回结构化错误文本而非崩溃", async () => {
     // 指向一个不存在的端口
-    const cfg = makeConfig({ searxngUrl: "http://127.0.0.1:1" });
+    const cfg = makeConfig({ searxng: { url: "http://127.0.0.1:1" } });
     const svc = createSearchService(cfg, domainFilter, silentLogger);
     const r = await svc.search({ query: "x" });
     expect(r.ok).toBe(false);
@@ -205,7 +182,7 @@ describe("createSearchService", () => {
 describe("createSearchService + 结果上限/截断说明", () => {
   // mock searxng 返回 4 条：spam.com 被广告过滤、utm 变体被去重 → 2 条有效候选
   it("num_results 超系统上限：截到上限并在末尾说明", async () => {
-    const svc = createSearchService(makeConfig({ searchMaxResultsCap: 2 }), domainFilter, silentLogger);
+    const svc = createSearchService(makeConfig({ search: { max_results_cap: 2 } }), domainFilter, silentLogger);
     const r = await svc.search({ query: "cap query", numResults: 10 });
     expect(r.ok).toBe(true);
     if (r.ok) {
@@ -257,7 +234,7 @@ describe("createSearchService + 语义语料", () => {
     corpus.put([
       { url: "https://cache.example/hit", title: "Cached Hit", content: "cached", fetchedAt: Date.now(), vec: provider.vecFor("x") },
     ]);
-    const cfg = makeConfig({ searxngUrl: "http://127.0.0.1:1" });
+    const cfg = makeConfig({ searxng: { url: "http://127.0.0.1:1" } });
     const svc = createSearchService(cfg, domainFilter, silentLogger, {
       embeddingProvider: provider,
       corpus,

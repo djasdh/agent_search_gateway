@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isAdListStale } from "../src/filter/adlist.js";
+import type { AdFilterSettings } from "../src/settings/index.js";
+import { makeSettings } from "./helpers/settings.js";
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -14,16 +16,10 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
-function makeConfig(hostsFile: string, intervalMs: number) {
-  return {
-    adFilterEnabled: true,
-    adFilterLevel: "ads" as const,
-    adFilterHostsFile: hostsFile,
-    adFilterAutoUpdateIntervalMs: intervalMs,
-    adFilterAutoUpdate: true,
-    adFilterExtraDomains: [],
-    adFilterAllowlist: [],
-  };
+function makeConfig(hostsFile: string, intervalMs: number): AdFilterSettings {
+  return makeSettings({
+    ad_filter: { hosts_file: hostsFile, auto_update_interval_ms: intervalMs },
+  }).ad_filter;
 }
 
 describe("isAdListStale", () => {

@@ -1,9 +1,18 @@
-import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { baseContentType, classifyContentType, formatBytes } from "./convert.js";
 import { findPlugin } from "./plugins/index.js";
 import type { FetchPluginResult } from "./plugins/types.js";
 import { isPrivateHost } from "./ssrf.js";
+import type { FetchPluginSecrets, FetchPluginSettings, FetchSettings } from "../settings/index.js";
+
+/** directFetch 所需设置切片（通用抓取 + 取件插件上下文）。 */
+export interface DirectFetchDeps {
+  fetch: FetchSettings;
+  plugins: {
+    settings: FetchPluginSettings;
+    secrets: FetchPluginSecrets;
+  };
+}
 
 const DEFAULT_UA =
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
@@ -85,7 +94,7 @@ function decodeBody(buf: Buffer, contentType: string, sniff: boolean): string {
  * 初始 URL 与每次重定向目标都调用 —— 防止 302 跳转绕过 SSRF 检查直达内网。
  */
 async function checkUrlAllowed(
-  config: GatewayConfig,
+  fetchSettings: FetchSettings,
   url: URL,
 ): Promise<
   | { ok: true }
@@ -94,11 +103,11 @@ async function checkUrlAllowed(
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return { ok: false, errorKind: "invalid_url", errorMessage: `仅支持 http/https: ${url.toString()}` };
   }
-  if (config.fetchBlockPrivateIps) {
+  if (fetchSettings.block_private_ips) {
     let privateHost = false;
     try {
       privateHost = await isPrivateHost(url.hostname, {
-        exemptCidrs: config.fetchPrivateIpExemptCidrs,
+        exemptCidrs: fetchSettings.private_ip_exempt_cidrs,
       });
     } catch {
       /* 解析失败按非私有处理，交由请求阶段决定 */
@@ -139,13 +148,13 @@ async function readLimited(
 async function fetchViaPlugin(
   plugin: NonNullable<ReturnType<typeof findPlugin>>,
   url: URL,
-  config: GatewayConfig,
+  deps: DirectFetchDeps,
   logger?: Logger,
 ): Promise<DirectFetchResult> {
   const base = { plugin: plugin.name, finalUrl: url.toString() } as const;
   let r: FetchPluginResult;
   try {
-    r = await plugin.fetch(url, { config, logger });
+    r = await plugin.fetch(url, { settings: deps.plugins.settings, secrets: deps.plugins.secrets, logger });
   } catch (err) {
     return {
       ok: false,
@@ -236,10 +245,11 @@ async function fetchViaPlugin(
  * - 跟随重定向（≤MAX_REDIRECTS）；二进制超 max_download_bytes 直接报 too_large
  */
 export async function directFetch(
-  config: GatewayConfig,
+  deps: DirectFetchDeps,
   urlStr: string,
   logger?: Logger,
 ): Promise<DirectFetchResult> {
+  const fetchSettings = deps.fetch;
   let url: URL;
   try {
     url = new URL(urlStr);
@@ -248,19 +258,19 @@ export async function directFetch(
   }
 
   // 取件插件优先（ADR-0007 D5）：匹配表由插件提供，网关无条件信任
-  const plugin = findPlugin(url, config);
+  const plugin = findPlugin(url, deps.plugins.settings);
   if (plugin) {
     logger?.debug(`fetch plugin matched: ${plugin.name} ${url.toString()}`);
-    return await fetchViaPlugin(plugin, url, config, logger);
+    return await fetchViaPlugin(plugin, url, deps, logger);
   }
 
   // SSRF 防护（初始 URL；重定向目标在循环内同样检查）
-  const initialCheck = await checkUrlAllowed(config, url);
+  const initialCheck = await checkUrlAllowed(fetchSettings, url);
   if (!initialCheck.ok) {
     return { ok: false, errorKind: initialCheck.errorKind, errorMessage: initialCheck.errorMessage };
   }
 
-  const ua = config.fetchUserAgent && config.fetchUserAgent.length > 0 ? config.fetchUserAgent : DEFAULT_UA;
+  const ua = fetchSettings.user_agent && fetchSettings.user_agent.length > 0 ? fetchSettings.user_agent : DEFAULT_UA;
 
   let currentUrl = url;
   let truncated = false;
@@ -269,7 +279,7 @@ export async function directFetch(
 
   for (let redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), config.fetchTimeoutMs);
+    const timer = setTimeout(() => controller.abort(), fetchSettings.timeout_ms);
     try {
       const res = await fetch(currentUrl.toString(), {
         signal: controller.signal,
@@ -295,7 +305,7 @@ export async function directFetch(
         } catch {
           return { ok: false, errorKind: "invalid_url", status, errorMessage: `重定向 location 非法: ${loc}` };
         }
-        const nextCheck = await checkUrlAllowed(config, nextUrl);
+        const nextCheck = await checkUrlAllowed(fetchSettings, nextUrl);
         if (!nextCheck.ok) {
           return {
             ok: false,
@@ -313,13 +323,13 @@ export async function directFetch(
 
       const categorized = classifyContentType(contentType);
       const isTextual = categorized === "html" || categorized === "text";
-      const limit = isTextual ? config.fetchMaxBytes : config.fetchMaxDownloadBytes;
+      const limit = isTextual ? fetchSettings.max_bytes : fetchSettings.max_download_bytes;
 
       // 二进制/PDF：有 Content-Length 时先预检，超上限直接拒绝（不下载、不占连接）
       if (!isTextual) {
         const rawLen = res.headers.get("content-length");
         const declaredLen = rawLen === null ? Number.NaN : Number(rawLen);
-        if (Number.isFinite(declaredLen) && declaredLen > config.fetchMaxDownloadBytes) {
+        if (Number.isFinite(declaredLen) && declaredLen > fetchSettings.max_download_bytes) {
           await res.body?.cancel().catch(() => {});
           return {
             ok: false,
@@ -327,7 +337,7 @@ export async function directFetch(
             status,
             contentType,
             finalUrl: currentUrl.toString(),
-            errorMessage: `文件约 ${formatBytes(declaredLen)}，超过上限 ${formatBytes(config.fetchMaxDownloadBytes)}（max_download_bytes）`,
+            errorMessage: `文件约 ${formatBytes(declaredLen)}，超过上限 ${formatBytes(fetchSettings.max_download_bytes)}（max_download_bytes）`,
           };
         }
       }
@@ -348,7 +358,7 @@ export async function directFetch(
           status,
           contentType,
           finalUrl: currentUrl.toString(),
-          errorMessage: `文件超过 ${formatBytes(config.fetchMaxDownloadBytes)} 上限（max_download_bytes）`,
+          errorMessage: `文件超过 ${formatBytes(fetchSettings.max_download_bytes)} 上限（max_download_bytes）`,
         };
       }
 
@@ -398,7 +408,7 @@ export async function directFetch(
     } catch (err) {
       const e = err as Error;
       if (e.name === "AbortError") {
-        return { ok: false, errorKind: "timeout", errorMessage: `抓取超时 (>${config.fetchTimeoutMs}ms)` };
+        return { ok: false, errorKind: "timeout", errorMessage: `抓取超时 (>${fetchSettings.timeout_ms}ms)` };
       }
       return { ok: false, errorKind: "network", errorMessage: e.message };
     } finally {

@@ -2,7 +2,8 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, type GatewayConfig } from "../src/config.js";
+import { loadSettings } from "../src/settings/index.js";
+import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
 import { weiboPlugin } from "../src/weibo/index.js";
 
 const dirs: string[] = [];
@@ -56,7 +57,7 @@ if (mode === "range") {
 process.stdout.write(JSON.stringify([row(1, start), row(2, start)]));
 `;
 
-function makeConfig(mode: string, overrides: Record<string, string> = {}): GatewayConfig {
+function makeConfig(mode: string, overrides: Record<string, string> = {}): FetchPluginContext {
   const d = tmpDir();
   const cli = join(d, "fake-opencli.js");
   writeFileSync(cli, FAKE_CLI);
@@ -72,7 +73,11 @@ function makeConfig(mode: string, overrides: Record<string, string> = {}): Gatew
   for (const [k, v] of Object.entries(overrides)) lines.push(`  ${k}: ${v}`);
   const path = join(d, "gateway.yaml");
   writeFileSync(path, lines.join("\n") + "\n");
-  return loadConfig(path);
+  const { settings, secrets } = loadSettings({ configPath: path, secretsPath: join(d, "secrets.yaml"), env: {} });
+  return {
+    settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
+    secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+  };
 }
 
 afterEach(() => {
@@ -85,7 +90,7 @@ describe("user-posts 时间段抓取", () => {
   it("默认最近 7 天返回 Markdown（按日期分组、含互动数）", () => {
     const config = makeConfig("two");
     return weiboPlugin
-      .fetch(new URL("https://weibo.com/u/1?weibo=user-posts"), { config })
+      .fetch(new URL("https://weibo.com/u/1?weibo=user-posts"), config)
       .then((result) => {
         expect(result.ok).toBe(true);
         expect(result.contentType).toBe("text/markdown");
@@ -103,7 +108,7 @@ describe("user-posts 时间段抓取", () => {
     process.env.FAKE_LOG = log;
     const result = await weiboPlugin.fetch(
       new URL("https://weibo.com/u/1?weibo=user-posts&start=2026-04-01&end=2026-04-02"),
-      { config },
+      config,
     );
     expect(result.ok).toBe(true);
     const text = result.bytes?.toString("utf8") ?? "";
@@ -115,7 +120,7 @@ describe("user-posts 时间段抓取", () => {
     const config = makeConfig("single100");
     const result = await weiboPlugin.fetch(
       new URL("https://weibo.com/u/1?weibo=user-posts&start=2026-03-01&end=2026-03-01"),
-      { config },
+      config,
     );
     const text = result.bytes?.toString("utf8") ?? "";
     expect(result.ok).toBe(true);
@@ -129,7 +134,7 @@ describe("user-posts 时间段抓取", () => {
       new URL(
         "https://weibo.com/u/1?weibo=user-posts&start=2026-03-01&end=2026-03-01&max_items=10",
       ),
-      { config },
+      config,
     );
     const text = result.bytes?.toString("utf8") ?? "";
     expect(result.ok).toBe(true);
@@ -141,7 +146,7 @@ describe("user-posts 时间段抓取", () => {
     const config = makeConfig("empty");
     const result = await weiboPlugin.fetch(
       new URL("https://weibo.com/u/1?weibo=user-posts&start=2026-05-01&end=2026-05-02"),
-      { config },
+      config,
     );
     expect(result.ok).toBe(true);
     expect(result.bytes?.toString("utf8")).toContain("没有抓到微博");
@@ -153,8 +158,8 @@ describe("user-posts 时间段抓取", () => {
     const log = join(d, "calls.log");
     process.env.FAKE_LOG = log;
     const url = new URL("https://weibo.com/u/1?weibo=user-posts&start=2026-06-01&end=2026-06-07");
-    await weiboPlugin.fetch(url, { config });
-    await weiboPlugin.fetch(url, { config });
+    await weiboPlugin.fetch(url, config);
+    await weiboPlugin.fetch(url, config);
     expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
   });
 });

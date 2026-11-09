@@ -1,9 +1,7 @@
-import type { GatewayConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { BrowserPool } from "../browser/pool.js";
 import { renderWithPlaywright } from "../browser/render.js";
 import { ErrorCodes, withCode } from "../utils/errors.js";
-import { Semaphore } from "../utils/semaphore.js";
 import { FetchCache, type RenderMode } from "./cache.js";
 import { baseContentType, formatBytes, renderTextBody } from "./convert.js";
 import { directFetch, type DirectFetchResult } from "./direct.js";
@@ -11,6 +9,14 @@ import { createFlareSolverrClient, type FlareSolverrClient } from "./flaresolver
 import { htmlToMarkdown } from "./html2md.js";
 import { pdfToText } from "./pdf.js";
 import type { FetchStore } from "./store.js";
+import {
+  ssrfOf,
+  type BrowserSettings,
+  type FetchPluginSecrets,
+  type FetchPluginSettings,
+  type FetchSettings,
+  type FlaresolverrSettings,
+} from "../settings/index.js";
 
 export interface FetchParams {
   url: string;
@@ -27,6 +33,19 @@ export interface FetchService {
   fetch(params: FetchParams): Promise<FetchOutcome>;
 }
 
+/** createFetchService 所需设置切片。 */
+export interface FetchServiceDeps {
+  fetch: FetchSettings;
+  flaresolverr: FlaresolverrSettings;
+  browser: BrowserSettings;
+  /** `/files/<id>` 的对外基址（由根节点按 gateway.host/port 计算）。 */
+  files_base_url: string;
+  plugins: {
+    settings: FetchPluginSettings;
+    secrets: FetchPluginSecrets;
+  };
+}
+
 /** 空壳 JS 判定：HTML 很短且含 script src（疑似 SPA 壳）或含 CF 挑战特征 */
 function isShellJs(html: string): boolean {
   if (html.length > 2000) return false;
@@ -36,13 +55,16 @@ function isShellJs(html: string): boolean {
   return hasScript || cfFeatures;
 }
 
-function shouldUpgradeToFlareSolverr(config: GatewayConfig, direct: DirectFetchResult): boolean {
-  if (!config.flaresolverrEnabled) return false;
+function shouldUpgradeToFlareSolverr(
+  flaresolverr: FlaresolverrSettings,
+  direct: DirectFetchResult,
+): boolean {
+  if (!flaresolverr.enabled) return false;
   if (direct.ok) {
-    return config.flaresolverrFallbackOnEmpty && direct.html !== undefined && isShellJs(direct.html);
+    return flaresolverr.fallback_on_empty && direct.html !== undefined && isShellJs(direct.html);
   }
   if (direct.errorKind === "http" && direct.status !== undefined) {
-    return config.flaresolverrTriggerStatus.includes(direct.status);
+    return flaresolverr.trigger_status.includes(direct.status);
   }
   return false;
 }
@@ -50,34 +72,30 @@ function shouldUpgradeToFlareSolverr(config: GatewayConfig, direct: DirectFetchR
 /** max_chars 参数钳制上限：防止 agent 传超大值把整页塞进 LLM context */
 const MAX_OUTPUT_CHARS_LIMIT = 200000;
 
-function clampMaxChars(v: number | undefined, config: GatewayConfig): number | undefined {
+function clampMaxChars(v: number | undefined): number | undefined {
   if (v === undefined) return undefined;
   if (v <= 0) return undefined;
   return Math.min(v, MAX_OUTPUT_CHARS_LIMIT);
 }
 
-/** `/files/<id>` 的对外基址：配置里 host 是监听地址（0.0.0.0/::）时换成本机回环。 */
-function filesBaseUrl(config: GatewayConfig): string {
-  const host = config.host === "0.0.0.0" || config.host === "::" || config.host === "" ? "127.0.0.1" : config.host;
-  return `http://${host}:${config.port}`;
-}
-
 export function createFetchService(
-  config: GatewayConfig,
+  deps: FetchServiceDeps,
   logger: Logger,
   browserPool?: BrowserPool,
   store?: FetchStore,
   /** 进程级共享的 FlareSolverr 客户端；缺省时自建（单测 / 独立使用）。 */
   flareSolverr?: FlareSolverrClient,
 ): FetchService {
-  const fsClient = flareSolverr ?? createFlareSolverrClient(config);
-  const cache = new FetchCache(config.fetchCacheMaxEntries, config.fetchCacheTtlMs);
+  const fetchSettings = deps.fetch;
+  const ssrf = ssrfOf(fetchSettings);
+  const fsClient = flareSolverr ?? createFlareSolverrClient({ flaresolverr: deps.flaresolverr, ssrf });
+  const cache = new FetchCache(fetchSettings.cache_max_entries, fetchSettings.cache_ttl_ms);
 
   async function renderWithHtml(html: string, baseUrl: string, maxChars?: number): Promise<string> {
     const md = htmlToMarkdown(html, {
-      structural: config.fetchStructural,
+      structural: fetchSettings.structural,
       baseUrl,
-      maxOutputChars: maxChars ?? config.fetchMaxOutputChars,
+      maxOutputChars: maxChars ?? fetchSettings.max_output_chars,
     });
     const lines: string[] = [];
     if (md.title) lines.push(`# ${md.title}`);
@@ -96,11 +114,11 @@ export function createFetchService(
   /** 文本类响应：轻转换（JSON/CSV/XML）后直出。 */
   function renderText(direct: DirectFetchResult, url: string, maxChars?: number): FetchOutcome {
     const base = baseContentType(direct.contentType);
-    const rendered = renderTextBody(base, direct.text ?? "", maxChars ?? config.fetchMaxOutputChars);
+    const rendered = renderTextBody(base, direct.text ?? "", maxChars ?? fetchSettings.max_output_chars);
     const lines = [rendered.text];
     if (direct.truncated) {
       lines.push("");
-      lines.push(`> 注：响应体超过 ${(config.fetchMaxBytes / 1024 / 1024).toFixed(1)}MB，内容已截断。`);
+      lines.push(`> 注：响应体超过 ${(fetchSettings.max_bytes / 1024 / 1024).toFixed(1)}MB，内容已截断。`);
     }
     const full = lines.join("\n");
     // 插件结果不进缓存：评论/直链这类产物会随调用变化，缓存会让续传和直链刷新失效。
@@ -124,7 +142,7 @@ export function createFetchService(
       if (pdf.ok) {
         const body = pdf.text.trim();
         if (body.length > 0) {
-          const limit = maxChars ?? config.fetchMaxOutputChars;
+          const limit = maxChars ?? fetchSettings.max_output_chars;
           const clipped = body.length > limit ? `${body.slice(0, limit)}\n\n…(内容已截断)` : body;
           const full = [`# PDF 正文（共 ${pdf.pages} 页）`, "", clipped].join("\n");
           cachedSet("direct", url, full, maxChars);
@@ -159,13 +177,13 @@ export function createFetchService(
         `- 大小：${f.size} 字节`,
         `- sha256：${f.id}`,
         `- 本地路径：${f.path}`,
-        `- 下载链接：${filesBaseUrl(config)}${f.url}`,
+        `- 下载链接：${deps.files_base_url}${f.url}`,
       ].join("\n"),
     };
   }
 
   async function fetch(params: FetchParams): Promise<FetchOutcome> {
-    const maxChars = clampMaxChars(params.maxChars, config);
+    const maxChars = clampMaxChars(params.maxChars);
 
     // 先查 direct 缓存
     const directCached = cachedGet("direct", params.url, maxChars);
@@ -175,7 +193,7 @@ export function createFetchService(
     }
 
     // ① direct
-    const direct = await directFetch(config, params.url, logger);
+    const direct = await directFetch({ fetch: fetchSettings, plugins: deps.plugins }, params.url, logger);
 
     // 非 HTML 的直出路径：不走 FlareSolverr / playwright（那些是给 HTML 反爬的）
     if (direct.ok && direct.kind === "binary") {
@@ -186,7 +204,7 @@ export function createFetchService(
     }
 
     // ② CF 判定：命中才升级到 FlareSolverr
-    if (shouldUpgradeToFlareSolverr(config, direct)) {
+    if (shouldUpgradeToFlareSolverr(deps.flaresolverr, direct)) {
       // 查 FlareSolverr 缓存
       const fsCached = cachedGet("flaresolverr", params.url, maxChars);
       if (fsCached !== undefined) {
@@ -214,7 +232,7 @@ export function createFetchService(
           return { ok: true, text: pwCached };
         }
         logger.debug(`FlareSolverr 失败，尝试 playwright: ${params.url} (${fs.errorKind})`);
-        const pw = await renderWithPlaywright(browserPool, config, logger, params.url);
+        const pw = await renderWithPlaywright(browserPool, { browser: deps.browser, ssrf }, logger, params.url);
         if (pw.ok && pw.html) {
           const md = await renderWithHtml(pw.html, pw.finalUrl ?? params.url, maxChars);
           const full = md + (md.endsWith("\n") ? "" : "\n") + "\n> 注：此页面通过浏览器渲染获取。";
@@ -245,7 +263,7 @@ export function createFetchService(
       const lines: string[] = [md];
       if (direct.truncated) {
         lines.push("");
-        lines.push(`> 注：页面超过 ${(config.fetchMaxBytes / 1024 / 1024).toFixed(1)}MB，内容已截断。`);
+        lines.push(`> 注：页面超过 ${(fetchSettings.max_bytes / 1024 / 1024).toFixed(1)}MB，内容已截断。`);
       }
       const full = lines.join("\n");
       cachedSet("direct", params.url, full, maxChars);
@@ -271,7 +289,7 @@ export function createFetchService(
 
     let hint = "";
     if (direct.errorKind === "too_large") {
-      hint = `\n\n如需下载请调大 fetch.max_download_bytes（当前上限 ${formatBytes(config.fetchMaxDownloadBytes)}）。`;
+      hint = `\n\n如需下载请调大 fetch.max_download_bytes（当前上限 ${formatBytes(fetchSettings.max_download_bytes)}）。`;
     } else if (direct.errorKind === "unsupported_type") {
       hint = "\n\n该内容类型无法处理。";
     } else if (direct.errorKind === "blocked_private_ip") {

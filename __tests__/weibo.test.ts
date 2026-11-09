@@ -4,7 +4,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, type GatewayConfig } from "../src/config.js";
+import { loadSettings } from "../src/settings/index.js";
+import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
+import type { WeiboSettings } from "../src/settings/index.js";
 import { downloadWeiboImage } from "../src/weibo/images.js";
 import { weiboPlugin } from "../src/weibo/index.js";
 import { addDays, isWeiboImageUrl, isWeiboUrl, parseWeiboRequest, todayInShanghai } from "../src/weibo/parse.js";
@@ -47,7 +49,7 @@ JSON
 esac
 `;
 
-function makeConfig(): GatewayConfig {
+function makeConfig(): FetchPluginContext {
   const d = tmpDir();
   const cli = join(d, "fake-opencli.sh");
   writeFileSync(cli, FAKE_CLI);
@@ -62,14 +64,22 @@ function makeConfig(): GatewayConfig {
   ].join("\n");
   const path = join(d, "gateway.yaml");
   writeFileSync(path, yaml);
-  return loadConfig(path);
+  const { settings, secrets } = loadSettings({ configPath: path, secretsPath: join(d, "secrets.yaml"), env: {} });
+  return {
+    settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
+    secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+  };
 }
 
-function disabledConfig(): GatewayConfig {
+function disabledConfig(): FetchPluginContext {
   const d = tmpDir();
   const path = join(d, "gateway.yaml");
   writeFileSync(path, "gateway: { host: 127.0.0.1 }\nweibo: { enabled: false }\n");
-  return loadConfig(path);
+  const { settings, secrets } = loadSettings({ configPath: path, secretsPath: join(d, "secrets.yaml"), env: {} });
+  return {
+    settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
+    secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+  };
 }
 
 afterEach(() => {
@@ -79,7 +89,7 @@ afterEach(() => {
 });
 
 describe("parse", () => {
-  const config = () => makeConfig();
+  const config = () => makeConfig().settings.weibo;
 
   it("主站帖子路径 → post", () => {
     const ref = parseWeiboRequest(new URL("https://weibo.com/1234567890/AbCdEf?weibo=post"), config());
@@ -208,7 +218,7 @@ describe("image url", () => {
 
 describe("plugin match", () => {
   it("普通页面必须带 ?weibo=，图片 URL 自动命中", () => {
-    const config = makeConfig();
+    const config = makeConfig().settings;
     expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC?weibo=post"), config)).toBe(true);
     expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC"), config)).toBe(false);
     expect(weiboPlugin.match(new URL("https://wx1.sinaimg.cn/large/a.jpg"), config)).toBe(true);
@@ -216,7 +226,7 @@ describe("plugin match", () => {
   });
 
   it("配置关闭时不接管，保证回退 generic", () => {
-    const config = disabledConfig();
+    const config = disabledConfig().settings;
     expect(weiboPlugin.match(new URL("https://wx1.sinaimg.cn/large/a.jpg"), config)).toBe(false);
     expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC?weibo=post"), config)).toBe(false);
   });
@@ -225,7 +235,7 @@ describe("plugin match", () => {
 describe("plugin fetch", () => {
   it("post 渲染 Markdown 并列出全部图片外链", async () => {
     const config = makeConfig();
-    const result = await weiboPlugin.fetch(new URL("https://weibo.com/1/AbCdEf?weibo=post"), { config });
+    const result = await weiboPlugin.fetch(new URL("https://weibo.com/1/AbCdEf?weibo=post"), config);
     expect(result.ok).toBe(true);
     expect(result.contentType).toBe("text/markdown");
     const text = result.bytes?.toString("utf8") ?? "";
@@ -241,7 +251,7 @@ describe("plugin fetch", () => {
     const config = makeConfig();
     const log = join(tmpDir(), "calls.log");
     process.env.FAKE_LOG = log;
-    const result = await weiboPlugin.fetch(new URL("https://weibo.com/1/AbCdEf?weibo=comments"), { config });
+    const result = await weiboPlugin.fetch(new URL("https://weibo.com/1/AbCdEf?weibo=comments"), config);
     expect(result.ok).toBe(true);
     expect(result.contentType).toBe("application/json");
     expect(result.bytes?.toString("utf8")).toContain("评论1");
@@ -250,23 +260,24 @@ describe("plugin fetch", () => {
 
   it("user / user-posts 返回 JSON", async () => {
     const config = makeConfig();
-    const user = await weiboPlugin.fetch(new URL("https://weibo.com/u/1?weibo=user"), { config });
+    const user = await weiboPlugin.fetch(new URL("https://weibo.com/u/1?weibo=user"), config);
     expect(user.bytes?.toString("utf8")).toContain("测试作者");
-    const posts = await weiboPlugin.fetch(new URL("https://weibo.com/u/1?weibo=user-posts"), { config });
+    const posts = await weiboPlugin.fetch(new URL("https://weibo.com/u/1?weibo=user-posts"), config);
     expect(posts.bytes?.toString("utf8")).toContain("用户微博");
   });
 
   it("退出码 77 → WEIBO_AUTH_REQUIRED", async () => {
     const config = makeConfig();
-    const result = await weiboPlugin.fetch(new URL("https://weibo.com/detail/fail77?weibo=post"), { config });
+    const result = await weiboPlugin.fetch(new URL("https://weibo.com/detail/fail77?weibo=post"), config);
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe("WEIBO_AUTH_REQUIRED");
   });
 
   it("未启用 → WEIBO_UNAVAILABLE", async () => {
-    const result = await weiboPlugin.fetch(new URL("https://weibo.com/1/AbC?weibo=post"), {
-      config: disabledConfig(),
-    });
+    const result = await weiboPlugin.fetch(
+      new URL("https://weibo.com/1/AbC?weibo=post"),
+      disabledConfig(),
+    );
     expect(result.ok).toBe(false);
     expect(result.errorCode).toBe("WEIBO_UNAVAILABLE");
   });
@@ -290,10 +301,14 @@ describe("plugin fetch", () => {
         "",
       ].join("\n"),
     );
-    const config = loadConfig(path);
+    const { settings, secrets } = loadSettings({ configPath: path, secretsPath: join(d, "secrets.yaml"), env: {} });
+    const config: FetchPluginContext = {
+      settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
+      secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+    };
     const url = new URL("https://weibo.com/1/Cached?weibo=post");
-    await weiboPlugin.fetch(url, { config });
-    await weiboPlugin.fetch(url, { config });
+    await weiboPlugin.fetch(url, config);
+    await weiboPlugin.fetch(url, config);
     expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
   });
 });
@@ -307,7 +322,7 @@ describe("image download", () => {
     return `http://127.0.0.1:${port}`;
   }
 
-  function imageConfig(maxBytes = 1024): GatewayConfig {
+  function imageConfig(maxBytes = 1024): WeiboSettings {
     const d = tmpDir();
     const path = join(d, "gateway.yaml");
     writeFileSync(
@@ -321,7 +336,8 @@ describe("image download", () => {
         "",
       ].join("\n"),
     );
-    return loadConfig(path);
+    const { settings } = loadSettings({ configPath: path, secretsPath: join(d, "secrets.yaml"), env: {} });
+    return settings.weibo;
   }
 
   it("带 Referer 下载图片", async () => {

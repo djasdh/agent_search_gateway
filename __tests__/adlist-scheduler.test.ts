@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { startAdListScheduler } from "../src/filter/adlist.js";
 import type { Logger } from "../src/logger.js";
+import type { AdFilterSettings } from "../src/settings/index.js";
+import { makeSettings } from "./helpers/settings.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -10,16 +12,13 @@ const silentLogger: Logger = {
   close: () => {},
 } as Logger;
 
-function makeConfig(overrides: Record<string, unknown> = {}) {
-  return {
-    adFilterEnabled: true,
-    adFilterLevel: "ads" as const,
-    adFilterHostsFile: overrides.hostsFile as string ?? "/tmp/nonexist-hosts-test",
-    adFilterAutoUpdate: true,
-    adFilterAutoUpdateIntervalMs: overrides.intervalMs as number ?? 1000,
-    adFilterExtraDomains: [],
-    adFilterAllowlist: [],
-  };
+function makeConfig(overrides: { hostsFile?: string; intervalMs?: number } = {}): AdFilterSettings {
+  return makeSettings({
+    ad_filter: {
+      hosts_file: overrides.hostsFile ?? "/tmp/nonexist-hosts-test",
+      auto_update_interval_ms: overrides.intervalMs ?? 1000,
+    },
+  }).ad_filter;
 }
 
 afterEach(() => {
@@ -30,7 +29,7 @@ afterEach(() => {
 describe("startAdListScheduler", () => {
   it("disabled 时返回空操作函数", () => {
     const stop = startAdListScheduler(
-      { ...makeConfig(), adFilterEnabled: false } as never,
+      { ...makeConfig(), enabled: false },
       silentLogger,
       () => {},
     );
@@ -39,7 +38,7 @@ describe("startAdListScheduler", () => {
 
   it("off level 时不启动", () => {
     const stop = startAdListScheduler(
-      { ...makeConfig(), adFilterLevel: "off" } as never,
+      { ...makeConfig(), level: "off" },
       silentLogger,
       () => {},
     );
@@ -55,7 +54,7 @@ describe("startAdListScheduler", () => {
     })));
 
     let refreshCount = 0;
-    const stop = startAdListScheduler(makeConfig({ intervalMs: 100 }) as never, silentLogger, () => {
+    const stop = startAdListScheduler(makeConfig({ intervalMs: 100 }), silentLogger, () => {
       refreshCount++;
     });
 
@@ -75,7 +74,7 @@ describe("startAdListScheduler", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false })));
 
     let refreshCount = 0;
-    const stop = startAdListScheduler(makeConfig({ intervalMs: 100 }) as never, silentLogger, () => {
+    const stop = startAdListScheduler(makeConfig({ intervalMs: 100 }), silentLogger, () => {
       refreshCount++;
     });
 

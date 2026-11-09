@@ -1,6 +1,6 @@
 /** 微博取件插件：单 CLI 后端（OpenCLI）；图片 CDN 自动接管。 */
 
-import type { GatewayConfig } from "../config.js";
+import type { WeiboSettings } from "../settings/index.js";
 import type { Logger } from "../logger.js";
 import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "../fetch/plugins/types.js";
 import { normalizePostRows, runOpencli } from "./cli.js";
@@ -307,7 +307,7 @@ function renderUserPosts(posts: WeiboPost[], meta: RenderPostsMeta): string {
 
 async function fetchUserPosts(
   ref: WeiboRef,
-  config: GatewayConfig,
+  weibo: WeiboSettings,
   logger?: Logger,
 ): Promise<string> {
   const target = refTarget(ref);
@@ -316,12 +316,12 @@ async function fetchUserPosts(
   if (!start || !end) throw new WeiboError("WEIBO_INVALID", "缺少时间段", "使用 days=7 或 start/end");
 
   const ctx: CollectCtx = {
-    command: config.weibo.cli.command,
-    timeoutMs: config.weibo.cli.timeoutMs,
+    command: weibo.cli.command,
+    timeoutMs: weibo.cli.timeout_ms,
     target,
     includeRetweets: !!ref.includeRetweets,
-    maxCalls: config.weiboUserPostsMaxCalls,
-    deadline: Date.now() + config.weiboUserPostsBudgetMs,
+    maxCalls: weibo.user_posts.max_calls,
+    deadline: Date.now() + weibo.user_posts.budget_ms,
     calls: 0,
     cappedDays: new Set(),
     truncated: false,
@@ -330,7 +330,7 @@ async function fetchUserPosts(
 
   const rows = await collectRange(ctx, start, end);
   const sorted = dedupePosts(rows).sort((a, b) => postEpoch(b) - postEpoch(a));
-  const maxItems = ref.maxItems ?? config.weiboUserPostsMaxItems;
+  const maxItems = ref.maxItems ?? weibo.user_posts.max_items;
   const posts = sorted.slice(0, maxItems);
 
   return renderUserPosts(posts, {
@@ -342,13 +342,13 @@ async function fetchUserPosts(
     truncated: ctx.truncated,
     itemsTruncated: sorted.length > maxItems,
     maxItems,
-    maxChars: config.weiboUserPostsMaxChars,
+    maxChars: weibo.user_posts.max_chars,
   });
 }
 
 async function numericId(
   ref: WeiboRef,
-  config: GatewayConfig,
+  weibo: WeiboSettings,
   logger?: Logger,
 ): Promise<string> {
   const raw = ref.id ?? ref.mblogid;
@@ -358,9 +358,9 @@ async function numericId(
   // comments 只接受 numeric idstr；mblogid 先通过 post 换一次。
   const data = normalizePostRows(
     await runOpencli(
-      config.weibo.cli.command,
+      weibo.cli.command,
       ["weibo", "post", raw],
-      config.weibo.cli.timeoutMs,
+      weibo.cli.timeout_ms,
       "weibo post",
       logger,
     ),
@@ -376,21 +376,21 @@ async function numericId(
 
 async function runAction(
   ref: WeiboRef,
-  config: GatewayConfig,
+  weibo: WeiboSettings,
   logger?: Logger,
 ): Promise<{ contentType: string; body: string }> {
-  const command = config.weibo.cli.command;
-  const timeout = config.weibo.cli.timeoutMs;
+  const command = weibo.cli.command;
+  const timeout = weibo.cli.timeout_ms;
   const argsOf = (action: WeiboAction): string[] => {
     switch (action) {
       case "post":
         return ["weibo", "post", refTarget(ref)];
       case "comments":
-        return ["weibo", "comments", ref.id ?? ref.mblogid ?? "", "--limit", String(ref.limit ?? config.weibo.defaults.commentsLimit)];
+        return ["weibo", "comments", ref.id ?? ref.mblogid ?? "", "--limit", String(ref.limit ?? weibo.defaults.comments_limit)];
       case "user":
         return ["weibo", "user", refTarget(ref)];
       case "user-posts": {
-        const args = ["weibo", "user-posts", refTarget(ref), "--limit", String(ref.limit ?? config.weibo.defaults.userPostsLimit)];
+        const args = ["weibo", "user-posts", refTarget(ref), "--limit", String(ref.limit ?? weibo.defaults.user_posts_limit)];
         if (ref.start) args.push("--start", ref.start);
         if (ref.end) args.push("--end", ref.end);
         if (ref.includeRetweets) args.push("--include-retweets");
@@ -401,12 +401,12 @@ async function runAction(
 
   // 时间段抓取自己管理切片/预算，不走单次 CLI 调用。
   if (ref.action === "user-posts") {
-    return { contentType: "text/markdown", body: await fetchUserPosts(ref, config, logger) };
+    return { contentType: "text/markdown", body: await fetchUserPosts(ref, weibo, logger) };
   }
 
   let args = argsOf(ref.action);
   if (ref.action === "comments") {
-    args = ["weibo", "comments", await numericId(ref, config, logger), "--limit", String(ref.limit ?? config.weibo.defaults.commentsLimit)];
+    args = ["weibo", "comments", await numericId(ref, weibo, logger), "--limit", String(ref.limit ?? weibo.defaults.comments_limit)];
   }
 
   const raw = await runOpencli(command, args, timeout, `weibo ${ref.action}`, logger);
@@ -462,14 +462,15 @@ const textResult = (body: string, contentType: string, finalUrl: string): FetchP
 });
 
 async function fetchWeibo(url: URL, ctx: FetchPluginContext): Promise<FetchPluginResult> {
-  const { config, logger } = ctx;
+  const { settings, logger } = ctx;
+  const weibo = settings.weibo;
 
   if (isWeiboImageUrl(url)) {
-    if (!config.weibo.enabled || !config.weibo.images.enabled) {
+    if (!weibo.enabled || !weibo.images.enabled) {
       return fail(new WeiboError("WEIBO_UNAVAILABLE", "微博图片抓取未启用（weibo.enabled/weibo.images.enabled=false）", url.toString()));
     }
     try {
-      const image = await downloadWeiboImage(url, config, logger);
+      const image = await downloadWeiboImage(url, weibo, settings.fetch.user_agent, logger);
       return {
         ok: true,
         status: 200,
@@ -483,7 +484,7 @@ async function fetchWeibo(url: URL, ctx: FetchPluginContext): Promise<FetchPlugi
     }
   }
 
-  if (!config.weibo.enabled) {
+  if (!weibo.enabled) {
     return fail(new WeiboError("WEIBO_UNAVAILABLE", "微博插件未启用（weibo.enabled=false）", url.toString()));
   }
 
@@ -495,12 +496,12 @@ async function fetchWeibo(url: URL, ctx: FetchPluginContext): Promise<FetchPlugi
         if (!target.searchParams.has(key)) target.searchParams.set(key, value);
       }
     }
-    const ref = parseWeiboRequest(target, config);
+    const ref = parseWeiboRequest(target, weibo);
     const key = cacheKey(ref);
-    const cached = cacheGet(key, config.weibo.cacheTtlMs);
+    const cached = cacheGet(key, weibo.cache_ttl_ms);
     if (cached) return cached;
 
-    const { contentType, body } = await runAction(ref, config, logger);
+    const { contentType, body } = await runAction(ref, weibo, logger);
     const result = textResult(body, contentType, target.toString());
     cacheSet(key, result);
     return result;
@@ -519,9 +520,9 @@ async function fetchWeibo(url: URL, ctx: FetchPluginContext): Promise<FetchPlugi
 
 export const weiboPlugin: FetchPlugin = {
   name: "weibo",
-  match: (url, config) => {
+  match: (url, settings) => {
     // 默认关闭时不接管任何 URL，保证关闭后行为与改动前一致。
-    if (config && !config.weibo.enabled) return false;
+    if (settings && !settings.weibo.enabled) return false;
     return isWeiboImageUrl(url) || (isWeiboUrl(url) && url.searchParams.has("weibo"));
   },
   fetch: fetchWeibo,
