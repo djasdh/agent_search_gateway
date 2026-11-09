@@ -226,7 +226,45 @@ opencli weibo whoami -f json
 
 > `weibo post` 是浏览器操作，单次可能 5–10s。若 Chrome 未连接，OpenCLI 默认会等 45s；把 `OPENCLI_BROWSER_CONNECT_TIMEOUT` 调小（如 20）或把 `weibo.cli.timeout_ms` 设为 45s 以上，才能得到 `WEIBO_BRIDGE_DOWN` 而不是 `WEIBO_TIMEOUT`。
 
-## 快速开始
+## 一键安装（推荐）
+
+Linux / macOS：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/djasdh/agent_search_gateway/master/scripts/install.sh | bash
+```
+
+Windows（PowerShell 5.1+）：
+
+```powershell
+irm https://raw.githubusercontent.com/djasdh/agent_search_gateway/master/scripts/install.ps1 | iex
+```
+
+默认安装到 `~/agent_search_gateway`（Windows 为 `%USERPROFILE%\agent_search_gateway`），并完成：
+
+- 下载对应平台完整包（含 `dist/` 与生产 `node_modules/`），SHA256 校验
+- 生成 `gateway.yaml` / `secrets.yaml`（随机 `gateway.token`）
+- 安装 Playwright chromium
+- 安装搜索依赖：
+  - Linux / macOS：默认用 Docker 起 searxng；没有 Docker 时回退到原生源码 + venv
+  - Windows：原生 searxng（自动打 `pwd` 补丁）+ 官方 FlareSolverr x64 二进制
+- 注册用户级自启（systemd --user / LaunchAgent / 登录计划任务）
+- 启动并做健康检查
+
+常用参数：
+
+```bash
+# 指定目录
+curl -fsSL .../install.sh | bash -s -- --dir ~/apps/asg
+# 不装浏览器 / 不注册自启
+curl -fsSL .../install.sh | bash -s -- --no-browser --no-service
+# 连接已有 searxng（跳过本地安装）
+curl -fsSL .../install.sh | bash -s -- --searxng-url http://192.168.1.10:8888
+```
+
+代理环境请设置 `HTTPS_PROXY`（或 `https_proxy`）。安装完成后用 `scripts/start-all.mjs` 或注册的服务启动。
+
+## 快速开始（源码）
 
 ```bash
 git clone https://github.com/djasdh/agent_search_gateway.git
@@ -525,6 +563,8 @@ scripts\self-update\windows.cmd           # Windows
 ```bash
 ./scripts/gateway.sh start|stop|restart|status|logs [searxng|flaresolverr|gateway|all]
 ./scripts/gateway.ps1 start|stop|restart|status|logs        # Windows（只管理 gateway）
+node scripts/start-all.mjs                                  # 前台启动/监督全部组件（安装器自启入口）
+node scripts/start-all.mjs --check                          # 只检查 launch.json 与健康状态
 ./scripts/update-adlist.sh [ads|ads+tracking|full]   # 更新广告过滤列表
 ./scripts/bench.sh                                    # 本机压测（内存/延迟）
 ```

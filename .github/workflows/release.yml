@@ -64,7 +64,7 @@ jobs:
           STAGE="release/${NAME}"
           mkdir -p "$STAGE"
           cp -r dist node_modules package.json package-lock.json \
-            gateway.yaml.example secrets.yaml.example scripts \
+            gateway.yaml.example secrets.yaml.example scripts runtime \
             README.md LICENSE THIRD_PARTY_LICENSES.md "$STAGE/"
           node -e "
             const fs = require('node:fs');
@@ -99,17 +99,25 @@ jobs:
     if: github.repository == 'djasdh/agent_search_gateway'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: 生成 SHA256SUMS
+      - name: 生成 SHA256SUMS 与 runtime.json
         run: |
           set -euo pipefail
-          cd artifacts
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
+          (cd artifacts && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#v}"
+          node scripts/install/make-runtime.mjs artifacts runtime/pins.json "$VERSION" artifacts/runtime.json
+          cat artifacts/runtime.json
 
       - name: 创建 Release
         env:
@@ -121,5 +129,5 @@ jobs:
           else
             TAG="${GITHUB_REF_NAME}"
           fi
-          gh release create "$TAG" artifacts/*.tar.gz artifacts/*.zip artifacts/SHA256SUMS \
+          gh release create "$TAG" artifacts/*.tar.gz artifacts/*.zip artifacts/SHA256SUMS artifacts/runtime.json \
             --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes

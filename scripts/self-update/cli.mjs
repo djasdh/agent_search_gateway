@@ -1129,6 +1129,68 @@ function runInherit(command, args, { cwd, timeoutMs = 180000 } = {}) {
 
 export async function restartGateway(root) {
   const isWindows = process.platform === 'win32';
+
+  // 安装器注册的用户级服务优先：start-all 是前台 supervisor，
+  // 直接重启服务比杀 gateway 子进程更稳。
+  if (!isWindows) {
+    try {
+      const active = await run(
+        'systemctl',
+        ['--user', 'is-active', 'agent-search-gateway.service'],
+        { cwd: root },
+      );
+      if (active.code === 0) {
+        log('重启 systemd 用户服务: agent-search-gateway.service');
+        const result = await runInherit(
+          'systemctl',
+          ['--user', 'restart', 'agent-search-gateway.service'],
+          { cwd: root },
+        );
+        return {
+          ran: true,
+          ok: result.code === 0,
+          manual: 'systemctl --user restart agent-search-gateway.service',
+        };
+      }
+    } catch {
+      /* 没有 systemd 时回退 gateway.sh */
+    }
+
+    if (process.platform === 'darwin') {
+      const uid = typeof process.getuid === 'function' ? process.getuid() : '';
+      const label = 'com.djasdh.agent-search-gateway';
+      try {
+        const result = await runInherit(
+          'launchctl',
+          ['kickstart', '-k', `gui/${uid}/${label}`],
+          { cwd: root },
+        );
+        if (result.code === 0) {
+          return {
+            ran: true,
+            ok: true,
+            manual: `launchctl kickstart -k gui/${uid}/${label}`,
+          };
+        }
+      } catch {
+        /* 回退 gateway.sh */
+      }
+    }
+  } else {
+    try {
+      const query = await run('schtasks', ['/query', '/tn', 'AgentSearchGateway'], { cwd: root });
+      if (query.code === 0) {
+        await run('schtasks', ['/end', '/tn', 'AgentSearchGateway'], { cwd: root });
+        const result = await runInherit('schtasks', ['/run', '/tn', 'AgentSearchGateway'], {
+          cwd: root,
+        });
+        return { ran: true, ok: result.code === 0, manual: 'schtasks /run /tn AgentSearchGateway' };
+      }
+    } catch {
+      /* 回退 gateway.ps1 */
+    }
+  }
+
   const script = path.join(root, 'scripts', isWindows ? 'gateway.ps1' : 'gateway.sh');
   const manual = isWindows
     ? 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\gateway.ps1 restart'
@@ -1250,6 +1312,57 @@ async function ensureDataDirs(dataDir) {
   await fsp.mkdir(path.join(dataDir, 'download-cache'), { recursive: true });
   await fsp.mkdir(path.join(dataDir, 'releases'), { recursive: true });
   await fsp.mkdir(path.join(dataDir, 'update-tmp'), { recursive: true });
+}
+
+/** 切换版本后，如果 runtime/pins.json 里的依赖版本变化，调用新包的安装器更新依赖。 */
+async function updateDepsIfNeeded({ root, targetDir }) {
+  const pinsFile = path.join(targetDir, 'runtime', 'pins.json');
+  const cli = path.join(targetDir, 'scripts', 'install', 'cli.mjs');
+  if (!(await pathExists(pinsFile)) || !(await pathExists(cli))) {
+    log('安装包不含 runtime/pins.json 或安装器，跳过依赖联动。');
+    return { skipped: true };
+  }
+
+  let pins;
+  try {
+    pins = JSON.parse(await fsp.readFile(pinsFile, 'utf8'));
+  } catch (error) {
+    warn(`读取 runtime/pins.json 失败，跳过依赖联动: ${error.message}`);
+    return { skipped: true };
+  }
+
+  const stateFile = path.join(root, 'data', 'runtime', 'deps.json');
+  let state = null;
+  try {
+    state = JSON.parse(await fsp.readFile(stateFile, 'utf8'));
+  } catch {
+    state = null;
+  }
+  const same =
+    state &&
+    JSON.stringify(state.searxng) === JSON.stringify(pins.searxng) &&
+    JSON.stringify(state.flaresolverr) === JSON.stringify(pins.flaresolverr) &&
+    state.playwright === pins.playwright;
+  if (same) {
+    log('依赖版本未变化，仅刷新 launch.json。');
+    const result = await runInherit(
+      process.execPath,
+      [cli, '--install-root', root, '--launch-only'],
+      { cwd: root },
+    );
+    if (result.code !== 0) warn('刷新 launch.json 失败；请检查日志。');
+    return { skipped: true };
+  }
+
+  log('依赖版本变化，更新 searxng / FlareSolverr / Playwright ...');
+  const result = await runInherit(process.execPath, [cli, '--install-root', root, '--deps-only'], {
+    cwd: root,
+  });
+  if (result.code !== 0) {
+    warn('依赖更新失败；网关仍会用现有依赖启动，请检查日志。');
+    return { ok: false };
+  }
+  return { ok: true };
 }
 
 /**
@@ -1468,6 +1581,11 @@ export async function main(argv = process.argv.slice(2)) {
         switched.mode === 'symlink' ? 'data/current 符号链接 + data/current.json' : 'data/current.json'
       }）`,
     );
+
+    // ---- 5.5 依赖联动 ----
+    await updateDepsIfNeeded({ root, targetDir }).catch((error) => {
+      warn(`依赖联动异常: ${error.message}`);
+    });
 
     // ---- 6. 重启与健康检查 ----
     if (opts.noRestart) {
