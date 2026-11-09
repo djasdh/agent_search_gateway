@@ -495,6 +495,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - `opencli` 只在 `gateway.yaml` 已有 `weibo` 段时写 `weibo.cli.command`；私有分支没有该段时只安装、不写配置。
 - 专栏服务需要登录态：在启动网关的环境里设置 `BILI_COOKIE` 或 `BILI_COOKIE_FILE`，不要写进 `gateway.yaml`。
 - 如果 PATH 里没有 Node，薄包装会自动下载官方 LTS 到 `data/toolchain/node/`。
+- 代理环境：脚本读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`，优先用系统 `curl` 下载（Windows 10+ 自带 `curl.exe`）。
 
 ## 网关自更新（一个平台一个）
 
@@ -517,6 +518,7 @@ scripts\self-update\windows.cmd           # Windows
 - 自更新只切换 `dist/` 与 `node_modules/`；`scripts/` 属于安装器，不随版本覆盖（升级安装器请重新拉取仓库）。
 - 只保留最近 3 个版本；当前/上一版本记录在 `data/installed.json`。
 - 完整包包含生产 `node_modules`，目标机器不需要 npm/tsc；Playwright 浏览器仍需首次 `npx playwright install chromium` 或已有浏览器。
+- 代理环境：脚本读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`，优先用系统 `curl` 下载；GitHub API 元数据仍走 Node `fetch`。
 
 ## 管理脚本
 

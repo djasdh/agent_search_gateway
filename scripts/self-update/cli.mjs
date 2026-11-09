@@ -32,6 +32,16 @@ const RELEASES_KEEP = 3;
 const HEALTH_TIMEOUT_MS = 30000;
 const HEALTH_INTERVAL_MS = 1000;
 
+// 代理环境变量（curl 会自动读取；这里用于决定下载顺序与错误提示）
+const PROXY_ENV_KEYS = [
+  'HTTPS_PROXY',
+  'https_proxy',
+  'HTTP_PROXY',
+  'http_proxy',
+  'ALL_PROXY',
+  'all_proxy',
+];
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 // 平台标识映射：process.platform + process.arch -> 发布资产平台后缀
@@ -55,6 +65,8 @@ const USAGE = `用法: node scripts/self-update/cli.mjs [选项]
 
 环境变量:
   GITHUB_TOKEN        GitHub 令牌，用于避免 API 限流
+  HTTPS_PROXY         代理地址；设置后优先用系统 curl/wget 下载资产
+                      （也支持 https_proxy / HTTP_PROXY / ALL_PROXY 等）
 
 说明:
   - gateway.yaml、secrets.yaml 与 data/ 始终保留在仓库根，不随版本切换；
@@ -295,6 +307,14 @@ function assertHttps(url) {
   return parsed;
 }
 
+/** 返回首个非空的代理环境变量名，没有则返回 null */
+export function proxyEnvName() {
+  for (const key of PROXY_ENV_KEYS) {
+    if (process.env[key] && process.env[key].trim()) return key;
+  }
+  return null;
+}
+
 function authHeaders(url, token, accept) {
   const headers = {
     'User-Agent': 'agent-search-gateway-self-update',
@@ -385,18 +405,10 @@ export async function resolveRelease({ repo, version, token }) {
   }
 }
 
-export async function downloadFile(url, dest, token) {
-  assertHttps(url);
+async function downloadWithFetch(url, tmp, headers) {
   const res = await fetchWithTimeout(
     url,
-    {
-      headers: authHeaders(
-        url,
-        token,
-        assertHttps(url).hostname === 'api.github.com' ? 'application/octet-stream' : '*/*',
-      ),
-      redirect: 'follow',
-    },
+    { headers, redirect: 'follow' },
     120000,
   );
 
@@ -408,16 +420,168 @@ export async function downloadFile(url, dest, token) {
   }
   // 跟随重定向后仍然要求 https
   assertHttps(res.url || url);
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(tmp));
+}
+
+async function downloadWithCurl(url, tmp, headers) {
+  // Windows 10+ 自带 curl.exe
+  const command = process.platform === 'win32' ? 'curl.exe' : 'curl';
+  const args = [
+    '--fail',
+    '--location',
+    '--silent',
+    '--show-error',
+    '--retry',
+    '2',
+    '--connect-timeout',
+    '20',
+    '--max-time',
+    '600',
+    // 限制初始请求与重定向都只能使用 https
+    '--proto',
+    '=https',
+  ];
+  for (const [key, value] of Object.entries(headers)) {
+    args.push('-H', `${key}: ${value}`);
+  }
+  args.push('--output', tmp, url);
+
+  const result = await run(command, args);
+  if (result.code !== 0) {
+    const detail = truncate(result.stderr, 500);
+    throw new UpdateError(`curl 退出码 ${result.code}${detail ? `：${detail}` : ''}`);
+  }
+}
+
+/** 让只认小写代理变量的 wget 也能复用大写变量 */
+function wgetProxyEnv() {
+  const env = { ...process.env };
+  const aliases = [
+    ['HTTPS_PROXY', 'https_proxy'],
+    ['HTTP_PROXY', 'http_proxy'],
+    ['ALL_PROXY', 'all_proxy'],
+    ['NO_PROXY', 'no_proxy'],
+  ];
+  for (const [upper, lower] of aliases) {
+    if (!env[lower] && env[upper]) env[lower] = env[upper];
+  }
+  return env;
+}
+
+async function downloadWithWget(url, tmp, headers) {
+  const command = process.platform === 'win32' ? 'wget.exe' : 'wget';
+  // --server-response 用于检查每一跳重定向；--https-only 只覆盖递归模式，
+  // 因此还需要在下面自行校验 Location 头。
+  const args = [
+    '-nv',
+    '--server-response',
+    '--https-only',
+    '--max-redirect=5',
+    '--timeout=60',
+    '--tries=2',
+  ];
+  for (const [key, value] of Object.entries(headers)) {
+    args.push('--header', `${key}: ${value}`);
+  }
+  args.push('-O', tmp, url);
+
+  const result = await run(command, args, { env: wgetProxyEnv() });
+  if (result.code !== 0) {
+    const detail = truncate(result.stderr, 500);
+    throw new UpdateError(`wget 退出码 ${result.code}${detail ? `：${detail}` : ''}`);
+  }
+
+  // 逐跳解析 Location，拒绝任何降级到 http 的重定向
+  let current = url;
+  for (const match of result.stderr.matchAll(/^\s*Location:\s*(\S+)\s*$/gim)) {
+    let next;
+    try {
+      next = new URL(match[1], current);
+    } catch {
+      throw new UpdateError(`wget 重定向地址不合法: ${match[1]}`);
+    }
+    if (next.protocol !== 'https:') {
+      throw new UpdateError(`安全限制：wget 尝试重定向到非 https 地址 ${next.href}`);
+    }
+    current = next.href;
+  }
+}
+
+/**
+ * 下载到与目标同目录的临时文件，成功后原子 rename。
+ *
+ * 顺序：
+ *   - 检测到代理变量：curl -> wget -> Node fetch（curl/wget 会读取代理环境变量）
+ *   - 未检测到代理：Node fetch -> curl -> wget
+ * 全部失败时删除临时文件，并给出代理设置提示。
+ */
+export async function downloadFile(url, dest, token) {
+  assertHttps(url);
+  const isApiHost = assertHttps(url).hostname === 'api.github.com';
+  const headers = authHeaders(
+    url,
+    token,
+    isApiHost ? 'application/octet-stream' : '*/*',
+  );
+  const proxyKey = proxyEnvName();
 
   await fsp.mkdir(path.dirname(dest), { recursive: true });
   const tmp = `${dest}.part-${randomSuffix()}`;
+  const attempts = [];
+
+  const viaFetch = () => downloadWithFetch(url, tmp, headers);
+  const viaCurl = () => downloadWithCurl(url, tmp, headers);
+  const viaWget = () => downloadWithWget(url, tmp, headers);
+
+  const sequence = proxyKey
+    ? [
+        ['curl', viaCurl],
+        ['wget', viaWget],
+        ['Node fetch', viaFetch],
+      ]
+    : [
+        ['Node fetch', viaFetch],
+        ['curl', viaCurl],
+        ['wget', viaWget],
+      ];
+
   try {
-    await pipeline(Readable.fromWeb(res.body), createWriteStream(tmp));
-    await fsp.rename(tmp, dest);
-  } catch (error) {
+    for (const [label, attempt] of sequence) {
+      try {
+        await attempt();
+        const stat = await fsp.stat(tmp);
+        if (!stat.isFile() || stat.size === 0) {
+          throw new UpdateError('下载内容为空');
+        }
+        await fsp.rename(tmp, dest);
+        if (label !== 'Node fetch') {
+          log(`已通过 ${label} 下载: ${path.basename(dest)}`);
+        }
+        return label;
+      } catch (error) {
+        const reason = truncate(
+          error && error.message ? error.message : String(error),
+          500,
+        ).replace(/\s*\n\s*/g, ' ');
+        attempts.push(`${label}: ${reason}`);
+        await fsp.rm(tmp, { force: true }).catch(() => {});
+        if (proxyKey && label === 'curl') {
+          warn('curl 下载失败，继续尝试 wget / Node fetch。');
+        } else if (!proxyKey && label === 'Node fetch') {
+          warn('内置 fetch 下载失败，尝试回退到 curl/wget ...');
+        }
+      }
+    }
+  } finally {
     await fsp.rm(tmp, { force: true }).catch(() => {});
-    throw new UpdateError(`写入下载文件失败: ${dest}\n${error.message}`);
   }
+
+  const detail = attempts.map((item, index) => `  ${index + 1}. ${item}`).join('\n');
+  const hint = proxyKey
+    ? `已检测到代理环境变量 ${proxyKey}；请确认代理可用（例如 HTTPS_PROXY=http://127.0.0.1:7897），并检查 NO_PROXY 设置。`
+    : '若在代理环境，请设置 HTTPS_PROXY（或 https_proxy），例如 HTTPS_PROXY=http://127.0.0.1:7897 后重试。';
+
+  throw new UpdateError(`下载失败: ${url}\n${detail}\n${hint}`);
 }
 
 // ---------------------------------------------------------------------------

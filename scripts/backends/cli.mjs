@@ -252,16 +252,49 @@ async function githubLatestRelease(name, repo) {
   return data;
 }
 
-async function fetchText(name, url) {
-  const response = await fetchWithContext(url, { headers: githubHeaders("application/octet-stream") });
-  if (!response.ok) {
-    throw new Error(`下载失败（HTTP ${response.status}）：${url}`);
+async function fetchText(name, url, displayName) {
+  assertHttpsUrl(url);
+  const temporary = path.join(
+    os.tmpdir(),
+    `asg-text-${process.pid}-${crypto.randomBytes(4).toString("hex")}.txt`,
+  );
+  try {
+    await downloadFile(name, url, temporary, displayName || "校验文件");
+    return fs.readFileSync(temporary, "utf8");
+  } finally {
+    fs.rmSync(temporary, { force: true });
   }
-  void name;
-  return response.text();
 }
 
-async function downloadFile(name, url, destination, displayName) {
+const PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "https_proxy",
+  "HTTP_PROXY",
+  "http_proxy",
+  "ALL_PROXY",
+  "all_proxy",
+];
+
+function hasProxyEnv() {
+  return PROXY_ENV_KEYS.some((key) => {
+    const value = process.env[key];
+    return typeof value === "string" && value.trim() !== "";
+  });
+}
+
+function assertHttpsUrl(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`下载地址不合法：${url}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`出于安全考虑，仅允许 https 下载：${url}`);
+  }
+}
+
+async function fetchToFile(url, destination) {
   const response = await fetchWithContext(url, {
     headers: githubHeaders("application/octet-stream"),
     redirect: "follow",
@@ -272,10 +305,156 @@ async function downloadFile(name, url, destination, displayName) {
   if (!response.body) {
     throw new Error(`下载失败：响应没有内容（${url}）`);
   }
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
   await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination));
-  const size = fs.statSync(destination).size;
-  log(name, `下载完成：${displayName || path.basename(destination)}（${formatBytes(size)}）`);
+}
+
+async function downloadFile(name, url, destination, displayName) {
+  assertHttpsUrl(url);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+
+  const label = displayName || path.basename(destination);
+  const partFile = path.join(
+    path.dirname(destination),
+    `.asg-download-${process.pid}-${crypto.randomBytes(4).toString("hex")}.part`,
+  );
+  const proxyConfigured = hasProxyEnv();
+  const errors = [];
+
+  const tryTool = (command, args, toolLabel) => {
+    fs.rmSync(partFile, { force: true });
+    const result = spawnSync(command, args, {
+      cwd: ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    if (result.error) {
+      if (result.error.code === "ENOENT") {
+        errors.push(`${toolLabel}: 未找到`);
+        return "missing";
+      }
+      errors.push(`${toolLabel}: ${result.error.message}`);
+      return "failed";
+    }
+    if (result.status !== 0) {
+      const detail = (result.stderr || "")
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(-3)
+        .join(" ");
+      errors.push(`${toolLabel}: 退出码 ${result.status}${detail ? `（${detail}）` : ""}`);
+      fs.rmSync(partFile, { force: true });
+      return "failed";
+    }
+    if (!fs.existsSync(partFile) || fs.statSync(partFile).size === 0) {
+      errors.push(`${toolLabel}: 下载结果为空`);
+      fs.rmSync(partFile, { force: true });
+      return "failed";
+    }
+    return "ok";
+  };
+
+  const tryCurl = () =>
+    tryTool(
+      "curl",
+      [
+        "-fsSL",
+        "-H",
+        "Accept: application/octet-stream",
+        "--retry",
+        "3",
+        "--connect-timeout",
+        "20",
+        "--output",
+        partFile,
+        url,
+      ],
+      "curl",
+    );
+
+  const tryWget = () =>
+    tryTool(
+      "wget",
+      [
+        "-q",
+        "--header=Accept: application/octet-stream",
+        "--tries=3",
+        "--timeout=20",
+        "-O",
+        partFile,
+        url,
+      ],
+      "wget",
+    );
+
+  const tryFetch = async () => {
+    fs.rmSync(partFile, { force: true });
+    try {
+      await fetchToFile(url, partFile);
+      if (!fs.existsSync(partFile) || fs.statSync(partFile).size === 0) {
+        errors.push("Node fetch: 下载结果为空");
+        fs.rmSync(partFile, { force: true });
+        return "failed";
+      }
+      return "ok";
+    } catch (error) {
+      errors.push(`Node fetch: ${error.message}`);
+      fs.rmSync(partFile, { force: true });
+      return "failed";
+    }
+  };
+
+  try {
+    let success = false;
+
+    if (proxyConfigured) {
+      // 有代理环境变量时 curl/wget 会自动读取，优先走系统工具。
+      const curlStatus = tryCurl();
+      if (curlStatus === "ok") {
+        success = true;
+      } else if (curlStatus === "missing") {
+        const wgetStatus = tryWget();
+        success = wgetStatus === "ok";
+      }
+      if (!success) {
+        success = (await tryFetch()) === "ok";
+      }
+    } else {
+      // 没有代理环境变量时先直连，失败再回退系统工具。
+      success = (await tryFetch()) === "ok";
+      if (!success) {
+        const curlStatus = tryCurl();
+        if (curlStatus === "ok") {
+          success = true;
+        } else if (curlStatus === "missing") {
+          const wgetStatus = tryWget();
+          success = wgetStatus === "ok";
+        }
+      }
+    }
+
+    if (!success) {
+      const hint = proxyConfigured
+        ? "已检测到代理环境变量，但 curl/wget/Node fetch 均下载失败，请确认代理地址可用。"
+        : "若在代理环境，请设置 HTTPS_PROXY（例如 http://127.0.0.1:7897）后重试。";
+      throw new Error(
+        `下载失败：${label}\n${errors.map((item) => `- ${item}`).join("\n")}\n${hint}`,
+      );
+    }
+
+    const size = fs.statSync(partFile).size;
+    try {
+      fs.renameSync(partFile, destination);
+    } catch (error) {
+      if (!IS_WIN) throw error;
+      // Windows 上 rename 不能覆盖已存在的目标文件。
+      fs.rmSync(destination, { force: true });
+      fs.renameSync(partFile, destination);
+    }
+    log(name, `下载完成：${label}（${formatBytes(size)}）`);
+  } finally {
+    fs.rmSync(partFile, { force: true });
+  }
 }
 
 function formatBytes(bytes) {
@@ -575,7 +754,7 @@ const ytdlpBackend = {
     try {
       log(this.name, `${action}：下载 ${asset.name} ...`);
       await downloadFile(this.name, releaseAssetUrl(asset), temporary, asset.name);
-      const sumsText = await fetchText(this.name, releaseAssetUrl(sumsAsset));
+      const sumsText = await fetchText(this.name, releaseAssetUrl(sumsAsset), sumsAsset.name);
       await verifySha256(this.name, temporary, sumsText, asset.name);
 
       const destination = path.join(this.installDir, target.binary);
@@ -772,7 +951,7 @@ const articleBackend = {
     try {
       log(this.name, `${action}：下载 ${asset.name} ...`);
       await downloadFile(this.name, releaseAssetUrl(asset), temporaryArchive, asset.name);
-      const sumsText = await fetchText(this.name, releaseAssetUrl(sumsAsset));
+      const sumsText = await fetchText(this.name, releaseAssetUrl(sumsAsset), sumsAsset.name);
       await verifySha256(this.name, temporaryArchive, sumsText, asset.name);
 
       fs.rmSync(temporaryExtract, { recursive: true, force: true });

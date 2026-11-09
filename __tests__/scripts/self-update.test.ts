@@ -75,6 +75,31 @@ describe("参数与版本", () => {
   });
 });
 
+describe("代理环境", () => {
+  it("按优先级识别代理变量", () => {
+    const keys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+    const backup = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    try {
+      for (const k of keys) delete process.env[k];
+      expect(su.proxyEnvName()).toBe(null);
+
+      process.env.ALL_PROXY = "http://127.0.0.1:7897";
+      expect(su.proxyEnvName()).toBe("ALL_PROXY");
+
+      process.env.https_proxy = "http://127.0.0.1:7897";
+      expect(su.proxyEnvName()).toBe("https_proxy");
+
+      process.env.HTTPS_PROXY = "http://127.0.0.1:7897";
+      expect(su.proxyEnvName()).toBe("HTTPS_PROXY");
+    } finally {
+      for (const k of keys) {
+        if (backup[k] === undefined) delete process.env[k];
+        else process.env[k] = backup[k];
+      }
+    }
+  });
+});
+
 describe("校验和", () => {
   const a = "a".repeat(64);
   const b = "b".repeat(64);
