@@ -79,7 +79,8 @@ jobs:
             );
           " "$STAGE/version.json" "$VERSION" "${{ matrix.platform }}"
           if [ "${{ matrix.platform }}" = "win32-x64" ]; then
-            tar -a -c -f "release/${NAME}.zip" -C release "$NAME"
+            # Git Bash 的 GNU tar 不支持 -a 生成 zip；用 Windows 自带的 Compress-Archive。
+            powershell -NoProfile -NonInteractive -Command "Compress-Archive -LiteralPath 'release/${NAME}' -DestinationPath 'release/${NAME}.zip' -CompressionLevel Optimal"
           else
             tar -czf "release/${NAME}.tar.gz" -C release "$NAME"
           fi

@@ -152,6 +152,18 @@ $actualSha = Get-Sha256 $archive
 if ($assetSha -and $assetSha -ne $actualSha) { Fail "安装包 SHA256 校验失败" }
 Write-Log "SHA256 校验通过"
 
+# 防御：确认资产真的是 zip（历史 CI 曾把 tar 误命名为 .zip）
+$stream = [System.IO.File]::OpenRead($archive)
+try {
+  $header = New-Object byte[] 4
+  $null = $stream.Read($header, 0, 4)
+} finally {
+  $stream.Dispose()
+}
+if ($header.Length -lt 4 -or $header[0] -ne 0x50 -or $header[1] -ne 0x4B) {
+  Fail "安装包不是有效 zip（文件头不是 PK）：$assetName"
+}
+
 $tmpExtract = Join-Path $env:TEMP ("asg-extract-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tmpExtract | Out-Null
 try {
