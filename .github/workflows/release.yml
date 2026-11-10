@@ -79,8 +79,13 @@ jobs:
             );
           " "$STAGE/version.json" "$VERSION" "${{ matrix.platform }}"
           if [ "${{ matrix.platform }}" = "win32-x64" ]; then
-            # Git Bash 的 GNU tar 不支持 -a 生成 zip；用 Windows 自带的 Compress-Archive。
-            powershell -NoProfile -NonInteractive -Command "Compress-Archive -LiteralPath 'release/${NAME}' -DestinationPath 'release/${NAME}.zip' -CompressionLevel Optimal"
+            # Git Bash 的 GNU tar 不支持 -a 生成 zip；用 Compress-Archive。
+            # 优先 pwsh 7：.NET Core 写标准 / 分隔符；PS 5.1 会写 \，其他工具兼容性差。
+            if command -v pwsh >/dev/null 2>&1; then
+              pwsh -NoProfile -NonInteractive -Command "Compress-Archive -LiteralPath 'release/${NAME}' -DestinationPath 'release/${NAME}.zip' -CompressionLevel Optimal"
+            else
+              powershell -NoProfile -NonInteractive -Command "Compress-Archive -LiteralPath 'release/${NAME}' -DestinationPath 'release/${NAME}.zip' -CompressionLevel Optimal"
+            fi
           else
             tar -czf "release/${NAME}.tar.gz" -C release "$NAME"
           fi

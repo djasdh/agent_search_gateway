@@ -751,14 +751,15 @@ export async function extractArchive(file, kind, destDir) {
     return;
   }
 
-  // zip：优先系统 tar（Windows 10+ 的 bsdtar 支持 zip），失败再换工具
-  let result = await run('tar', ['-xf', file, '-C', destDir]);
-  if (result.code === 0) return;
-
+  // Windows 优先 Expand-Archive：兼容 Compress-Archive 生成的 \ 分隔条目。
   if (process.platform === 'win32') {
     await extractWithPowerShell(file, destDir);
     return;
   }
+
+  // 其它平台优先系统 tar（Windows 10+ 的 bsdtar 也支持 zip），失败再换工具
+  let result = await run('tar', ['-xf', file, '-C', destDir]);
+  if (result.code === 0) return;
 
   result = await run('unzip', ['-q', '-o', file, '-d', destDir]);
   if (result.code !== 0) {
