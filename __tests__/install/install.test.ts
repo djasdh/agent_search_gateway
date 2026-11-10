@@ -169,4 +169,12 @@ describe("引导脚本语法", () => {
     const result = spawnSync("bash", ["-n", join(ROOT, "scripts/install.sh")], { encoding: "utf8" });
     expect(result.status).toBe(0);
   });
+
+  it("install.ps1 无 BOM、不用 param 块、不用 exit（兼容 irm | iex）", () => {
+    const buffer = readFileSync(join(ROOT, "scripts/install.ps1"));
+    expect(buffer[0]).not.toBe(0xef);
+    const text = buffer.toString("utf8");
+    expect(text).not.toMatch(/^\s*param\s*\(/m);
+    expect(text).not.toMatch(/^\s*exit\b/m);
+  });
 });

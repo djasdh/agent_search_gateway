@@ -1,4 +1,4 @@
-﻿# agent_search_gateway 一键安装器（Windows，PowerShell 5.1+）
+# agent_search_gateway 一键安装器（Windows，PowerShell 5.1+）
 #
 # 用法：
 #   irm https://raw.githubusercontent.com/djasdh/agent_search_gateway/master/scripts/install.ps1 | iex
@@ -7,16 +7,35 @@
 # 引导脚本只负责：准备 Node、下载 Release 完整包、校验、解压、切换 current；
 # 配置/依赖/浏览器/自启交给包内的 scripts/install/cli.mjs。
 
-param(
-  [string]$Dir = "$env:USERPROFILE\agent_search_gateway",
-  [string]$Repo = "djasdh/agent_search_gateway",
-  [string]$Version = "",
-  [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest
-)
-
 $ErrorActionPreference = "Stop"
 $MinNodeMajor = 20
 $Platform = "win32-x64"
+
+# 不用 param 块：`irm ... | iex` 时 PowerShell 5.1 可能无法识别脚本参数块。
+# 统一从 $args 解析，兼容 `-File install.ps1 -Dir ...` 与 `irm | iex` 两种方式。
+$Dir = "$env:USERPROFILE\agent_search_gateway"
+$Repo = "djasdh/agent_search_gateway"
+$Version = ""
+$Rest = @()
+
+for ($i = 0; $i -lt $args.Count; $i++) {
+  $arg = [string]$args[$i]
+  if ($arg -eq "-Dir" -or $arg -eq "--dir") {
+    $i++
+    if ($i -lt $args.Count) { $Dir = [string]$args[$i] }
+  } elseif ($arg -eq "-Repo" -or $arg -eq "--repo") {
+    $i++
+    if ($i -lt $args.Count) { $Repo = [string]$args[$i] }
+  } elseif ($arg -eq "-Version" -or $arg -eq "--version") {
+    $i++
+    if ($i -lt $args.Count) { $Version = [string]$args[$i] }
+  } elseif ($arg -eq "-h" -or $arg -eq "--help") {
+    Write-Host "用法: install.ps1 [-Dir <目录>] [-Repo <owner/name>] [-Version <v>] [cli 选项]"
+    return
+  } else {
+    $Rest += $arg
+  }
+}
 
 function Write-Log([string]$Message) {
   Write-Host "[install] $Message"
@@ -24,7 +43,8 @@ function Write-Log([string]$Message) {
 
 function Fail([string]$Message) {
   Write-Host "[install] 错误: $Message" -ForegroundColor Red
-  exit 1
+  # 用 throw 而不是 exit：`irm ... | iex` 时 exit 会关闭用户的 PowerShell 会话。
+  throw $Message
 }
 
 function Download-File([string]$Url, [string]$Dest) {
@@ -175,4 +195,6 @@ if ($Rest -and $Rest.Count -gt 0) {
 } else {
   & $NodeBin $cli --install-root $Root
 }
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) {
+  throw "安装配置失败（退出码 $LASTEXITCODE）"
+}
