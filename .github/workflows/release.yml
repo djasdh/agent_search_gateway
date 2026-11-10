@@ -66,6 +66,12 @@ jobs:
           cp -r dist node_modules package.json package-lock.json \
             gateway.yaml.example secrets.yaml.example scripts runtime \
             README.md LICENSE THIRD_PARTY_LICENSES.md "$STAGE/"
+          # 原生 searxng 安装所需资源（Windows / 无 Docker 回退）
+          mkdir -p "$STAGE/docker/searxng" "$STAGE/searxng-ext/searx/engines" "$STAGE/searxng-ext/searx/plugins"
+          cp docker/searxng/settings.template.yml docker/searxng/quota.config.json "$STAGE/docker/searxng/"
+          cp searxng-ext/searx/engines/*.py "$STAGE/searxng-ext/searx/engines/"
+          cp searxng-ext/searx/plugins/quota.py "$STAGE/searxng-ext/searx/plugins/"
+          cp searxng-ext/LICENSE "$STAGE/searxng-ext/"
           node -e "
             const fs = require('node:fs');
             fs.writeFileSync(
