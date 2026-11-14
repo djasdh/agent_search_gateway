@@ -1,34 +1,21 @@
 /**
  * 引擎对象统一抽象：一次 list/plan 在各存储适配器间共享的契约。
  *
- * - `EngineGroup` 是引擎的归属：searxng 引擎、网关以图搜图源、网关文本源；
- * - `EngineRecord` 是面向用户的一条引擎视图（id 稳定为 `${group}:${name}`）；
+ * - 公共类型（kind / group / record）在 `src/engines/types.ts`，CLI 与运行期共用；
  * - `EngineStore` 只负责「读列表」与「算写入计划」，不直接落盘。
  */
 
 import type { LoadedDocument } from "../config/gateway.js";
 import type { SearxngEngineState } from "../config/searxng.js";
 import type { RootPaths } from "../root.js";
+import type { EngineGroup, EngineRecord } from "../../engines/types.js";
 
-export type EngineKind = "searxng" | "gateway";
-
-/** 仅 `list --all`：该引擎来自本地文件还是 searxng 默认全量列表。 */
-export type EngineSource = "default" | "local";
-
-export type EngineGroup = "searxng" | "gateway.reverse_image" | "gateway.search";
-
-export interface EngineRecord {
-  /** `${group}:${name}` */
-  id: string;
-  group: EngineGroup;
-  name: string;
-  kind: EngineKind;
-  enabled: boolean;
-  available: boolean;
-  routing: string[];
-  requires?: string[];
-  source?: EngineSource;
-}
+export type {
+  EngineKind,
+  EngineSource,
+  EngineGroup,
+  EngineRecord,
+} from "../../engines/types.js";
 
 export interface EngineChange {
   group: EngineGroup;

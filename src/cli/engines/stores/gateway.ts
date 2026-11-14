@@ -2,7 +2,9 @@
  * gateway.yaml 存储适配器：以图搜图源（search.reverse_image.sources）与微博文本源
  * （search.weibo.enabled）。
  *
- * 顶层 `weibo.enabled` 是运行能力开关，归 `asg config`，引擎命令只读不写。
+ * 引擎元数据（名称 / 可用性 / routing / requires）来自 `src/engines/registry.ts`；
+ * 本 store 只负责 YAML 的读取与写入计划。顶层 `weibo.enabled` 是运行能力开关，
+ * 归 `asg config`，引擎命令只读不写。
  */
 
 import { documentToText, setYamlPath } from "../../config/gateway.js";
@@ -11,15 +13,10 @@ import {
   isGatewaySource,
   type GatewaySource,
 } from "../../../settings/gateway-sources.js";
-import { asObject, dig, nonEmptyString, stringArray } from "../shared.js";
+import { engineProvider, providersForGroup } from "../../../engines/registry.js";
+import type { EngineProviderContext } from "../../../engines/provider.js";
+import { asObject, stringArray } from "../shared.js";
 import type { EngineChange, EngineContext, EngineGroup, EnginePlan, EngineRecord, EngineStore } from "../types.js";
-
-function hasSecret(secrets: Record<string, unknown>, dotted: string): boolean {
-  const path = dotted.split(".");
-  if (path[0] !== "secrets") return false;
-  const value = dig(secrets, path.slice(1));
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 function currentSources(ctx: EngineContext): GatewaySource[] {
   const reverseImage = asObject(asObject(ctx.configPlain.search).reverse_image);
@@ -28,45 +25,41 @@ function currentSources(ctx: EngineContext): GatewaySource[] {
   return stringArray(reverseImage.sources).filter(isGatewaySource);
 }
 
-function reverseImageRecords(ctx: EngineContext): EngineRecord[] {
+function missingProvider(id: string): never {
+  throw new Error(`缺少内置引擎 provider：${id}`);
+}
+
+function reverseImageRecords(ctx: EngineContext, providerCtx: EngineProviderContext): EngineRecord[] {
   const sources = currentSources(ctx);
-  return GATEWAY_SOURCE_SPECS.map((spec) => {
-    const requires = [...spec.requires];
+  return providersForGroup("gateway.reverse_image").map((provider) => {
     const record: EngineRecord = {
-      id: `gateway.reverse_image:${spec.name}`,
-      group: "gateway.reverse_image",
-      name: spec.name,
-      kind: "gateway",
-      enabled: sources.includes(spec.name),
-      available: requires.every((path) => hasSecret(ctx.secrets, path)),
-      routing: ["source"],
+      id: provider.id,
+      group: provider.group,
+      name: provider.name,
+      kind: provider.kind,
+      enabled: sources.includes(provider.name as GatewaySource),
+      available: provider.available(providerCtx),
+      routing: provider.routing(providerCtx),
     };
-    if (requires.length > 0) record.requires = requires;
+    if (provider.requires && provider.requires.length > 0) record.requires = [...provider.requires];
     return record;
   });
 }
 
-function weiboRecord(ctx: EngineContext): EngineRecord {
-  const search = asObject(ctx.configPlain.search);
-  const searchWeibo = asObject(search.weibo);
-  const topWeibo = asObject(ctx.configPlain.weibo);
-  const category = nonEmptyString(searchWeibo.category) ?? "weibo";
-  const hotCategory = nonEmptyString(searchWeibo.hot_category) ?? "weibo_hot";
-  const rawCommand = asObject(topWeibo.cli).command;
-  // 只有「缺省」才回落到 opencli；显式空串表示未配置可用命令。
-  const command =
-    rawCommand === undefined ? "opencli" : typeof rawCommand === "string" ? rawCommand.trim() : "";
-
-  return {
-    id: "gateway.search:weibo",
-    group: "gateway.search",
-    name: "weibo",
-    kind: "gateway",
-    enabled: searchWeibo.enabled === true,
-    available: topWeibo.enabled === true && command.length > 0,
-    routing: [`category:${category}`, `category:${hotCategory}`],
-    requires: ["config:weibo.enabled"],
-  };
+function gatewaySearchRecords(providerCtx: EngineProviderContext): EngineRecord[] {
+  return providersForGroup("gateway.search").map((provider) => {
+    const record: EngineRecord = {
+      id: provider.id,
+      group: provider.group,
+      name: provider.name,
+      kind: provider.kind,
+      enabled: provider.enabled?.(providerCtx) ?? true,
+      available: provider.available(providerCtx),
+      routing: provider.routing(providerCtx),
+    };
+    if (provider.requires && provider.requires.length > 0) record.requires = [...provider.requires];
+    return record;
+  });
 }
 
 export class GatewayStore implements EngineStore {
@@ -74,7 +67,8 @@ export class GatewayStore implements EngineStore {
   readonly groups: readonly EngineGroup[] = ["gateway.reverse_image", "gateway.search"];
 
   list(ctx: EngineContext): EngineRecord[] {
-    return [...reverseImageRecords(ctx), weiboRecord(ctx)];
+    const providerCtx: EngineProviderContext = { config: ctx.configPlain, secrets: ctx.secrets };
+    return [...reverseImageRecords(ctx, providerCtx), ...gatewaySearchRecords(providerCtx)];
   }
 
   plan(changes: readonly EngineChange[], ctx: EngineContext): EnginePlan {
@@ -101,13 +95,18 @@ export class GatewayStore implements EngineStore {
       if (!same) setYamlPath(ctx.config.doc, ["search", "reverse_image", "sources"], next);
     }
 
+    const providerCtx: EngineProviderContext = { config: ctx.configPlain, secrets: ctx.secrets };
     const searchChanges = changes.filter((change) => change.group === "gateway.search");
     for (const change of searchChanges) {
-      if (change.name !== "weibo") continue;
-      const current = asObject(asObject(ctx.configPlain.search).weibo).enabled === true;
+      const provider =
+        engineProvider("gateway.search", change.name) ?? missingProvider(`gateway.search:${change.name}`);
+      if (!provider.enabledPath) {
+        throw new Error(`引擎 provider 缺少 enabledPath：${provider.id}`);
+      }
+      const current = provider.enabled?.(providerCtx) ?? true;
       if (current === change.enabled) continue;
-      setYamlPath(ctx.config.doc, ["search", "weibo", "enabled"], change.enabled);
-      changed.push("gateway.search:weibo");
+      setYamlPath(ctx.config.doc, [...provider.enabledPath], change.enabled);
+      changed.push(provider.id);
     }
 
     if (changed.length === 0) return { changed: [], writes: [] };

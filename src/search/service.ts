@@ -15,15 +15,7 @@ import type { EmbedResult } from "./embedding/types.js";
 import { loadLocalImage, publishImage, type LocalImage, type PublishResult } from "./image-publish.js";
 import { renderResults, renderSearchMarkdown } from "./render.js";
 import { rerankResults } from "./rerank.js";
-import { searchBaiduReverse } from "./baidu-reverse.js";
-import { searchWeibo, searchWeiboHot, type WeiboSourceResult } from "./weibo.js";
-import {
-  extractImageUrl,
-  searchTraceMoe,
-  searchTraceMoeUpload,
-  unionResults,
-} from "./reverse-image.js";
-import { searchSaucenao } from "./saucenao.js";
+import { extractImageUrl, unionResults } from "./reverse-image.js";
 import type { ImageInput, SourceCall } from "./sources.js";
 import {
   searchSearxng,
@@ -32,6 +24,13 @@ import {
   type SearxngResult,
   type SearxngResponse,
 } from "./searxng.js";
+import { engineProvider, providersForGroup } from "../engines/registry.js";
+import type {
+  EngineProvider,
+  EngineProviderContext,
+  GatewaySearchPlan,
+  GatewaySearchRuntime,
+} from "../engines/provider.js";
 
 export interface SearchParams {
   query: string;
@@ -178,14 +177,7 @@ export function isImageQuery(categories: string | undefined, extra: string[] = [
 }
 
 /** 请求类别里是否出现指定类别名（大小写不敏感，按逗号分隔）。 */
-export function hasCategory(categories: string | undefined, name: string): boolean {
-  const want = (name ?? "").trim().toLowerCase();
-  if (!want) return false;
-  return (categories ?? "")
-    .split(",")
-    .map((c) => c.trim().toLowerCase())
-    .some((c) => c === want);
-}
+export { hasCategory } from "./category.js";
 /**
  * 反向图搜触发判定（ADR-0010）：请求类别里出现配置的类别名（大小写不敏感）。
  * 「图就是 query」——类别只是开关，图片本身是以 URL 形式写在 query 里。
@@ -484,6 +476,11 @@ export function createSearchService(
   searchDeps: SearchDeps = {},
 ): SearchService {
   const { search, rerank, searxng, saucenao_api_key, weibo } = deps;
+  const providerCtx: EngineProviderContext = {
+    config: { search: search as unknown, weibo: weibo as unknown },
+    secrets: { search: { reverse_image: { saucenao: { api_key: saucenao_api_key } } } },
+    logger,
+  };
   const cache = new StringCache(search.cache_max_entries, search.cache_ttl_ms);
   const sem = new Semaphore(search.max_concurrent);
   const resolveDomainFilter = typeof domainFilter === "function" ? domainFilter : () => domainFilter;
@@ -514,67 +511,48 @@ export function createSearchService(
   };
 
   /**
-   * 微博搜索/热搜（ADR-0014）：网关侧文本源，完全不经过 searxng。
-   * 只保留微博候选 —— 不召回本地语料，避免把普通网页混进「只搜微博」的结果。
+   * 网关侧文本源（ADR-0014）：类别命中时完全不经过 searxng。
+   * 只保留该源候选 —— 不召回本地语料，避免把普通网页混进「只搜微博」的结果。
    */
-  async function searchWeiboSource(
+  async function searchGatewaySource(
+    provider: EngineProvider,
+    runtime: GatewaySearchRuntime,
     params: SearchParams,
-    hot: boolean,
+    plan: GatewaySearchPlan,
     tStart: number,
   ): Promise<SearchOutcome> {
     const requested = params.numResults ?? search.max_results;
     const limit = Math.min(requested, search.max_results_cap, search.weibo.limit);
     const query = (params.query ?? "").trim();
-    const displayQuery = hot ? "微博热搜" : query;
+    const hot = plan.hot;
+    const displayQuery = hot ? `${provider.displayName}热搜` : query;
     const release = await sem.acquire();
     const preMs = performance.now() - tStart;
     try {
-      const tUp = performance.now();
-      let source: WeiboSourceResult;
-      if (hot) {
-        source = await searchWeiboHot(
-          {
-            limit,
-            timeoutMs: search.weibo.timeout_ms,
-            retry: search.weibo.retry,
-            cacheTtlMs: search.weibo.cache_ttl_ms,
-          },
-          weibo.cli.command,
-        );
-      } else {
-        if (query === "") {
-          return {
-            ok: false,
-            code: ErrorCodes.SEARCH_INVALID,
-            text: withCode(ErrorCodes.SEARCH_INVALID, "微博搜索需要一个关键词。"),
-          };
-        }
-        source = await searchWeibo(
-          query,
-          {
-            limit,
-            timeoutMs: search.weibo.timeout_ms,
-            retry: search.weibo.retry,
-            cacheTtlMs: search.weibo.cache_ttl_ms,
-          },
-          weibo.cli.command,
-        );
+      if (!hot && query === "") {
+        return {
+          ok: false,
+          code: ErrorCodes.SEARCH_INVALID,
+          text: withCode(ErrorCodes.SEARCH_INVALID, `${provider.displayName}搜索需要一个关键词。`),
+        };
       }
+      const tUp = performance.now();
+      const source = await runtime.search(query, { hot, limit }, providerCtx);
       const upstreamMs = performance.now() - tUp;
 
       if (!source.ok) {
         const code =
           source.error.kind === "timeout" ? ErrorCodes.SEARCH_TIMEOUT : ErrorCodes.SEARCH_UPSTREAM;
         const hint =
-          source.error.kind === "auth"
-            ? "\n\n处理：在 Chrome 登录 weibo.com 后重试。"
+          source.error.kind === "auth" && provider.authHint
+            ? `\n\n处理：${provider.authHint}`
             : "";
         return {
           ok: false,
           code,
           text: withCode(
             code,
-            `微博${hot ? "热搜" : "搜索"}失败（${source.error.kind}）：${source.error.message}${hint}`,
+            `${provider.displayName}${hot ? "热搜" : "搜索"}失败（${source.error.kind}）：${source.error.message}${hint}`,
           ),
         };
       }
@@ -582,7 +560,7 @@ export function createSearchService(
       const data: SearxngResponse = { query: displayQuery, results: source.results };
       const engineCounts: Record<string, number> = {};
       for (const r of data.results) {
-        const name = r.engine ?? "weibo";
+        const name = r.engine ?? provider.name;
         engineCounts[name] = (engineCounts[name] ?? 0) + 1;
       }
 
@@ -633,7 +611,7 @@ export function createSearchService(
       });
 
       logger.debug(
-        `weibo ${hot ? "hot" : "search"} done: "${displayQuery}" (${ranked.length}/${cleaned.length} results)`,
+        `${provider.name} ${hot ? "hot" : "search"} done: "${displayQuery}" (${ranked.length}/${cleaned.length} results)`,
       );
       return { ok: true, text: rendered, cacheHit: false };
     } finally {
@@ -671,12 +649,18 @@ export function createSearchService(
         ),
       };
     }
-    // 微博搜索/热搜（ADR-0014）：类别命中即走网关侧文本源，完全不请求 searxng。
-    // 注意顺序：在 getEnabledEngines() 之前返回，避免为微博查询白打一次 searxng /config。
-    if (weibo.enabled && search.weibo.enabled && !reverseImage) {
-      const hot = hasCategory(params.categories, search.weibo.hot_category);
-      const only = !hot && hasCategory(params.categories, search.weibo.category);
-      if (hot || only) return searchWeiboSource(effParams, hot, tStart);
+    // 网关侧文本源（ADR-0014）：类别命中即走 provider，完全不请求 searxng。
+    // 注意顺序：在 getEnabledEngines() 之前返回，避免为文本源查询白打一次 searxng /config。
+    if (!reverseImage) {
+      for (const p of providersForGroup("gateway.search")) {
+        const runtime = p.runtime;
+        if (!runtime || runtime.kind !== "search") continue;
+        if (!p.available(providerCtx)) continue;
+        if (p.enabled && !p.enabled(providerCtx)) continue;
+        const plan = runtime.plan(params.categories, providerCtx);
+        if (!plan) continue;
+        return searchGatewaySource(p, runtime, effParams, plan, tStart);
+      }
     }
 
     const enabled = await getEnabledEngines();
@@ -749,60 +733,14 @@ export function createSearchService(
     const sourceTasks: Array<{ name: string; promise: Promise<SourceCall> }> = [];
     if (reverseImage && imageInput) {
       for (const name of search.reverse_image.sources) {
-        if (name === "tracemoe") {
-          const promise =
-            imageInput.kind === "bytes"
-              ? searchTraceMoeUpload(
-                  search.reverse_image.tracemoe_url,
-                  search.reverse_image.tracemoe_timeout_ms,
-                  imageInput.bytes,
-                  imageInput.filename,
-                  imageInput.mime,
-                  search.reverse_image.tracemoe_max_results,
-                )
-              : searchTraceMoe(
-                  search.reverse_image.tracemoe_url,
-                  search.reverse_image.tracemoe_timeout_ms,
-                  imageInput.url,
-                  search.reverse_image.tracemoe_max_results,
-                );
-          sourceTasks.push({ name, promise });
-        } else if (name === "saucenao") {
-          if (!saucenao_api_key) {
-            logger.debug("反向图搜：saucenao 未配置 api_key，跳过该源");
-            continue;
-          }
-          sourceTasks.push({
-            name,
-            promise: searchSaucenao(
-              {
-                apiKey: saucenao_api_key,
-                baseUrl: search.reverse_image.saucenao.url,
-                timeoutMs: search.reverse_image.saucenao.timeout_ms,
-                maxResults: search.reverse_image.saucenao.max_results,
-                minsim: search.reverse_image.saucenao.minsim,
-              },
-              imageInput,
-            ),
-          });
-        } else if (name === "baidu") {
-          if (!search.reverse_image.baidu.enabled) {
-            logger.debug("反向图搜：baidu 未启用，跳过该源");
-            continue;
-          }
-          sourceTasks.push({
-            name,
-            promise: searchBaiduReverse(
-              {
-                baseUrl: search.reverse_image.baidu.url,
-                timeoutMs: search.reverse_image.baidu.timeout_ms,
-                maxResults: search.reverse_image.baidu.max_results,
-                maxBytes: search.reverse_image.local_max_bytes,
-              },
-              imageInput,
-            ),
-          });
+        const p = engineProvider("gateway.reverse_image", name);
+        const runtime = p?.runtime;
+        if (!p || !runtime || runtime.kind !== "reverse_image") continue;
+        if (!p.available(providerCtx)) {
+          logger.debug(`反向图搜：${name} 未配置/未启用，跳过该源`);
+          continue;
         }
+        sourceTasks.push({ name, promise: runtime.search(imageInput, providerCtx) });
       }
       for (const t of sourceTasks) t.promise.catch(() => undefined);
     }

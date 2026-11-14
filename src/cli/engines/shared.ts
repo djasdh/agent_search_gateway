@@ -1,27 +1,8 @@
-/** 引擎存储适配器共用的小工具（只读普通 JS 值）。 */
+/** 引擎存储适配器共用的小工具（从运行期共享层重新导出）。 */
 
-export function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
+import { asObject, stringArray } from "../../engines/values.js";
 
-export function dig(obj: unknown, path: readonly string[]): unknown {
-  let cur: unknown = obj;
-  for (const key of path) {
-    if (!cur || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[key];
-  }
-  return cur;
-}
-
-export function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-export function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
+export { stringArray, dig, asObject, nonEmptyString, numberOr } from "../../engines/values.js";
 
 /** `search.engines` 的 resident / rotating 引用列表。 */
 export function routingFor(configPlain: Record<string, unknown>, name: string): string[] {

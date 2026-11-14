@@ -309,6 +309,8 @@ asg engines disable <name|group:name...>
 }
 ```
 
+网关原生引擎的元数据与运行期实现由 `src/engines/registry.ts` 的 provider 注册表提供；新增源只需加 provider 文件与注册行，不改 CLI 层。
+
 ### 5.6 插件
 
 ```text
