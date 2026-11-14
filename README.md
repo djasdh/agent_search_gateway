@@ -493,7 +493,8 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - `gateway.yaml` 的 `searxng.url` 必须指向 searxng 实际端口（源码运行 `127.0.0.1:8888`；Docker 内为服务名 `http://searxng:8080`），flaresolverr 同理（`8192`／`http://flaresolverr:8191`）
 - settings.yml 是独立配置文件，**不要放 `/tmp`**（重启会丢）
 - Docker 下 `settings.yml` 由 `docker/searxng/entrypoint.sh` 用环境变量渲染，**不要手改容器内文件**
-- 引擎开关用 `asg engines enable/disable <name>`；它只改 settings.yml，然后整栈重启（会断开 MCP 连接）
+- 引擎开关用 `asg engines enable/disable <name|group:name>`；searxng 引擎写 settings.yml，网关源写 gateway.yaml，然后整栈重启（会断开 MCP 连接）
+- 裸名冲突时用限定名区分：`searxng:baidu` / `gateway.reverse_image:baidu`；微博搜索用 `gateway.search:weibo`（依赖顶层 `weibo.enabled: true`）
 
 ### 广告过滤（StevenBlack hosts）
 
@@ -560,7 +561,7 @@ asg status [--json]
 asg start | stop | restart                 # 整栈启停
 asg logs [gateway|searxng|flaresolverr|supervisor|all] [-f]
 asg config get|set|validate
-asg engines list [--all] | enable <name> | disable <name>
+asg engines list [--all] | enable <name|group:name> | disable <name|group:name>
 asg plugins list|install|remove
 asg browser status|install [--full]
 asg adlist update

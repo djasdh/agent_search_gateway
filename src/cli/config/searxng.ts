@@ -18,6 +18,11 @@ export interface SearxngWriteResult {
   appended: string[];
 }
 
+export interface SearxngRenderResult extends SearxngWriteResult {
+  /** 无实际变化时为 undefined。 */
+  text?: string;
+}
+
 function enginesSeq(doc: ReturnType<typeof readYamlDocument>["doc"], create: boolean): YAMLSeq | undefined {
   const node = doc.get("engines", true) as unknown;
   if (isSeq(node)) return node;
@@ -51,13 +56,13 @@ export function readSearxngEngines(file: string): SearxngEngineState[] {
 }
 
 /**
- * 批量写入启用状态。本地不存在则追加 `{ name, disabled }`；存在则只改 disabled。
- * 返回实际变化的引擎名与本轮新增的引擎名。
+ * 计算批量启用状态后的 settings.yml 文本，不落盘。
+ * 本地不存在则追加 `{ name, disabled }`；存在则只改 disabled。
  */
-export function writeSearxngEngineStates(
+export function renderSearxngEngineStates(
   file: string,
   changes: ReadonlyArray<{ name: string; enabled: boolean }>,
-): SearxngWriteResult {
+): SearxngRenderResult {
   const { doc } = readYamlDocument(file);
   const seq = enginesSeq(doc, true)!;
   const changed: string[] = [];
@@ -80,9 +85,22 @@ export function writeSearxngEngineStates(
     }
   }
 
-  if (changed.length > 0) {
-    writeFileAtomic(file, documentToText(doc));
-  }
+  return {
+    text: changed.length > 0 ? documentToText(doc) : undefined,
+    changed,
+    appended,
+  };
+}
 
+/**
+ * 批量写入启用状态。本地不存在则追加 `{ name, disabled }`；存在则只改 disabled。
+ * 返回实际变化的引擎名与本轮新增的引擎名。
+ */
+export function writeSearxngEngineStates(
+  file: string,
+  changes: ReadonlyArray<{ name: string; enabled: boolean }>,
+): SearxngWriteResult {
+  const { text, changed, appended } = renderSearxngEngineStates(file, changes);
+  if (text !== undefined) writeFileAtomic(file, text);
   return { changed, appended };
 }

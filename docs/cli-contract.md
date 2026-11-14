@@ -251,39 +251,61 @@ asg config validate
 
 ### 5.5 引擎
 
-引擎在用户层只有一套命令，行内用 `kind` 区分来源：
+引擎在用户层只有一套命令，行内用 `id` / `group` / `kind` 区分来源：
 
 ```text
 asg engines list
 asg engines list --all
-asg engines enable <name...>
-asg engines disable <name...>
+asg engines enable <name|group:name...>
+asg engines disable <name|group:name...>
 ```
 
-| kind | 存储 |
-|---|---|
-| `searxng` | `data/deps/searxng/settings.yml` → `engines[].disabled` |
-| `gateway` | `gateway.yaml` → `search.reverse_image.sources` |
+| group | kind | 存储 |
+|---|---|---|
+| `searxng` | `searxng` | `data/deps/searxng/settings.yml` → `engines[].disabled` |
+| `gateway.reverse_image` | `gateway` | `gateway.yaml` → `search.reverse_image.sources` |
+| `gateway.search` | `gateway` | `gateway.yaml` → `search.weibo.enabled` |
 
-第一版网关原生源固定为 `tracemoe`、`saucenao`、`baidu`。
+第一版网关原生以图搜图源固定为 `tracemoe`、`saucenao`、`baidu`；文本源为 `weibo`。
 
+- 每条记录的 `id` 固定为 `${group}:${name}`，`group` 表示它归哪个存储适配器管理；
 - `list` 只读本地文件，离线可用；`list --all` 叠加 searxng `/config` 全量列表，searxng 不在线时报 `BACKEND_DOWN`（退出码 1）；
+- `enable/disable` 支持限定名 `searxng:google`、`gateway.reverse_image:baidu`、`gateway.search:weibo`；裸名（如 `google`）只在唯一命中时生效，命中多个 group 时报 `ENGINE_AMBIGUOUS`（退出码 4，`details.engines` 给出候选 id）；
 - `enable/disable` 时本地不存在、但属于 searxng 默认引擎的名字，在线时通过 `/config` 校验后追加最小覆盖项；searxng 不在线则按 `ENGINE_NOT_FOUND` 处理；
+- `gateway.*` 组不做远端兜底：本地没有就是 `ENGINE_NOT_FOUND`；
 - `resident` / `rotating` 只在输出里显示，第一版不提供编辑；
 - 缺 secret 的引擎 `enable` 直接拒绝：`MISSING_SECRET`，退出码 4；
+- 微博启用依赖顶层 `weibo.enabled`（运行能力开关）：为 `false`/缺失时 `enable gateway.search:weibo` 报 `MISSING_DEPENDENCY`，退出码 4；引擎命令只写 `search.weibo.enabled`，不改顶层开关；
 - 批量启用/禁用全有或全无：先全部校验，任一不可用则一个文件都不写；
-- 一次命令涉及两个文件时，先全部写完，再整栈重启一次；
+- 一次命令涉及两个文件时，先全部写完，再整栈重启一次；写入失败会恢复已写文件；
 - 未知引擎名：`ENGINE_NOT_FOUND`，退出码 4；
 - `search.reverse_image.enabled` 是能力总开关，归 `asg config`，不是引擎。
 
 ```json
 {
+  "id": "gateway.reverse_image:saucenao",
+  "group": "gateway.reverse_image",
   "name": "saucenao",
   "kind": "gateway",
   "enabled": false,
   "available": false,
   "routing": ["source"],
   "requires": ["secrets.search.reverse_image.saucenao.api_key"]
+}
+```
+
+微博记录的 `routing` 会显示文本类别：
+
+```json
+{
+  "id": "gateway.search:weibo",
+  "group": "gateway.search",
+  "name": "weibo",
+  "kind": "gateway",
+  "enabled": false,
+  "available": false,
+  "routing": ["category:weibo", "category:weibo_hot"],
+  "requires": ["config:weibo.enabled"]
 }
 ```
 
@@ -380,7 +402,9 @@ HEALTH_TIMEOUT     启动后健康检查超时
 CONFIG_INVALID     配置解析或校验失败
 SCHEMA_MISMATCH    current.json / launch.json 结构不符
 MISSING_SECRET     缺 api_key / token
+MISSING_DEPENDENCY 缺配置依赖（如 weibo.enabled）
 ENGINE_NOT_FOUND   引擎名不存在
+ENGINE_AMBIGUOUS   裸名命中多个 group，需用 group:name 限定
 PLUGIN_UNKNOWN     插件名不存在
 PLUGIN_FAILED      插件安装/卸载失败
 BACKEND_DOWN       需要后端在线但不可达

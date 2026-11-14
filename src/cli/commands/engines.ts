@@ -1,7 +1,7 @@
 /**
  * `asg engines list|enable|disable`。
  *
- * 统一目录见 config/engines.ts；本命令只负责参数解析、人类输出与一次整栈重启。
+ * 统一目录见 `src/cli/engines/`；本命令只负责参数解析、人类输出与一次整栈重启。
  */
 
 import type { CommandFn, CommandResult } from "../context.js";
@@ -9,7 +9,13 @@ import { CliError, EXIT } from "../errors.js";
 import type { Reporter } from "../output.js";
 import { takeFlag } from "../args.js";
 import { restartForConfig } from "../runtime/stack.js";
-import { readLocalEngines, listEngines, setEngines, type EngineInfo } from "../config/engines.js";
+import {
+  listEngines,
+  parseEngineRef,
+  readLocalEngines,
+  setEngines,
+  type EngineInfo,
+} from "../config/engines.js";
 
 const RESTART_NOTICE = "整栈重启会断开所有 MCP 连接。";
 
@@ -24,12 +30,12 @@ export function setRestartForTests(fn: RestartFn | null): void {
 
 function renderTable(engines: EngineInfo[], withSource: boolean): string {
   const header = withSource
-    ? ["NAME", "KIND", "ENABLED", "AVAILABLE", "ROUTING", "SOURCE", "REQUIRES"]
-    : ["NAME", "KIND", "ENABLED", "AVAILABLE", "ROUTING", "REQUIRES"];
+    ? ["ID", "KIND", "ENABLED", "AVAILABLE", "ROUTING", "SOURCE", "REQUIRES"]
+    : ["ID", "KIND", "ENABLED", "AVAILABLE", "ROUTING", "REQUIRES"];
 
   const rows = engines.map((engine) => {
     const base = [
-      engine.name,
+      engine.id,
       engine.kind,
       engine.enabled ? "yes" : "no",
       engine.available ? "yes" : "no",
@@ -68,44 +74,57 @@ async function runToggle(
   action: "enable" | "disable",
   args: string[],
 ): Promise<CommandResult> {
+  const usage = `用法: asg engines ${action} <name|group:name...>`;
   if (args.some((arg) => arg.startsWith("-"))) {
-    throw new CliError(
-      "UNEXPECTED",
-      EXIT.USAGE,
-      `用法: asg engines ${action} <name...>（不接受选项）`,
-    );
+    throw new CliError("UNEXPECTED", EXIT.USAGE, `${usage}（不接受选项）`);
   }
   if (args.length === 0) {
-    throw new CliError("UNEXPECTED", EXIT.USAGE, `用法: asg engines ${action} <name...>`);
+    throw new CliError("UNEXPECTED", EXIT.USAGE, usage);
   }
 
-  const localNames = new Set(readLocalEngines(root).map((engine) => engine.name));
-  const unknown = args.filter((name) => !localNames.has(name));
+  const local = readLocalEngines(root);
+  const localIds = new Set(local.map((engine) => engine.id));
+  const localNames = new Set(local.map((engine) => engine.name));
+
+  // 只有 searxng 组（含裸名）可能落在远端默认列表；gateway 组不做远端兜底。
+  const needsRemote: Array<{ raw: string; name: string }> = [];
+  for (const raw of args) {
+    const ref = parseEngineRef(raw);
+    if (!ref.name) continue;
+    if (ref.group && ref.group !== "searxng") continue;
+    const localHit = ref.group ? localIds.has(`${ref.group}:${ref.name}`) : localNames.has(ref.name);
+    if (!localHit) needsRemote.push({ raw, name: ref.name });
+  }
+
   let knownSearxng: string[] = [];
-  if (unknown.length > 0) {
+  if (needsRemote.length > 0) {
     // 本地没有的名字可能是 searxng 默认引擎：在线时用 /config 全量列表校验。
     let all: EngineInfo[];
     try {
       all = await listEngines(root, { all: true });
     } catch (error) {
       if (error instanceof CliError && error.code === "BACKEND_DOWN") {
+        const names = needsRemote.map((item) => item.raw);
         throw new CliError(
           "ENGINE_NOT_FOUND",
           EXIT.INVALID,
-          `未知引擎：${unknown.join(", ")}（searxng 未运行，无法确认默认引擎）`,
-          { engines: unknown },
+          `未知引擎：${names.join(", ")}（searxng 未运行，无法确认默认引擎）`,
+          { engines: names },
         );
       }
       throw error;
     }
-    const known = new Set(all.map((engine) => engine.name));
-    const missing = unknown.filter((name) => !known.has(name));
+    const known = new Set(
+      all.filter((engine) => engine.kind === "searxng").map((engine) => engine.name),
+    );
+    const missing = needsRemote.filter((item) => !known.has(item.name));
     if (missing.length > 0) {
-      throw new CliError("ENGINE_NOT_FOUND", EXIT.INVALID, `未知引擎：${missing.join(", ")}`, {
-        engines: missing,
+      const names = missing.map((item) => item.raw);
+      throw new CliError("ENGINE_NOT_FOUND", EXIT.INVALID, `未知引擎：${names.join(", ")}`, {
+        engines: names,
       });
     }
-    knownSearxng = unknown;
+    knownSearxng = needsRemote.map((item) => item.name);
   }
 
   const { changed } = setEngines(root, args, action === "enable", { knownSearxng });
