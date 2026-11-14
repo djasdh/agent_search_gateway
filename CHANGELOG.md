@@ -2,6 +2,25 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
+## [0.3.1] - 2026-11-14
+
+### Added
+
+- 网关原生引擎 provider 注册层：新增以图搜图源或文本源只需 provider 文件 + 注册表一行，CLI 与运行期共用同一份定义。
+- `asg engines` 纳入 `gateway.search:weibo`，支持 `group:name` 限定名；同名引擎用限定名区分。
+- 新增 `docs/engine-provider.md`，说明引擎 provider 协议与新增源的步骤。
+
+### Changed
+
+- `asg engines` 的表格改用 `ID`；JSON 新增 `id` / `group`，旧字段保持不变。
+- 引擎写入改为多存储适配器先 plan、再统一校验和提交；写失败会回滚已写文件。
+- 微博搜索启用依赖顶层 `weibo.enabled`，缺失时返回 `MISSING_DEPENDENCY`。
+- 反向图搜与微博搜索改由 provider 注册表分发，不再在 `search/service.ts` 里按源名分支。
+
+### Fixed
+
+- 修复 searxng 的 `baidu` 引擎被误当成网关以图搜图源 `gateway.reverse_image:baidu` 的问题。
+
 ## [0.3.0] - 2026-11-14
 
 ### Added
