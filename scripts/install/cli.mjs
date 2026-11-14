@@ -37,7 +37,7 @@ const USAGE = `用法: node scripts/install/cli.mjs --install-root <目录> [选
   --port <n>              网关端口（默认 3000）
   --searxng-port <n>      searxng 端口（默认 8888）
   --flaresolverr-port <n> FlareSolverr 端口（默认 8192）
-  --searxng-mode <mode>   auto | docker | native | external（默认 auto）
+  --searxng-mode <mode>   auto | docker | native | external（默认 auto = native）
   --searxng-url <url>     连接已有 searxng（隐含 external）
   --flaresolverr-url <url> 连接已有 FlareSolverr
   --no-deps               不安装 searxng / FlareSolverr
@@ -200,17 +200,14 @@ async function nodePath(installRoot) {
   return process.execPath;
 }
 
-async function ensureRootScripts({ installRoot, currentDir }) {
-  const targetDir = path.join(installRoot, 'scripts');
+async function ensureLauncher({ installRoot, currentDir }) {
+  const targetDir = path.join(installRoot, 'bin');
   await fs.mkdir(targetDir, { recursive: true });
-  for (const name of ['start-all.mjs', 'start-all.ps1', 'gateway.sh', 'gateway.ps1']) {
-    const source = path.join(currentDir, 'scripts', name);
-    if (!(await exists(source))) continue;
-    const target = path.join(targetDir, name);
-    if (await exists(target)) continue;
-    await fs.copyFile(source, target);
-    if (name.endsWith('.sh')) await fs.chmod(target, 0o755).catch(() => {});
-  }
+  const source = path.join(currentDir, 'bin', 'asg.mjs');
+  if (!(await exists(source))) return;
+  const target = path.join(targetDir, 'asg.mjs');
+  await fs.copyFile(source, target);
+  await fs.chmod(target, 0o755).catch(() => {});
 }
 
 async function writeDepsState({ installRoot, pins }) {
@@ -229,6 +226,51 @@ async function writeDepsState({ installRoot, pins }) {
       2,
     )}\n`,
   );
+}
+
+/**
+ * data/installed.json：自更新引擎唯一认的安装状态。
+ *
+ * 安装器只写 data/current.json 会让 `asg update check` 误判“未安装”，
+ * 因此这里在同一事务里补齐；结构与 scripts/self-update/cli.mjs 的 writeInstalled 一致。
+ */
+async function writeInstalledState({ installRoot, version, platform, currentDir }) {
+  const file = path.join(installRoot, 'data', 'installed.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+
+  let previous = null;
+  try {
+    const existing = JSON.parse(await fs.readFile(file, 'utf8'));
+    const old = existing?.current;
+    if (old && typeof old.version === 'string' && old.version !== version) {
+      previous = {
+        version: old.version,
+        dir: old.dir,
+        installedAt: old.installedAt || null,
+      };
+    }
+  } catch {
+    // 首次安装或旧文件损坏：不阻塞安装。
+  }
+
+  const repo = (process.env.ASG_REPO || '').trim() || 'djasdh/agent_search_gateway';
+  const payload = {
+    schemaVersion: 1,
+    repo,
+    platform,
+    current: {
+      version,
+      dir: currentDir,
+      installedAt: new Date().toISOString(),
+    },
+    previous,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const tmp = `${file}.tmp-${process.pid}`;
+  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  await fs.rename(tmp, file);
+  return payload;
 }
 
 async function installDeps({ installRoot, platform, pins, opts, logger }) {
@@ -313,7 +355,7 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   await fs.mkdir(path.join(installRoot, 'data'), { recursive: true });
-  await ensureRootScripts({ installRoot, currentDir: CURRENT_DIR });
+  await ensureLauncher({ installRoot, currentDir: CURRENT_DIR });
 
   const gatewayLaunch = {
     name: 'gateway',
@@ -421,9 +463,23 @@ async function main(argv = process.argv.slice(2)) {
       if (!ok) throw new Error('网关启动后健康检查超时');
       log('网关已就绪');
     } else {
-      log(`未注册自启或未自动启动；手动启动：node ${path.join(installRoot, 'scripts', 'start-all.mjs')}`);
+      log(`未注册自启或未自动启动；手动启动：node ${path.join(installRoot, 'bin', 'asg.mjs')} start`);
     }
   }
+
+  // ---- 记录安装状态（自更新引擎读取 data/installed.json）----
+  let installedDir = CURRENT_DIR;
+  try {
+    installedDir = await fs.realpath(path.join(installRoot, 'data', 'current'));
+  } catch {
+    // data/current 不存在时（例如 --no-start 的自定义布局）退回当前版本目录。
+  }
+  await writeInstalledState({
+    installRoot,
+    version,
+    platform,
+    currentDir: installedDir,
+  });
 
   log('');
   log('安装完成');

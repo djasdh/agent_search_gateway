@@ -1,6 +1,6 @@
 {
   "name": "agent_search_gateway",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "统一搜索/抓取网关：MCP server，封装 searxng + FlareSolverr + 内嵌 playwright",
   "license": "MIT",
   "repository": {
@@ -9,6 +9,9 @@
   },
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "asg": "bin/asg.mjs"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",

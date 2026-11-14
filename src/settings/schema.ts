@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GATEWAY_SOURCES } from "./gateway-sources.js";
 
 /**
  * 设置 schema（唯一默认值来源）。
@@ -79,9 +80,7 @@ const reverseImageSchema = z
   .object({
     enabled: z.boolean().default(true),
     category: z.string().default("search_by_image"),
-    sources: z
-      .array(z.enum(["tracemoe", "saucenao", "baidu"]))
-      .default(["tracemoe", "saucenao", "baidu"]),
+    sources: z.array(z.enum(GATEWAY_SOURCES)).default([...GATEWAY_SOURCES]),
     tracemoe_url: z.string().url().default("https://api.trace.moe"),
     tracemoe_timeout_ms: z.number().int().positive().default(15000),
     tracemoe_max_results: z.number().int().positive().max(20).default(8),

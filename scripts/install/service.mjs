@@ -1,11 +1,11 @@
 /**
  * agent_search_gateway 用户级自启服务安装器（跨平台共享实现）
  *
- * 由一键安装器调用，把 scripts/start-all.mjs 注册为当前用户登录后自动启动的前台
+ * 由一键安装器调用，把 bin/asg.mjs serve 注册为当前用户登录后自动启动的前台
  * supervisor：
  *   - Linux：systemd --user 单元 ~/.config/systemd/user/agent-search-gateway.service
  *   - macOS：LaunchAgent ~/Library/LaunchAgents/com.djasdh.agent-search-gateway.plist
- *   - Windows：登录计划任务 AgentSearchGateway，调用 scripts/start-all.ps1
+ *   - Windows：登录计划任务 AgentSearchGateway，执行 node bin/asg.mjs serve
  *
  * 导出：
  *   installService({ root, platform, nodePath, logger })
@@ -24,10 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const SOURCE_PS1 = path.resolve(HERE, '..', 'start-all.ps1');
 
 const SERVICE_NAME = 'agent-search-gateway';
 const SYSTEMD_UNIT_NAME = `${SERVICE_NAME}.service`;
@@ -156,12 +153,12 @@ function resolveNodePath(nodePath, log) {
   return nodePath;
 }
 
-function startAllPathFor(root) {
-  const startAllPath = path.join(root, 'scripts', 'start-all.mjs');
-  if (!fs.existsSync(startAllPath)) {
-    throw new Error(`安装包不完整，未找到 ${startAllPath}`);
+function launcherPathFor(root) {
+  const launcher = path.join(root, 'bin', 'asg.mjs');
+  if (!fs.existsSync(launcher)) {
+    throw new Error(`安装包不完整，未找到 ${launcher}`);
   }
-  return startAllPath;
+  return launcher;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,15 +177,16 @@ function systemdQuote(value, { exec = false } = {}) {
   return `"${text}"`;
 }
 
-function renderSystemdUnit({ root, nodePath, startAllPath }) {
+function renderSystemdUnit({ root, nodePath, launcherPath }) {
   return `[Unit]
 Description=Agent Search Gateway（searxng / flaresolverr / gateway）
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=${systemdQuote(root)}
-ExecStart=${systemdQuote(nodePath, { exec: true })} ${systemdQuote(startAllPath, { exec: true })}
+# WorkingDirectory 不接受引号，整行剩余部分按字面路径解析（可含空格）。
+WorkingDirectory=${root}
+ExecStart=${systemdQuote(nodePath, { exec: true })} ${systemdQuote(launcherPath, { exec: true })} serve
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=20
@@ -230,11 +228,11 @@ function systemdManualHint(unitPath) {
 }
 
 async function installLinux({ root, nodePath, log, dryRun }) {
-  const startAllPath = startAllPathFor(root);
+  const launcherPath = launcherPathFor(root);
   const unitPath = systemdUnitPath();
   ensureDir(path.dirname(unitPath));
 
-  fs.writeFileSync(unitPath, renderSystemdUnit({ root, nodePath, startAllPath }), {
+  fs.writeFileSync(unitPath, renderSystemdUnit({ root, nodePath, launcherPath }), {
     encoding: 'utf8',
     mode: 0o644,
   });
@@ -397,7 +395,7 @@ function macosLogPaths() {
   };
 }
 
-function renderMacosPlist({ root, nodePath, startAllPath }) {
+function renderMacosPlist({ root, nodePath, launcherPath }) {
   const logs = macosLogPaths();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -408,7 +406,8 @@ function renderMacosPlist({ root, nodePath, startAllPath }) {
   <key>ProgramArguments</key>
   <array>
     <string>${xmlEscape(nodePath)}</string>
-    <string>${xmlEscape(startAllPath)}</string>
+    <string>${xmlEscape(launcherPath)}</string>
+    <string>serve</string>
   </array>
   <key>WorkingDirectory</key>
   <string>${xmlEscape(root)}</string>
@@ -437,13 +436,13 @@ function currentUid() {
 }
 
 async function installMacos({ root, nodePath, log, dryRun }) {
-  const startAllPath = startAllPathFor(root);
+  const launcherPath = launcherPathFor(root);
   const plistPath = macosPlistPath();
   const logs = macosLogPaths();
   ensureDir(path.dirname(plistPath));
   ensureDir(logs.logDir);
 
-  fs.writeFileSync(plistPath, renderMacosPlist({ root, nodePath, startAllPath }), {
+  fs.writeFileSync(plistPath, renderMacosPlist({ root, nodePath, launcherPath }), {
     encoding: 'utf8',
     mode: 0o644,
   });
@@ -606,100 +605,14 @@ async function statusMacos({ log, dryRun }) {
 // Windows / 登录计划任务
 // ---------------------------------------------------------------------------
 
-const WINDOWS_PS1_FALLBACK = `# agent_search_gateway 前台 supervisor 的 Windows 薄包装
-# 由登录计划任务调用，也可手动运行：
-#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\start-all.ps1
-# 参数会原样传给 start-all.mjs，例如 --check / --help。
-$ErrorActionPreference = "Stop"
-
-try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
-
-$Root = Split-Path -Parent $PSScriptRoot
-$StartAll = Join-Path $Root "scripts\\start-all.mjs"
-
-function Find-NodeJs {
-    $cmd = Get-Command node -ErrorAction SilentlyContinue
-    if ($cmd) {
-        if ($cmd.Path) { return $cmd.Path }
-        if ($cmd.Source) { return $cmd.Source }
-    }
-    $toolDir = Join-Path $Root "data\\toolchain\\node"
-    if (Test-Path $toolDir) {
-        $exe = Get-ChildItem -Path $toolDir -Filter node.exe -Recurse -File -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-        if ($exe) { return $exe.FullName }
-    }
-    return $null
-}
-
-if (-not (Test-Path $StartAll)) {
-    Write-Host "[start-all] 未找到 $StartAll"
-    exit 1
-}
-
-$Node = Find-NodeJs
-if (-not $Node) {
-    Write-Host "[start-all] PATH 中未找到 node，请先安装 Node.js LTS：https://nodejs.org/zh-cn/download"
-    exit 1
-}
-
-& $Node $StartAll @args
-exit $LASTEXITCODE
-`;
-
-function windowsScriptPath(root) {
-  return path.join(root, 'scripts', 'start-all.ps1');
-}
-
-function ensureWindowsWrapper(root, log, dryRun) {
-  const target = windowsScriptPath(root);
-  ensureDir(path.dirname(target));
-
-  const fallback = Buffer.from(WINDOWS_PS1_FALLBACK, 'utf8');
-  const source = fs.existsSync(SOURCE_PS1) ? fs.readFileSync(SOURCE_PS1) : fallback;
-  const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
-
-  let content = null;
-  let action = '';
-
-  if (!fs.existsSync(target)) {
-    content = source;
-    action = '生成';
-  } else {
-    const current = fs.readFileSync(target);
-    if (current.length === 0) {
-      content = source;
-      action = '重新生成（原文件为空）';
-    } else if (!(current[0] === 0xef && current[1] === 0xbb && current[2] === 0xbf)) {
-      content = current;
-      action = '补充 UTF-8 BOM';
-    }
-  }
-
-  if (!content) {
-    log.info(`启动脚本已存在：${target}`);
-    return target;
-  }
-
-  const normalized = content[0] === 0xef && content[1] === 0xbb && content[2] === 0xbf
-    ? content
-    : Buffer.concat([BOM, content]);
-
-  fs.writeFileSync(target, normalized, { mode: 0o644 });
-  log.info(`${dryRun ? '[dry-run] ' : ''}已${action}：${target}`);
-  return target;
-}
-
-function windowsTaskCommand(scriptPath) {
+function windowsTaskCommand(nodePath, launcherPath) {
   // 含空格的路径用双引号包住；Windows 路径不能包含双引号，无需再转义。
-  return `powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${scriptPath}"`;
+  return `"${nodePath}" "${launcherPath}" serve`;
 }
 
 async function installWindows({ root, nodePath, log, dryRun }) {
-  startAllPathFor(root);
-  const scriptPath = ensureWindowsWrapper(root, log, dryRun);
-  const taskCommand = windowsTaskCommand(scriptPath);
-  void nodePath; // Windows 由 start-all.ps1 自行查找 node；任务命令使用 powershell。
+  const launcherPath = launcherPathFor(root);
+  const taskCommand = windowsTaskCommand(nodePath, launcherPath);
 
   const args = [
     '/create',
@@ -727,8 +640,8 @@ async function installWindows({ root, nodePath, log, dryRun }) {
   return {
     platform: 'win32',
     method: 'schtasks',
-    path: scriptPath,
-    scriptPath,
+    path: launcherPath,
+    launcherPath,
     taskName: WINDOWS_TASK_NAME,
     taskCommand,
     registered: dryRun ? null : true,

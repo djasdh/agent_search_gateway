@@ -15,7 +15,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { createReadStream, createWriteStream, promises as fsp } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
@@ -60,6 +60,7 @@ const USAGE = `用法: node scripts/self-update/cli.mjs [选项]
   --repo <owner/name> 覆盖默认仓库（默认 ${DEFAULT_REPO}）
   --check             只检查是否有可用更新，不下载、不切换
   --no-restart        更新后不重启服务
+  --jsonl             以 NDJSON 事件输出日志（供 asg update 透传）
   --force             即使版本相同也强制重新安装
   -h, --help          显示本帮助
 
@@ -90,8 +91,25 @@ export class UpdateError extends Error {
   }
 }
 
+let jsonlMode = false;
+
 function log(message) {
+  if (jsonlMode) {
+    process.stdout.write(
+      `${JSON.stringify({ type: 'event', event: 'log', message })}\n`,
+    );
+    return;
+  }
   process.stdout.write(`[self-update] ${message}\n`);
+}
+
+/** 人类可读的成段输出；--jsonl 下同样走事件流，避免人类文本混进 stdout。 */
+function emit(text) {
+  if (jsonlMode) {
+    log(text);
+    return;
+  }
+  process.stdout.write(`${text}\n`);
 }
 
 function warn(message) {
@@ -177,6 +195,7 @@ export function parseArgs(argv) {
     check: false,
     noRestart: false,
     force: false,
+    jsonl: false,
     help: false,
   };
 
@@ -193,6 +212,10 @@ export function parseArgs(argv) {
     }
     if (arg === '--no-restart') {
       opts.noRestart = true;
+      continue;
+    }
+    if (arg === '--jsonl') {
+      opts.jsonl = true;
       continue;
     }
     if (arg === '--force') {
@@ -239,7 +262,27 @@ export function normalizeVersion(value) {
   return version;
 }
 
+/**
+ * 仓库根（含 gateway.yaml 与 data/ 的安装根）。
+ *
+ * 安装版脚本位于 `<root>/data/releases/<version>-<platform>/scripts/self-update/`，
+ * 不能简单上溯两级（那是版本目录）。向上查找 gateway.yaml / data/current.json，
+ * 找不到时退回旧布局（仓库根/scripts/self-update）。
+ */
 export function resolveRepoRoot() {
+  let current = path.resolve(HERE);
+  for (;;) {
+    if (
+      existsSync(path.join(current, 'gateway.yaml')) ||
+      existsSync(path.join(current, 'data', 'current.json')) ||
+      existsSync(path.join(current, 'data', 'current'))
+    ) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
   return path.resolve(HERE, '..', '..');
 }
 
@@ -343,22 +386,70 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   }
 }
 
+/** Node fetch 不读取代理环境变量；代理环境下用 curl 取 JSON（curl 会自动读取代理变量）。 */
+async function fetchTextWithCurl(url, headers, timeoutMs = 30000) {
+  const command = process.platform === 'win32' ? 'curl.exe' : 'curl';
+  const args = [
+    '-fsSL',
+    '--proto',
+    '=https',
+    '--connect-timeout',
+    '20',
+    '--max-time',
+    String(Math.max(1, Math.ceil(timeoutMs / 1000))),
+  ];
+  for (const [key, value] of Object.entries(headers)) {
+    args.push('-H', `${key}: ${value}`);
+  }
+  args.push(url);
+
+  const result = await run(command, args);
+  if (result.code !== 0) {
+    const detail = truncate((result.stderr || '').trim(), 500);
+    throw new UpdateError(`curl 退出码 ${result.code}${detail ? `：${detail}` : ''}`);
+  }
+  return result.stdout;
+}
+
 async function fetchJson(url, token) {
   assertHttps(url);
-  const res = await fetchWithTimeout(url, { headers: authHeaders(url, token) });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new UpdateError(
-      `GitHub API 请求失败 (${res.status} ${res.statusText || ''}): ${url}\n${truncate(text, 500)}`,
-      1,
-      res.status,
-    );
+  const headers = authHeaders(url, token);
+
+  const parse = (text) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new UpdateError(`GitHub API 返回的内容不是合法 JSON: ${url}`);
+    }
+  };
+
+  const viaFetch = async () => {
+    const res = await fetchWithTimeout(url, { headers });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new UpdateError(
+        `GitHub API 请求失败 (${res.status} ${res.statusText || ''}): ${url}\n${truncate(text, 500)}`,
+        1,
+        res.status,
+      );
+    }
+    return parse(text);
+  };
+
+  const viaCurl = async () => parse(await fetchTextWithCurl(url, headers));
+
+  const attempts = proxyEnvName() ? [viaCurl, viaFetch] : [viaFetch, viaCurl];
+  let lastError;
+  for (const attempt of attempts) {
+    try {
+      return await attempt();
+    } catch (error) {
+      lastError = error;
+    }
   }
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new UpdateError(`GitHub API 返回的内容不是合法 JSON: ${url}`);
-  }
+  throw lastError instanceof UpdateError
+    ? lastError
+    : new UpdateError(lastError instanceof Error ? lastError.message : String(lastError));
 }
 
 function toRelease(data) {
@@ -925,8 +1016,8 @@ export async function writeCurrentState({
   previousDir = null,
   previousVersion = null,
 }) {
-  // dir 使用绝对路径：gateway.ps1 会直接用 Join-Path $d.dir 定位入口，
-  // 不依赖调用时的工作目录；gateway.sh 同样兼容绝对路径。
+  // dir 使用绝对路径：bin/asg.mjs 会直接读取该路径定位入口，
+  // 不依赖调用时的工作目录。
   const payload = {
     dir: path.resolve(releaseDir),
     version,
@@ -1131,7 +1222,7 @@ function runInherit(command, args, { cwd, timeoutMs = 180000 } = {}) {
 export async function restartGateway(root) {
   const isWindows = process.platform === 'win32';
 
-  // 安装器注册的用户级服务优先：start-all 是前台 supervisor，
+  // 安装器注册的用户级服务优先：asg serve 是前台 supervisor，
   // 直接重启服务比杀 gateway 子进程更稳。
   if (!isWindows) {
     try {
@@ -1154,7 +1245,7 @@ export async function restartGateway(root) {
         };
       }
     } catch {
-      /* 没有 systemd 时回退 gateway.sh */
+      /* 没有 systemd 时回退 asg restart */
     }
 
     if (process.platform === 'darwin') {
@@ -1174,7 +1265,7 @@ export async function restartGateway(root) {
           };
         }
       } catch {
-        /* 回退 gateway.sh */
+        /* 回退 asg restart */
       }
     }
   } else {
@@ -1188,27 +1279,20 @@ export async function restartGateway(root) {
         return { ran: true, ok: result.code === 0, manual: 'schtasks /run /tn AgentSearchGateway' };
       }
     } catch {
-      /* 回退 gateway.ps1 */
+      /* 回退 asg restart */
     }
   }
 
-  const script = path.join(root, 'scripts', isWindows ? 'gateway.ps1' : 'gateway.sh');
-  const manual = isWindows
-    ? 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\gateway.ps1 restart'
-    : 'bash scripts/gateway.sh restart gateway';
+  // 兜底走 CLI 统一入口：bin/asg.mjs restart（参数数组，cwd 为安装根）。
+  const asgBin = path.join(root, 'bin', 'asg.mjs');
+  const manual = `node ${asgBin} restart`;
 
-  if (!(await pathExists(script))) {
+  if (!(await pathExists(asgBin))) {
     return { ran: false, ok: false, manual };
   }
 
-  log(`重启服务: ${isWindows ? 'scripts/gateway.ps1 restart' : 'scripts/gateway.sh restart gateway'}`);
-  const result = isWindows
-    ? await runInherit(
-        'powershell',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script, 'restart'],
-        { cwd: root },
-      )
-    : await runInherit('bash', [script, 'restart', 'gateway'], { cwd: root });
+  log(`重启服务: node ${asgBin} restart`);
+  const result = await runInherit(process.execPath, [asgBin, 'restart'], { cwd: root });
 
   if (result.error) {
     warn(`重启命令执行失败: ${result.error.message}`);
@@ -1285,6 +1369,29 @@ async function printCheck({ release, repo, platform, assetName, currentVersion, 
     currentVersion === release.version &&
     currentDir &&
     path.basename(currentDir) === `${release.version}-${platform}`;
+  // 本地版本比远端最新还新（例如刚发布的本地构建）时也不视为“有更新”，避免降级。
+  const upToDate =
+    Boolean(same) || (Boolean(currentVersion) && versionGte(currentVersion, release.version));
+
+  if (jsonlMode) {
+    process.stdout.write(
+      `${JSON.stringify({
+        type: 'event',
+        schema_version: 1,
+        event: 'check',
+        repo,
+        platform,
+        current_version: currentVersion || null,
+        target_version: release.version,
+        asset: assetName,
+        asset_found: Boolean(asset),
+        checksum_found: Boolean(sums),
+        up_to_date: upToDate,
+        html_url: release.htmlUrl || null,
+        published_at: release.publishedAt || null,
+      })}\n`,
+    );
+  }
 
   const lines = [
     `仓库:       ${repo}`,
@@ -1299,12 +1406,12 @@ async function printCheck({ release, repo, platform, assetName, currentVersion, 
   ];
 
   if (!asset || !sums) {
-    process.stdout.write(`${lines.join('\n')}\n`);
+    for (const line of lines) emit(line);
     throw new UpdateError(`Release ${release.version} 资产不完整，暂不能更新。`);
   }
 
-  lines.push(`更新状态:   ${same ? '已是最新版本' : '有可用更新'}`);
-  process.stdout.write(`${lines.join('\n')}\n`);
+  lines.push(`更新状态:   ${upToDate ? '已是最新版本' : '有可用更新'}`);
+  for (const line of lines) emit(line);
   return 0;
 }
 
@@ -1377,6 +1484,7 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(USAGE);
     return 0;
   }
+  jsonlMode = opts.jsonl;
   checkNodeRuntime();
 
   const root = resolveRepoRoot();
@@ -1608,7 +1716,7 @@ export async function main(argv = process.argv.slice(2)) {
 
     const restart = await restartGateway(root);
     if (!restart.ran) {
-      log('未找到自动重启脚本（scripts/gateway.sh 或 scripts/gateway.ps1）。');
+      log('未找到自动重启入口（bin/asg.mjs）。');
       log(`请手动重启服务: ${restart.manual}`);
       if (backupDir) {
         await fsp.rm(backupDir, { recursive: true, force: true }).catch(() => {});

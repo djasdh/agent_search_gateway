@@ -63,7 +63,7 @@ jobs:
           NAME="agent-search-gateway-${VERSION}-${{ matrix.platform }}"
           STAGE="release/${NAME}"
           mkdir -p "$STAGE"
-          cp -r dist node_modules package.json package-lock.json \
+          cp -r dist node_modules bin package.json package-lock.json \
             gateway.yaml.example secrets.yaml.example scripts runtime \
             README.md LICENSE THIRD_PARTY_LICENSES.md "$STAGE/"
           # 原生 searxng 安装所需资源（Windows / 无 Docker 回退）

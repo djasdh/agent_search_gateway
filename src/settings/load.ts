@@ -146,6 +146,21 @@ export interface LoadedSettings {
 export function loadSettings(options: LoadSettingsOptions = {}): LoadedSettings {
   const configPath = options.configPath ?? defaultConfigPath();
   const secretsPath = options.secretsPath ?? defaultSecretsPath(configPath);
+  return loadSettingsFrom(configPath, secretsPath, options.env ?? process.env);
+}
+
+/**
+ * 按显式路径加载（CLI 校验临时文件用）。
+ *
+ * 与 loadSettings 行为完全一致，只是路径由调用方给定：CLI 写入前的校验必须能
+ * 指定临时 gateway.yaml/secrets.yaml，而不是进程 cwd 下的文件。
+ * `env` 仅供 loadSettings 透传，CLI 校验时传空对象以隔离外部密钥环境。
+ */
+export function loadSettingsFrom(
+  configPath: string,
+  secretsPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): LoadedSettings {
   const warnings: string[] = [];
 
   const raw = readYaml(configPath, true);
@@ -175,7 +190,7 @@ export function loadSettings(options: LoadSettingsOptions = {}): LoadedSettings 
     secrets = parsedSecrets.data;
   }
 
-  applySecretEnv(secrets, options.env ?? process.env);
+  applySecretEnv(secrets, env);
 
   if (existsSync(secretsPath)) {
     const warning = secretsPermissionWarning(secretsPath);

@@ -189,19 +189,17 @@ $currentJson = @{
 } | ConvertTo-Json
 Set-Content -LiteralPath (Join-Path $Root "data\current.json") -Value $currentJson -Encoding UTF8
 
-# 稳定 scripts
-$scriptsDir = Join-Path $Root "scripts"
-New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
-foreach ($name in @("start-all.mjs", "start-all.ps1", "gateway.sh", "gateway.ps1")) {
-  $source = Join-Path $target "scripts\$name"
-  $dest = Join-Path $scriptsDir $name
-  if ((Test-Path $source) -and -not (Test-Path $dest)) {
-    Copy-Item -LiteralPath $source -Destination $dest
-  }
+# 稳定入口
+$binDir = Join-Path $Root "bin"
+New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+$launcher = Join-Path $target "bin\asg.mjs"
+if (Test-Path $launcher) {
+  Copy-Item -LiteralPath $launcher -Destination (Join-Path $binDir "asg.mjs") -Force
 }
 
 Write-Log "运行安装配置 ..."
 $cli = Join-Path $target "scripts\install\cli.mjs"
+$env:ASG_REPO = $Repo
 if ($Rest -and $Rest.Count -gt 0) {
   & $NodeBin $cli --install-root $Root @Rest
 } else {

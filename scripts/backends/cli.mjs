@@ -3,10 +3,14 @@
  * agent_search_gateway 后端安装管理 CLI
  *
  * 用法：
- *   node scripts/backends/cli.mjs <后端> [install|update|status|uninstall]
+ *   node scripts/backends/cli.mjs <后端> [install|update|status|uninstall] [--root <dir>] [--json]
  *
  * 后端：bili | ytdlp | opencli | article
  * 默认子命令为 install。
+ *
+ * 全局参数：
+ *   --root <dir>  安装根（默认本文件上两级）；影响 data/backends 与 gateway.yaml
+ *   --json        log() 输出 NDJSON 事件，供 asg plugins 透传
  *
  * 约定：
  *   - 安装目录：仓库根 data/backends/<后端>/（article 使用 article-server）
@@ -26,11 +30,42 @@ import { pipeline } from "node:stream/promises";
 import { parseDocument, YAMLSeq } from "yaml";
 
 const IS_WIN = process.platform === "win32";
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** 解析全局参数：--root <dir> / --json；其余 token 原样作为位置参数。 */
+function parseGlobalArgs(argv) {
+  let root = null;
+  let json = false;
+  const rest = [];
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--root" || arg.startsWith("--root=")) {
+      const value = arg === "--root" ? argv[++i] : arg.slice("--root=".length);
+      if (!value || value.startsWith("-")) {
+        throw new Error("--root 需要一个目录");
+      }
+      root = value;
+      continue;
+    }
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    rest.push(arg);
+  }
+
+  return { root, json, rest };
+}
+
+const GLOBAL_ARGS = parseGlobalArgs(process.argv.slice(2));
+const ROOT = GLOBAL_ARGS.root
+  ? path.resolve(GLOBAL_ARGS.root)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BACKENDS_DIR = path.join(ROOT, "data", "backends");
 const CONFIG_PATH = process.env.GATEWAY_CONFIG_FILE
   ? path.resolve(process.env.GATEWAY_CONFIG_FILE)
   : path.join(ROOT, "gateway.yaml");
+const JSON_MODE = GLOBAL_ARGS.json;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const USER_AGENT = "agent-search-gateway-backend-cli";
 
@@ -41,6 +76,12 @@ const DEFAULT_ARTICLE_PORT = 8010;
 // ---------------------------------------------------------------------------
 
 function log(name, message) {
+  if (JSON_MODE) {
+    process.stdout.write(
+      `${JSON.stringify({ type: "event", event: "log", service: name, message })}\n`,
+    );
+    return;
+  }
   console.log(`[${name}] ${message}`);
 }
 
@@ -232,19 +273,43 @@ async function fetchWithContext(url, options) {
 
 async function githubLatestRelease(name, repo) {
   const url = `https://api.github.com/repos/${repo}/releases/latest`;
-  const response = await fetchWithContext(url, { headers: githubHeaders() });
-  if (!response.ok) {
-    if (response.status === 404) {
+  const headers = githubHeaders();
+
+  // Node fetch 不读取 HTTPS_PROXY；代理环境优先用 curl 取 JSON。
+  let status = 0;
+  let body = "";
+  if (hasProxyEnv()) {
+    try {
+      ({ status, body } = curlJson(url, headers));
+    } catch {
+      // curl 不可用时回退到 Node fetch。
+      status = 0;
+    }
+  }
+  if (status === 0) {
+    const response = await fetchWithContext(url, { headers });
+    status = response.status;
+    body = await response.text();
+  }
+
+  if (status < 200 || status >= 300) {
+    if (status === 404) {
       throw new Error(`未找到 ${repo} 的最新 Release（HTTP 404），仓库或发布可能尚不存在`);
     }
-    if (response.status === 403 || response.status === 429) {
+    if (status === 403 || status === 429) {
       throw new Error(
-        `GitHub API 限流（HTTP ${response.status}）。请设置环境变量 GITHUB_TOKEN 后重试`,
+        `GitHub API 限流（HTTP ${status}）。请设置环境变量 GITHUB_TOKEN 后重试`,
       );
     }
-    throw new Error(`获取 ${repo} 最新 Release 失败：HTTP ${response.status} ${response.statusText}`);
+    throw new Error(`获取 ${repo} 最新 Release 失败：HTTP ${status}`);
   }
-  const data = await response.json();
+
+  let data;
+  try {
+    data = JSON.parse(body);
+  } catch {
+    throw new Error(`获取 ${repo} 最新 Release 失败：响应不是合法 JSON`);
+  }
   if (!data || !data.tag_name) {
     throw new Error(`获取 ${repo} 最新 Release 失败：响应中没有 tag_name`);
   }
@@ -280,6 +345,41 @@ function hasProxyEnv() {
     const value = process.env[key];
     return typeof value === "string" && value.trim() !== "";
   });
+}
+
+/** 用 curl 取 JSON（curl 会自动读取代理变量），返回 { status, body }。 */
+function curlJson(url, headers) {
+  const args = [
+    "-sS",
+    "--proto",
+    "=https",
+    "--connect-timeout",
+    "20",
+    "--max-time",
+    "60",
+    "--write-out",
+    "\n%{http_code}",
+  ];
+  for (const [key, value] of Object.entries(headers)) {
+    args.push("-H", `${key}: ${value}`);
+  }
+  args.push(url);
+
+  const result = spawnSync("curl", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) throw new Error(`curl: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`curl 退出码 ${result.status}: ${(result.stderr || "").trim()}`);
+  }
+  const text = result.stdout || "";
+  const index = text.lastIndexOf("\n");
+  const status = index === -1 ? 0 : Number.parseInt(text.slice(index + 1).trim(), 10);
+  return {
+    status: Number.isFinite(status) ? status : 0,
+    body: index === -1 ? text : text.slice(0, index),
+  };
 }
 
 function assertHttpsUrl(url) {
@@ -1172,7 +1272,7 @@ function uninstallBackend(backend) {
 }
 
 function printUsage(exitCode) {
-  console.log(`用法：node scripts/backends/cli.mjs <后端> [install|update|status|uninstall]
+  console.log(`用法：node scripts/backends/cli.mjs <后端> [install|update|status|uninstall] [--root <dir>] [--json]
 
 后端：
   bili      kukemc/bili-cli（PyPI 包 bili-agent）
@@ -1186,14 +1286,18 @@ function printUsage(exitCode) {
   status    查看安装状态与当前配置
   uninstall 卸载并还原首次安装前的配置
 
+全局参数：
+  --root <dir>  安装根（默认脚本上两级）
+  --json        以 NDJSON 事件输出日志（供 asg plugins 透传）
+
 安装目录：data/backends/<后端>/（article 为 data/backends/article-server/）
-配置文件：$GATEWAY_CONFIG_FILE，缺省为仓库根 gateway.yaml`);
+配置文件：$GATEWAY_CONFIG_FILE，缺省为安装根 gateway.yaml`);
   process.exit(exitCode);
 }
 
 async function main() {
-  const backendName = process.argv[2];
-  const subcommand = process.argv[3] || "install";
+  const [backendName, subcommandArg] = GLOBAL_ARGS.rest;
+  const subcommand = subcommandArg || "install";
 
   if (!backendName) {
     printUsage(1);

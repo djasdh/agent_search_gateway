@@ -936,7 +936,8 @@ export async function installSearxng({ root, platform, pins, options = {}, logge
 
   let resolved = mode;
   if (mode === 'auto') {
-    resolved = platform.startsWith('win32') ? 'native' : (await dockerUsable()) ? 'docker' : 'native';
+    // Docker 模式保留给显式指定，auto 一律走 native。
+    resolved = 'native';
     log(`auto 模式选择：${resolved}`);
   }
   if (mode === 'docker' && platform.startsWith('win32')) {

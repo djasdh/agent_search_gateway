@@ -84,7 +84,7 @@ gateway (本服务, :3000/mcp)
 
 - `cli-kukemc`（`bili` CLI）：详情、评论
 - `cli-ytdlp`（`yt-dlp`）：详情、音频直链
-- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`。服务端已拆到独立仓库 [djasdh/bilibili-article-server](https://github.com/djasdh/bilibili-article-server)，可用 `./scripts/backends/article.sh install` 安装。
+- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`。服务端已拆到独立仓库 [djasdh/bilibili-article-server](https://github.com/djasdh/bilibili-article-server)，可用 `asg plugins install article` 安装。
 
 要点：
 
@@ -246,7 +246,7 @@ irm https://raw.githubusercontent.com/djasdh/agent_search_gateway/master/scripts
 - 生成 `gateway.yaml` / `secrets.yaml`（随机 `gateway.token`）
 - 安装 Playwright chromium
 - 安装搜索依赖：
-  - Linux / macOS：默认用 Docker 起 searxng；没有 Docker 时回退到原生源码 + venv
+  - Linux / macOS / Windows：默认用原生源码 + venv；Docker 仅在使用 `--searxng-mode docker` 时启用
   - Windows：原生 searxng（自动打 `pwd` 补丁）+ 官方 FlareSolverr x64 二进制
 - 注册用户级自启（systemd --user / LaunchAgent / 登录计划任务）
 - 启动并做健康检查
@@ -262,7 +262,7 @@ curl -fsSL .../install.sh | bash -s -- --no-browser --no-service
 curl -fsSL .../install.sh | bash -s -- --searxng-url http://192.168.1.10:8888
 ```
 
-代理环境请设置 `HTTPS_PROXY`（或 `https_proxy`）。安装完成后用 `scripts/start-all.mjs` 或注册的服务启动。
+代理环境请设置 `HTTPS_PROXY`（或 `https_proxy`）。安装完成后用 `node ~/agent_search_gateway/bin/asg.mjs start` 或注册的服务启动。
 
 ## 快速开始（源码）
 
@@ -270,11 +270,12 @@ curl -fsSL .../install.sh | bash -s -- --searxng-url http://192.168.1.10:8888
 git clone https://github.com/djasdh/agent_search_gateway.git
 cd agent_search_gateway
 npm ci                             # 有 package-lock.json，用 ci 可复现
-npx playwright install chromium    # 首次安装浏览器
+npx playwright install chromium --only-shell   # 浏览器工具所需（headed 再跑不带 --only-shell）
 cp gateway.yaml.example gateway.yaml
 cp secrets.yaml.example secrets.yaml && chmod 600 secrets.yaml   # 填密钥（可留空）
-./scripts/gateway.sh start           # 启动三件套（searxng/flaresolverr/gateway）
-./scripts/gateway.sh status
+npm run build                       # 生成 dist/cli（bin/asg.mjs 依赖它）
+node bin/asg.mjs start               # 启动三件套（searxng/flaresolverr/gateway）
+node bin/asg.mjs status
 ```
 
 开发模式单独跑网关：
@@ -485,21 +486,21 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 | 文件 | 管什么 | 谁读 | 改后生效 |
 |---|---|---|---|
 | `gateway.yaml` 的 `searxng`/`search` 块 | **怎么调 searxng**：连哪个地址（`searxng.url`）、超时、结果数、缓存 | gateway (node) | 重启 gateway |
-| searxng 的 `settings.yml`（源码运行：`~/Projects/searxng/settings.yml`；Docker：`docker/searxng/settings.template.yml`） | **searxng 内部引擎配置**：启哪些引擎、safesearch、UA | SearXNG 启动时 | 重启 searxng |
+| searxng 的 `settings.yml`（安装版：`data/deps/searxng/settings.yml`；Docker：`docker/searxng/settings.template.yml`） | **searxng 内部引擎配置**：启哪些引擎、safesearch、UA | SearXNG 启动时 | 整栈重启 |
 
 要点：
 
 - `gateway.yaml` 的 `searxng.url` 必须指向 searxng 实际端口（源码运行 `127.0.0.1:8888`；Docker 内为服务名 `http://searxng:8080`），flaresolverr 同理（`8192`／`http://flaresolverr:8191`）
 - settings.yml 是独立配置文件，**不要放 `/tmp`**（重启会丢）
 - Docker 下 `settings.yml` 由 `docker/searxng/entrypoint.sh` 用环境变量渲染，**不要手改容器内文件**
-- 改引擎开关（如启用/禁用某个引擎）只动 settings.yml + 重启 searxng，**不需要动 gateway**
+- 引擎开关用 `asg engines enable/disable <name>`；它只改 settings.yml，然后整栈重启（会断开 MCP 连接）
 
 ### 广告过滤（StevenBlack hosts）
 
 - 数据源：StevenBlack/hosts（MIT），本地缓存 `data/adblock/hosts`（gitignore，不入库）
 - 力度：`off` / `ads`（默认）/ `ads+tracking` / `full`（对应不同 hosts 文件）
 - **天级自动拉取**：启动时若 hosts 缺失/过期（`auto_update_interval_ms`，默认 24h）自动拉取；进程内定时器周期检查，到点拉取并自动刷新广告过滤集（无需重启）
-- 手动更新：`./scripts/update-adlist.sh [level]`
+- 手动更新：`node bin/asg.mjs adlist update [--level ads|ads+tracking|full]`
 - 保白名单 `allowlist` 防误杀（wikipedia/github 等）
 
 ### 语义召回与本地语料库（可选）
@@ -513,20 +514,19 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 ## 后端安装（一个后端一个）
 
-外部后端统一装到 `data/backends/<name>/`，安装/更新后自动把可执行文件路径写回 `gateway.yaml`。每个脚本都支持 `install | update | status | uninstall`（默认 `install`）。
+外部后端统一装到 `data/backends/<name>/`，安装/更新后自动把可执行文件路径写回 `gateway.yaml`。
 
-| 后端 | Linux/macOS | Windows | 说明 |
-|---|---|---|---|
-| B 站 `bili` CLI | `./scripts/backends/bili.sh` | `scripts\backends\bili.ps1` | PyPI `bili-agent`，需要 Python ≥3.10 |
-| `yt-dlp` | `./scripts/backends/ytdlp.sh` | `scripts\backends\ytdlp.ps1` | 官方独立二进制，自动校验 SHA256 |
-| 微博 `OpenCLI` | `./scripts/backends/opencli.sh` | `scripts\backends\opencli.ps1` | npm 包；微博 override 会复制到 `~/.opencli/clis/weibo/` |
-| B 站专栏 HTTP 服务 | `./scripts/backends/article.sh` | `scripts\backends\article.ps1` | 独立仓库 `djasdh/bilibili-article-server`（GPL-3.0） |
+| 后端 | 安装命令 | 说明 |
+|---|---|---|
+| B 站 `bili` CLI | `asg plugins install bili` | PyPI `bili-agent`，需要 Python ≥3.10 |
+| `yt-dlp` | `asg plugins install ytdlp` | 官方独立二进制，自动校验 SHA256 |
+| 微博 `OpenCLI` | `asg plugins install opencli` | npm 包；微博 override 会复制到 `~/.opencli/clis/weibo/` |
+| B 站专栏 HTTP 服务 | `asg plugins install article` | 独立仓库 `djasdh/bilibili-article-server`（GPL-3.0） |
 
 ```bash
-./scripts/backends/bili.sh install
-./scripts/backends/ytdlp.sh update
-./scripts/backends/article.sh status
-./scripts/backends/opencli.sh uninstall
+asg plugins list
+asg plugins install bili
+asg plugins remove bili
 ```
 
 - 安装目录、版本、原配置值都在 `data/backends/<name>/`，`uninstall` 会还原 `gateway.yaml`。
@@ -535,22 +535,15 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 如果 PATH 里没有 Node，薄包装会自动下载官方 LTS 到 `data/toolchain/node/`。
 - 代理环境：脚本读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`，优先用系统 `curl` 下载（Windows 10+ 自带 `curl.exe`）。
 
-## 网关自更新（一个平台一个）
+## 网关自更新
 
 ```bash
-./scripts/self-update/linux.sh            # Linux
-./scripts/self-update/macos.sh            # macOS
-scripts\self-update\windows.cmd           # Windows
+asg update check                     # 只检查新版本
+asg update apply                     # 更新并重启
+asg update apply --version v0.3.0    # 指定版本
 ```
 
 流程：从公开仓库最新正式 Release 下载对应平台完整包 → SHA256 校验 → 解压到 `data/releases/<version>-<platform>/` → 切换 `data/current` → 重启并健康检查 → 失败自动回滚。
-
-```bash
-./scripts/self-update/linux.sh --check               # 只检查新版本
-./scripts/self-update/linux.sh --version v0.2.0      # 指定版本
-./scripts/self-update/linux.sh --no-restart          # 只更新不重启
-./scripts/self-update/linux.sh --repo <owner>/<name> # 换发布源
-```
 
 - `gateway.yaml`、`secrets.yaml`、`data/` 不随版本切换；更新前请确认已备份密钥。
 - 自更新只切换 `dist/` 与 `node_modules/`；`scripts/` 属于安装器，不随版本覆盖（升级安装器请重新拉取仓库）。
@@ -558,24 +551,33 @@ scripts\self-update\windows.cmd           # Windows
 - 完整包包含生产 `node_modules`，目标机器不需要 npm/tsc；Playwright 浏览器仍需首次 `npx playwright install chromium` 或已有浏览器。
 - 代理环境：脚本读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`，优先用系统 `curl` 下载；GitHub API 元数据仍走 Node `fetch`。
 
-## 管理脚本
+## 管理命令 asg
+
+安装后统一用 `$ROOT/bin/asg.mjs`（下文简写 `asg`，可自行加 alias）：
 
 ```bash
-./scripts/gateway.sh start|stop|restart|status|logs [searxng|flaresolverr|gateway|all]
-./scripts/gateway.ps1 start|stop|restart|status|logs        # Windows（只管理 gateway）
-node scripts/start-all.mjs                                  # 前台启动/监督全部组件（安装器自启入口）
-node scripts/start-all.mjs --check                          # 只检查 launch.json 与健康状态
-./scripts/update-adlist.sh [ads|ads+tracking|full]   # 更新广告过滤列表
-./scripts/bench.sh                                    # 本机压测（内存/延迟）
+asg status [--json]
+asg start | stop | restart                 # 整栈启停
+asg logs [gateway|searxng|flaresolverr|supervisor|all] [-f]
+asg config get|set|validate
+asg engines list [--all] | enable <name> | disable <name>
+asg plugins list|install|remove
+asg browser status|install [--full]
+asg adlist update
+asg update check|apply
+asg doctor
 ```
 
-`scripts/gateway.sh` 管理三件套，前置期望（脚本内路径可改）：
-- searxng 源码在 `$HOME/Projects/searxng`（含 `searxng.sh`）
-- FlareSolverr 源码在 `$HOME/Projects/FlareSolverr`（含 .venv，需 conda Xvfb 在 PATH）
+约定：
 
-> 若你已有自己的 searxng / FlareSolverr（或跑在容器里），不必用 gateway.sh：
+- 生命周期单位是**整栈**，没有单组件重启。
+- 改配置或引擎会**整栈重启**，MCP 连接会断开。
+- 配置文件仍是 `gateway.yaml` / `secrets.yaml`；secrets 只从 stdin 写入，不经过 argv。
+- `asg` 不读环境变量定位安装根：从自身位置向上找 `gateway.yaml`。
+
+> 若你已有自己的 searxng / FlareSolverr：
 > 直接在 `gateway.yaml` 里把 `searxng.url` / `flaresolverr.url` 指向它们，
-> 然后 `npm run build && npm start` 只跑网关本身即可。
+> 然后只跑网关本身即可。
 
 ## 测试与压测
 

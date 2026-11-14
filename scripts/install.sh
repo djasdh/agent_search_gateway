@@ -200,19 +200,17 @@ cat > "$ROOT/data/current.json" <<EOF
 }
 EOF
 
-# ---------- 稳定 scripts ----------
-mkdir -p "$ROOT/scripts"
-for f in start-all.mjs start-all.ps1 gateway.sh gateway.ps1; do
-  if [ -f "$TARGET/scripts/$f" ] && [ ! -f "$ROOT/scripts/$f" ]; then
-    cp "$TARGET/scripts/$f" "$ROOT/scripts/$f"
-  fi
-done
-chmod +x "$ROOT/scripts"/*.sh 2>/dev/null || true
+# ---------- 稳定入口 ----------
+mkdir -p "$ROOT/bin"
+if [ -f "$TARGET/bin/asg.mjs" ]; then
+  cp "$TARGET/bin/asg.mjs" "$ROOT/bin/asg.mjs"
+  chmod +x "$ROOT/bin/asg.mjs" 2>/dev/null || true
+fi
 
 # ---------- 交给 cli.mjs ----------
 log "运行安装配置 ..."
 if [ ${#PASSTHRU[@]} -gt 0 ]; then
-  "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" --install-root "$ROOT" "${PASSTHRU[@]}"
+  ASG_REPO="$REPO" "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" --install-root "$ROOT" "${PASSTHRU[@]}"
 else
-  "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" --install-root "$ROOT"
+  ASG_REPO="$REPO" "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" --install-root "$ROOT"
 fi

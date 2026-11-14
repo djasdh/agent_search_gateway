@@ -1,4 +1,5 @@
 import type { EmbeddingSettings, FlaresolverrSettings, SearxngSettings } from "./settings/index.js";
+import { GATEWAY_VERSION } from "./version.js";
 
 export interface BackendProbe {
   status: "up" | "down";
@@ -38,11 +39,14 @@ async function probe(url: string, timeoutMs = 3000): Promise<BackendProbe> {
       redirect: "manual",
     });
     const latencyMs = Date.now() - start;
-    return { status: res.ok ? "up" : "down", latencyMs, error: `HTTP ${res.status}` };
+    if (res.ok) return { status: "up", latencyMs };
+    return { status: "down", latencyMs, error: `HTTP ${res.status}` };
   } catch (err) {
     const latencyMs = Date.now() - start;
     const message = err instanceof Error ? err.message : String(err);
-    return { status: "down", latencyMs, error: message };
+    const cause = (err as { cause?: { code?: unknown } } | null)?.cause;
+    const code = cause && typeof cause === "object" && typeof cause.code === "string" ? cause.code : "";
+    return { status: "down", latencyMs, error: code ? `${message} (${code})` : message };
   } finally {
     clearTimeout(timer);
   }
@@ -59,7 +63,7 @@ export async function getHealth(
   ]);
   const report: HealthReport = {
     gateway: {
-      version: "0.1.0",
+      version: GATEWAY_VERSION,
       uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
     },
     searxng,

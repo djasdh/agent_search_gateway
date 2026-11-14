@@ -18,10 +18,10 @@ export async function installBrowser({ currentDir, logger }) {
   } catch {
     throw new Error(`未找到 Playwright CLI: ${cli}；请确认完整包包含 node_modules`);
   }
-  logger?.('安装 Playwright chromium（首次约 150MB）...');
-  const result = await run(process.execPath, [cli, 'install', 'chromium'], currentDir);
+  logger?.('安装 Playwright chromium headless shell（首次约 100MB；headed 可用 asg browser install --full 补装）...');
+  const result = await run(process.execPath, [cli, 'install', 'chromium', '--only-shell'], currentDir);
   if (result.error) throw new Error(`Playwright 安装失败: ${result.error.message}`);
-  if (result.code !== 0) throw new Error(`Playwright install chromium 退出码 ${result.code}`);
+  if (result.code !== 0) throw new Error(`Playwright install chromium --only-shell 退出码 ${result.code}`);
   logger?.('Playwright chromium 已就绪');
   return { installed: true };
 }

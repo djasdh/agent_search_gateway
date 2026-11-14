@@ -17,8 +17,9 @@ import { createSearchService } from "./search/service.js";
 import { createEmbeddingProvider, type EmbeddingProvider } from "./search/embedding/provider.js";
 import { createCorpusStore, type CorpusStore } from "./search/embedding/store.js";
 import { mcpSessionContext } from "./utils/session-context.js";
+import { GATEWAY_VERSION } from "./version.js";
 
-export const GATEWAY_VERSION = "0.1.0";
+export { GATEWAY_VERSION };
 
 /** 进程启动时间：health.uptimeSec 按进程计算，而不是按 MCP 会话。 */
 const PROCESS_STARTED_AT = Date.now();
