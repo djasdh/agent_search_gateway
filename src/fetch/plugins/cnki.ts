@@ -16,6 +16,7 @@
 import { createHash } from "node:crypto";
 import type { FetchSettings } from "../../settings/index.js";
 import type { Logger } from "../../logger.js";
+import { CNKI_HTTP } from "../channels/registry.js";
 import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./types.js";
 
 /** 端点。测试通过改写此对象指向本地桩服务器（见 `__tests__/cnki-plugin.test.ts`）。 */
@@ -274,6 +275,7 @@ export const cnkiPlugin: FetchPlugin = {
   aliases: ["知网"],
   capabilities: ["pdf"],
   requires: [],
+  channels: [CNKI_HTTP],
   enabled: () => true,
   available: () => true,
   match(url: URL): boolean {

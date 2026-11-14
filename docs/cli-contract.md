@@ -319,10 +319,31 @@ asg plugins install <name>
 asg plugins remove <name>
 ```
 
+- `<name>` 接受旧安装名（`bili` / `ytdlp` / `opencli` / `article`）、规范通道 ID
+  （`bilibili:kukemc` / `bilibili:ytdlp` / `bilibili:article` / `weibo:opencli`）
+  以及通道别名；`cnki:http` 是内置平台，不是可安装插件；
 - `install` / `remove` 以子进程调用 `scripts/backends/cli.mjs <name> <action> --root <ROOT> --json`；
 - 由安装器自己改 `gateway.yaml`、写 `data/backends/<name>/`；
 - 成功 → 整栈重启；失败 → 不自动回滚，报告 `previous.json` 路径；
-- `list` 只读，离线可用，`enabled` 表示对应 command 非空。
+- `list` 只读，离线可用，`enabled` 表示对应 command 非空；
+- `list` 输出增加 `platform` / `channel` / `channel_id`（平台 ID、通道名、完整通道 ID），JSON 示例：
+
+```json
+{
+  "plugins": [
+    {
+      "name": "bili",
+      "platform": "bilibili",
+      "channel": "kukemc",
+      "channel_id": "bilibili:kukemc",
+      "installed": true,
+      "version": "1.2.3",
+      "enabled": true,
+      "path": "data/backends/bili"
+    }
+  ]
+}
+```
 
 ### 5.7 浏览器
 

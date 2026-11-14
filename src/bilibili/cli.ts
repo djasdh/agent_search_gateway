@@ -1,7 +1,7 @@
 /** 两个 CLI 后端共用的执行层：起进程、收输出、解析 JSON 信封。 */
 
-import { execFile } from "node:child_process";
-import { BiliError, type CliResult } from "./types.js";
+import { runCliProcess, type CliResult } from "../fetch/channels/index.js";
+import { BiliError } from "./types.js";
 import { asRecord, type Json } from "./json.js";
 import { errorFromEnvelope } from "./errors.js";
 
@@ -9,24 +9,7 @@ const MAX_BUFFER = 32 * 1024 * 1024;
 
 /** 执行命令，永不 shell:true；超时/不存在都收敛成 CliResult。 */
 export function runCli(command: string, args: string[], timeoutMs: number): Promise<CliResult> {
-  return new Promise((resolve) => {
-    execFile(
-      command,
-      args,
-      { timeout: timeoutMs, maxBuffer: MAX_BUFFER, encoding: "utf8", windowsHide: true },
-      (err, stdout, stderr) => {
-        const e = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;
-        resolve({
-          failed: Boolean(err),
-          exitCode: e && typeof e.code === "number" ? e.code : null,
-          timedOut: Boolean(e?.killed),
-          spawnError: e && typeof e.code === "string" ? e.code : undefined,
-          stdout: stdout ?? "",
-          stderr: stderr ?? "",
-        });
-      },
-    );
-  });
+  return runCliProcess(command, args, { timeoutMs, maxBuffer: MAX_BUFFER });
 }
 
 /** kukemc 的 {ok,data,error} 信封；失败直接抛已映射的 BiliError。 */

@@ -1,8 +1,8 @@
 # 抓取插件契约
 
-本文定义内置抓取插件（fetch plugin）的统一契约：平台 ID、`match` / `enabled` / `available`
-语义、密钥引用方式与结果 helper。它是「抓取插件抽象统一」的第一步，**不**包含
-`FetchChannel` 通道层与 `asg plugins` 的平台/通道字段。
+本文定义内置抓取插件（fetch plugin）与抓取通道（fetch channel）的统一契约：
+平台 ID、`match` / `enabled` / `available` 语义、密钥引用、结果 helper，以及通道层与
+`asg plugins` 的元数据对应关系。
 
 ## 平台规范
 
@@ -30,6 +30,79 @@ canonicalChannelId("bilibili", "kukemc");  // "bilibili:kukemc"
 - 未知输入返回 `undefined`，由调用方报错或回退。
 - 通道 ID 统一为 `platform:channel`，后续通道层直接复用。
 
+## 平台与通道
+
+平台对象负责 URL 匹配与取件编排；通道对象描述具体后端（CLI / HTTP / 会话）。
+一个平台可以有多个通道：
+
+| 平台 | 通道 ID | 通道名 | 类型 | 能力 | 别名 |
+| --- | --- | --- | --- | --- | --- |
+| `bilibili` | `bilibili:kukemc` | kukemc | `cli` | detail、comments | `bili`、`cli-kukemc` |
+| `bilibili` | `bilibili:ytdlp` | yt-dlp | `cli` | detail、audio | `ytdlp`、`cli-ytdlp` |
+| `bilibili` | `bilibili:article` | article | `http` | detail、comments、audio、article | `article`、`bilibili:http` |
+| `weibo` | `weibo:opencli` | OpenCLI | `cli` | post、comments、user、user-posts、image | `opencli`、`weibo` |
+| `cnki` | `cnki:http` | CNKI HTTP | `http` | pdf | `cnki` |
+
+代码入口：`src/fetch/channels/`
+
+```ts
+normalizeChannel("bili");            // bilibili:kukemc
+normalizeChannel("bilibili:ytdlp");  // bilibili:ytdlp
+normalizeChannel("opencli");         // weibo:opencli
+normalizeChannel("cnki");            // cnki:http
+```
+
+### 通道契约
+
+```ts
+interface FetchChannel {
+  id: string;             // `${platform}:${channel}`
+  platform: string;
+  channel: string;
+  displayName: string;
+  kind: "cli" | "http" | "session";
+  capabilities: readonly string[];
+  aliases?: readonly string[];
+  probe?(ctx: ChannelContext): Promise<ChannelProbe>;
+  dispose?(): Promise<void>;
+}
+```
+
+- `CliChannel` 额外提供 `command` 与 `run(args, opts)`；
+- `HttpChannel` 额外提供 `request(input, init)`；
+- 所有 CLI 通道共用 `runCliProcess(command, args, opts)`：`execFile`、永不
+  `shell: true`、默认 `maxBuffer` 4MB、超时与 spawn 失败都收敛成 `CliResult`。
+- 当前通道对象是**静态元数据**；运行时执行仍由插件内部的 router / CLI / HTTP
+  实现完成（例如 Bilibili 仍按动作路由到 kukemc / yt-dlp / article）。
+
+### 插件声明通道
+
+```ts
+export const bilibiliPlugin: FetchPlugin = {
+  id: "bilibili",
+  // ...
+  channels: [BILIBILI_KUKEMC, BILIBILI_YTDLP, BILIBILI_ARTICLE],
+};
+```
+
+`channels` 是维护面/后续通道层的元数据，不参与 `find`。
+
+### `asg plugins` 的 NAME 与通道
+
+`asg plugins` 的 `NAME` 是**安装名**（`bili` / `ytdlp` / `opencli` / `article`）；
+表格里的 `PLATFORM` 是平台 ID，`CHANNEL` 是完整通道 ID。JSON 同时给出
+`channel`（通道名）与 `channel_id`（完整 ID）：
+
+| 安装名 NAME | PLATFORM | CHANNEL（完整 ID） | channel |
+| --- | --- | --- | --- |
+| `bili` | `bilibili` | `bilibili:kukemc` | `kukemc` |
+| `ytdlp` | `bilibili` | `bilibili:ytdlp` | `ytdlp` |
+| `article` | `bilibili` | `bilibili:article` | `article` |
+| `opencli` | `weibo` | `weibo:opencli` | `opencli` |
+
+`install` / `remove` 同时接受旧安装名、规范通道 ID 与通道别名；输出与 JSON
+始终使用规范 ID / 安装名。`cnki:http` 是内置平台，不是可安装插件。
+
 ## 插件契约
 
 ```ts
@@ -42,6 +115,7 @@ interface FetchPlugin {
   settingsKey?: string;       // 对应设置段，如 "bilibili"
   capabilities: readonly string[];
   requires?: readonly FetchPluginRequirement[];
+  channels?: readonly FetchChannel[];
 
   match(url: URL): boolean;
   enabled?(ctx: FetchPluginContext): boolean;
@@ -120,14 +194,15 @@ errorResult(code, message, { status?, finalUrl?, hint? });
    `FetchPlugin`：填写 `id` / `platform` / `name` / `displayName` /
    `capabilities` / `requires`，并实现 `match` 与 `fetch`。
 3. `match` 只做纯 URL 判断；开关写到 `enabled(ctx)`；维护面信息写到
-   `available(ctx)` 与 `requires`。
-4. 在 `src/fetch/plugins/index.ts` 的 `fetchPluginRegistry` 里按优先级注册。
+   `available(ctx)` 与 `requires`；在 `channels` 里声明该平台实际使用的通道。
+4. 在 `src/fetch/plugins/index.ts` 的 `fetchPluginRegistry` 里按优先级注册；
+   如通道是新后端，同时在 `src/fetch/channels/registry.ts` 登记。
 5. 补测试：URL 匹配、`enabled` 禁用后 `find` 回退、结果字段与错误码。
 
 注册表会在构造时检查重复 `id`，重复直接 `throw`，避免静默覆盖。
 
 ## 外部插件
 
-`FetchPlugin` 目前只是**稳定契约**：第三方可以按此接口实现并单独测试。
-运行时的外部插件加载（目录约定、版本校验、沙箱/权限）留到后续步骤，
-当前只有内置插件会被注册。
+`FetchPlugin` 与 `src/fetch/channels/` 目前只是**稳定契约**：第三方可以按这些接口
+实现平台与通道，并单独测试。运行时的外部插件加载（目录约定、版本校验、沙箱/权限）
+留到后续步骤，当前只有内置插件会被注册。

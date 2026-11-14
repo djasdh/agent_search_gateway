@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 import type { Logger } from "../logger.js";
 import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "../fetch/plugins/types.js";
 import {
+  BILIBILI_ARTICLE,
+  BILIBILI_KUKEMC,
+  BILIBILI_YTDLP,
+} from "../fetch/channels/registry.js";
+import {
   isBiliContentUrl, isBilibiliUrl, isShortLink, parseBiliRequest, resolveShortLink,
 } from "./parse.js";
 import type { ParsedBili } from "./parse.js";
@@ -228,6 +233,7 @@ export const bilibiliPlugin: FetchPlugin = {
   aliases: ["bili", "B站", "哔哩哔哩"],
   settingsKey: "bilibili",
   capabilities: ["video", "article", "comments"],
+  channels: [BILIBILI_KUKEMC, BILIBILI_YTDLP, BILIBILI_ARTICLE],
   requires: [
     { type: "backend", anyOf: ["bilibili:kukemc", "bilibili:ytdlp", "bilibili:article"] },
     { type: "secret", path: "secrets.bilibili.http.token", optional: true },

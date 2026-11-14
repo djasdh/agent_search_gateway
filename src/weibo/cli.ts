@@ -1,31 +1,14 @@
 /** OpenCLI 执行层：起进程、收输出、按 sysexits 映射错误。 */
 
-import { execFile } from "node:child_process";
 import type { Logger } from "../logger.js";
-import { WeiboError, type CliResult } from "./types.js";
+import { runCliProcess, type CliResult } from "../fetch/channels/index.js";
+import { WeiboError } from "./types.js";
 
 const MAX_BUFFER = 4 * 1024 * 1024;
 
 /** 执行 opencli，永不 shell:true；超时/不存在都收敛成 CliResult。 */
 export function runCli(command: string, args: string[], timeoutMs: number): Promise<CliResult> {
-  return new Promise((resolve) => {
-    execFile(
-      command,
-      args,
-      { timeout: timeoutMs, maxBuffer: MAX_BUFFER, encoding: "utf8", windowsHide: true },
-      (err, stdout, stderr) => {
-        const e = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;
-        resolve({
-          failed: Boolean(err),
-          exitCode: e && typeof e.code === "number" ? e.code : null,
-          timedOut: Boolean(e?.killed),
-          spawnError: e && typeof e.code === "string" ? e.code : undefined,
-          stdout: stdout ?? "",
-          stderr: stderr ?? "",
-        });
-      },
-    );
-  });
+  return runCliProcess(command, args, { timeoutMs, maxBuffer: MAX_BUFFER });
 }
 
 function tail(text: string, limit = 300): string {

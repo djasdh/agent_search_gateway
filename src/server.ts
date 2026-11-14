@@ -411,7 +411,9 @@ export async function createServer(settings: Settings, secrets: Secrets, logger:
         "?weibo=user（用户信息）、?weibo=user-posts&days=30（博主时间线，最近 N 天，1-90，默认 7）、" +
         "?weibo=user-posts&start=2026-10-01&end=2026-10-31（绝对日期区间，含边界）。" +
         "微博搜索/热搜用 search 工具的 categories=weibo / weibo_hot。\n\n" +
-        "平台规范 ID：bilibili / weibo / cnki（知网 PDF 取件）。旧别名 bili 仍可用于 CLI，但 fetch 输出统一使用规范 ID。",
+        "平台：bilibili / weibo / cnki。" +
+        "通道：bilibili:kukemc、bilibili:ytdlp、bilibili:article、weibo:opencli、cnki:http。" +
+        "旧别名 bili / opencli / ytdlp / article 仍可用于 asg plugins，但输出统一为规范 ID。",
       inputSchema: {
         url: z.string().url().describe("要抓取的网页 URL；微博可带 ?weibo= 动作参数（见工具说明）"),
         max_chars: z

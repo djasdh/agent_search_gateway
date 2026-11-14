@@ -10,12 +10,15 @@ const USAGE = `用法: asg plugins <list|install|remove> [name]
   install <name> 安装并整栈重启
   remove <name>  卸载并整栈重启
 
-可用插件：bili、ytdlp、opencli、article`;
+旧名：bili、ytdlp、opencli、article
+规范通道：bilibili:kukemc、bilibili:ytdlp、bilibili:article、weibo:opencli`;
 
 function renderList(plugins: PluginStatus[]): string {
-  const header = ["NAME", "INSTALLED", "VERSION", "ENABLED"];
+  const header = ["NAME", "PLATFORM", "CHANNEL", "INSTALLED", "VERSION", "ENABLED"];
   const rows = plugins.map((plugin) => [
     plugin.name,
+    plugin.platform,
+    plugin.channel_id,
     plugin.installed ? "yes" : "no",
     plugin.version ?? "-",
     plugin.enabled ? "yes" : "no",

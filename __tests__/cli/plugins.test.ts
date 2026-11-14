@@ -5,10 +5,12 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import type { Reporter } from "../../src/cli/output.js";
 import {
   listPlugins,
+  normalizePluginInput,
   pluginAction,
   spawnStream,
   type StreamRunner,
 } from "../../src/cli/deps/plugins.js";
+import { run as runPlugins } from "../../src/cli/commands/plugins.js";
 
 const tempDirs: string[] = [];
 
@@ -64,6 +66,36 @@ describe("插件参数与名称校验", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it("cnki:http 是内置平台，报 PLUGIN_UNKNOWN 并提示无需安装", async () => {
+    const runner = vi.fn<StreamRunner>(async () => ({ code: 0, signal: null }));
+    await expect(
+      pluginAction({
+        root: tempRoot(),
+        name: "cnki:http",
+        action: "install",
+        reporter: fakeReporter([]),
+        runner,
+      }),
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNKNOWN",
+      exitCode: 4,
+      message: expect.stringContaining("cnki 是内置平台，无需安装"),
+    });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it("normalizePluginInput 接受旧名、规范通道 ID 与别名", () => {
+    expect(normalizePluginInput("bili")).toBe("bili");
+    expect(normalizePluginInput("bilibili:kukemc")).toBe("bili");
+    expect(normalizePluginInput("bilibili:ytdlp")).toBe("ytdlp");
+    expect(normalizePluginInput("weibo:opencli")).toBe("opencli");
+    expect(normalizePluginInput("weibo")).toBe("opencli");
+    expect(normalizePluginInput("article")).toBe("article");
+    expect(normalizePluginInput("bilibili:http")).toBe("article");
+    expect(normalizePluginInput("cnki:http")).toBeUndefined();
+    expect(normalizePluginInput("nope")).toBeUndefined();
+  });
+
   it("install 拼装 --root/--json，透传事件并在成功后重启", async () => {
     const { root, cli } = makeInstallRoot();
     const events: Array<Record<string, unknown>> = [];
@@ -98,6 +130,34 @@ describe("插件参数与名称校验", () => {
     expect(events[0]).toMatchObject({ event: "log", service: "bili", message: "下载中" });
     expect(events[0]).not.toHaveProperty("type");
     expect(events[1]).toMatchObject({ event: "log", service: "bili", line: "[bili] 普通文本" });
+  });
+
+  it("install 规范通道 ID 归一化成安装名", async () => {
+    for (const [input, expected] of [
+      ["bilibili:ytdlp", "ytdlp"],
+      ["weibo:opencli", "opencli"],
+      ["bilibili:article", "article"],
+      ["bilibili:kukemc", "bili"],
+    ] as const) {
+      const { root, cli } = makeInstallRoot();
+      const calls: Array<{ command: string; args: string[] }> = [];
+      const runner: StreamRunner = async (command, args) => {
+        calls.push({ command, args });
+        return { code: 0, signal: null };
+      };
+
+      const result = await pluginAction({
+        root,
+        name: input,
+        action: "install",
+        reporter: fakeReporter([]),
+        runner,
+        restart: async () => {},
+      });
+
+      expect(calls[0]!.args).toEqual([cli, expected, "install", "--root", root, "--json"]);
+      expect(result.name).toBe(expected);
+    }
   });
 
   it("remove 传 uninstall；失败抛 PLUGIN_FAILED 并带 previous.json 路径，不重启", async () => {
@@ -161,6 +221,9 @@ describe("插件列表", () => {
 
     const bili = plugins.find((plugin) => plugin.name === "bili")!;
     expect(bili).toMatchObject({
+      platform: "bilibili",
+      channel: "kukemc",
+      channel_id: "bilibili:kukemc",
       installed: true,
       version: "1.2.3",
       enabled: true,
@@ -168,18 +231,53 @@ describe("插件列表", () => {
     });
 
     expect(plugins.find((plugin) => plugin.name === "ytdlp")).toMatchObject({
+      platform: "bilibili",
+      channel: "ytdlp",
+      channel_id: "bilibili:ytdlp",
       installed: false,
       enabled: false,
     });
     expect(plugins.find((plugin) => plugin.name === "opencli")).toMatchObject({
+      platform: "weibo",
+      channel: "opencli",
+      channel_id: "weibo:opencli",
       installed: false,
       enabled: false,
     });
     expect(plugins.find((plugin) => plugin.name === "article")).toMatchObject({
+      platform: "bilibili",
+      channel: "article",
+      channel_id: "bilibili:article",
       installed: true,
       version: "0.4.0",
       enabled: true,
       path: path.join(backends, "article-server"),
+    });
+  });
+
+  it("list 表格含 PLATFORM / CHANNEL 列", async () => {
+    const root = tempRoot();
+    const result = await runPlugins({ root, reporter: fakeReporter([]), rest: ["list"] });
+    expect(result.human).toContain("NAME");
+    expect(result.human).toContain("PLATFORM");
+    expect(result.human).toContain("CHANNEL");
+    expect(result.human).toContain("bilibili");
+    expect(result.human).toContain("kukemc");
+    expect(result.data).toMatchObject({
+      plugins: expect.arrayContaining([
+        expect.objectContaining({
+          name: "bili",
+          platform: "bilibili",
+          channel: "kukemc",
+          channel_id: "bilibili:kukemc",
+        }),
+        expect.objectContaining({
+          name: "opencli",
+          platform: "weibo",
+          channel: "opencli",
+          channel_id: "weibo:opencli",
+        }),
+      ]),
     });
   });
 

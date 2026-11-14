@@ -65,11 +65,4 @@ export class WeiboError extends Error {
   }
 }
 
-export interface CliResult {
-  failed: boolean;
-  exitCode: number | null;
-  timedOut: boolean;
-  spawnError?: string;
-  stdout: string;
-  stderr: string;
-}
+export type { CliResult } from "../fetch/channels/types.js";

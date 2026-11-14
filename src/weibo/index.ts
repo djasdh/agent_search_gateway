@@ -3,6 +3,7 @@
 import type { WeiboSettings } from "../settings/index.js";
 import type { Logger } from "../logger.js";
 import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "../fetch/plugins/types.js";
+import { WEIBO_OPENCLI } from "../fetch/channels/registry.js";
 import { normalizePostRows, runOpencli } from "./cli.js";
 import { downloadWeiboImage } from "./images.js";
 import {
@@ -526,6 +527,7 @@ export const weiboPlugin: FetchPlugin = {
   aliases: ["微博"],
   settingsKey: "weibo",
   capabilities: ["post", "comments", "user", "user-posts", "image"],
+  channels: [WEIBO_OPENCLI],
   requires: [
     { type: "command", path: "weibo.cli.command", default: "opencli" },
     { type: "backend", anyOf: ["weibo:opencli"] },

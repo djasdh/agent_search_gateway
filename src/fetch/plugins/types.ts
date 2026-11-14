@@ -10,19 +10,11 @@
  * - `enabled(ctx)` 是统一的开关，禁用后注册表直接跳过，回退通用抓取；
  * - `available(ctx)` 只用于维护面（健康检查 / 列表），**不参与** `find`。
  */
-import type { Logger } from "../../logger.js";
-import type { FetchPluginSecrets, FetchPluginSettings } from "../../settings/index.js";
+import type { ChannelContext, FetchChannel } from "../channels/types.js";
 
-export interface FetchPluginContext {
-  /** 插件可见的设置切片（按需自取，不传全量配置）。 */
-  settings: FetchPluginSettings;
-  /** 插件可见的密钥切片。 */
-  secrets: FetchPluginSecrets;
+export interface FetchPluginContext extends ChannelContext {
   /** 外部插件的自定义配置（内置插件通常不用）。 */
   pluginConfig?: unknown;
-  /** 按路径读密钥，支持 `secrets.bilibili.http.token` / `bilibili.http.token`。 */
-  getSecret(path: string): string | undefined;
-  logger?: Logger;
 }
 
 export interface FetchPluginResult {
@@ -59,6 +51,8 @@ export interface FetchPlugin {
   settingsKey?: string;
   capabilities: readonly string[];
   requires?: readonly FetchPluginRequirement[];
+  /** 该平台可用的通道（静态元数据；运行时执行仍由插件内部实现）。 */
+  channels?: readonly FetchChannel[];
 
   /** 是否接管该 URL：纯 URL 判断，不读配置、不抛错。 */
   match(url: URL): boolean;

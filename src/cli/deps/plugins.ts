@@ -13,10 +13,26 @@ import { CliError, EXIT } from "../errors.js";
 import type { Reporter } from "../output.js";
 import { exists, nodePath, releaseDir, rootPaths } from "../root.js";
 import { restartForConfig } from "../runtime/stack.js";
+import { channelById, normalizeChannel } from "../../fetch/channels/registry.js";
 
 export const PLUGIN_NAMES = ["bili", "ytdlp", "opencli", "article"] as const;
 
 export type PluginName = (typeof PLUGIN_NAMES)[number];
+
+/** 安装名 → 规范通道 ID（`platform:channel`）。 */
+const PLUGIN_CHANNEL: Record<PluginName, string> = {
+  bili: "bilibili:kukemc",
+  ytdlp: "bilibili:ytdlp",
+  article: "bilibili:article",
+  opencli: "weibo:opencli",
+};
+
+const CHANNEL_PLUGIN = new Map<string, PluginName>(
+  (Object.entries(PLUGIN_CHANNEL) as Array<[PluginName, string]>).map(([name, id]) => [id, name]),
+);
+
+/** 安装器可接受的规范通道（用于错误提示）。 */
+const CANONICAL_CHANNELS = PLUGIN_NAMES.map((name) => PLUGIN_CHANNEL[name]);
 
 /** 逻辑名 → data/backends 下的目录名（article 的历史目录是 article-server）。 */
 const INSTALL_DIR_NAME: Record<PluginName, string> = {
@@ -36,6 +52,12 @@ const CONFIG_KEYS: Record<PluginName, string[]> = {
 
 export interface PluginStatus {
   name: PluginName;
+  /** 规范平台 ID（如 `bilibili`）。 */
+  platform: string;
+  /** 通道名（如 `kukemc`）。 */
+  channel: string;
+  /** 完整规范通道 ID（如 `bilibili:kukemc`）。 */
+  channel_id: string;
   installed: boolean;
   version?: string;
   enabled: boolean;
@@ -153,16 +175,29 @@ export function isPluginName(value: string): value is PluginName {
   return (PLUGIN_NAMES as readonly string[]).includes(value);
 }
 
+/**
+ * 把用户输入归一化成安装名：
+ * 1. 精确匹配旧安装名（bili / ytdlp / opencli / article）；
+ * 2. 再按通道 ID 或别名归一化，映射回安装名。
+ * `cnki:http` 是内置平台，不可安装，返回 undefined。
+ */
+export function normalizePluginInput(value: string): PluginName | undefined {
+  if (isPluginName(value)) return value;
+  const channel = normalizeChannel(value);
+  return channel ? CHANNEL_PLUGIN.get(channel.id) : undefined;
+}
+
 /** 未知插件名：PLUGIN_UNKNOWN / 退出码 4。 */
 export function assertPluginName(value: string): PluginName {
-  if (!isPluginName(value)) {
-    throw new CliError(
-      "PLUGIN_UNKNOWN",
-      EXIT.INVALID,
-      `未知插件：${value}（可用：${PLUGIN_NAMES.join("、")}）`,
-    );
-  }
-  return value;
+  const name = normalizePluginInput(value);
+  if (name) return name;
+  const channel = normalizeChannel(value);
+  const builtinHint = channel?.id === "cnki:http" ? "；cnki 是内置平台，无需安装" : "";
+  throw new CliError(
+    "PLUGIN_UNKNOWN",
+    EXIT.INVALID,
+    `未知插件：${value}（旧名：${PLUGIN_NAMES.join(" / ")}；规范通道：${CANONICAL_CHANNELS.join(" / ")}）${builtinHint}`,
+  );
 }
 
 export function backendsDir(root: string): string {
@@ -231,8 +266,12 @@ export function listPlugins(root: string): PluginStatus[] {
   return PLUGIN_NAMES.map((name) => {
     const dir = pluginInstallDir(root, name);
     const record = readVersionRecord(dir);
+    const channel = channelById(PLUGIN_CHANNEL[name]);
     const entry: PluginStatus = {
       name,
+      platform: channel?.platform ?? "",
+      channel: channel?.channel ?? "",
+      channel_id: channel?.id ?? "",
       installed: record.installed,
       enabled: commandEnabled(config, CONFIG_KEYS[name]!),
     };

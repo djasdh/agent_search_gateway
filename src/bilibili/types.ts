@@ -99,16 +99,7 @@ export class BiliError extends Error {
   }
 }
 
-/** CLI 子进程的统一结果；错误映射只认这个形状。 */
-export interface CliResult {
-  failed: boolean;
-  exitCode: number | null;
-  timedOut: boolean;
-  /** spawn 失败时的错误码（如 ENOENT）；正常退出为 undefined。 */
-  spawnError?: string;
-  stdout: string;
-  stderr: string;
-}
+export type { CliResult } from "../fetch/channels/types.js";
 
 export interface BiliBackend {
   readonly id: string;
