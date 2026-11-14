@@ -8,6 +8,7 @@ import type { SearchSettingsDeps } from "../../src/search/service.js";
 import {
   defaultSecrets,
   defaultSettings,
+  getSecretAtPath,
   ssrfOf,
   type Secrets,
   type Settings,
@@ -67,6 +68,7 @@ export function directDeps(settings: Settings, secrets: Secrets = makeSecrets())
     plugins: {
       settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
       secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+      getSecret: (path) => getSecretAtPath(secrets, path),
     },
   };
 }
@@ -83,6 +85,7 @@ export function fetchServiceDeps(
     plugins: {
       settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
       secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+      getSecret: (path) => getSecretAtPath(secrets, path),
     },
   };
 }

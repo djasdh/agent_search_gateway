@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSettings } from "../src/settings/index.js";
+import { getSecretAtPath, loadSettings } from "../src/settings/index.js";
 import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
 import type { WeiboSettings } from "../src/settings/index.js";
 import { downloadWeiboImage } from "../src/weibo/images.js";
@@ -68,6 +68,7 @@ function makeConfig(): FetchPluginContext {
   return {
     settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
     secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+    getSecret: (path) => getSecretAtPath(secrets, path),
   };
 }
 
@@ -79,6 +80,7 @@ function disabledConfig(): FetchPluginContext {
   return {
     settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
     secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+    getSecret: (path) => getSecretAtPath(secrets, path),
   };
 }
 
@@ -217,18 +219,16 @@ describe("image url", () => {
 });
 
 describe("plugin match", () => {
-  it("普通页面必须带 ?weibo=，图片 URL 自动命中", () => {
-    const config = makeConfig().settings;
-    expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC?weibo=post"), config)).toBe(true);
-    expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC"), config)).toBe(false);
-    expect(weiboPlugin.match(new URL("https://wx1.sinaimg.cn/large/a.jpg"), config)).toBe(true);
-    expect(weiboPlugin.match(new URL("https://example.com/1/AbC?weibo=post"), config)).toBe(false);
+  it("普通页面必须带 ?weibo=，图片 URL 自动命中（纯 URL 判断）", () => {
+    expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC?weibo=post"))).toBe(true);
+    expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC"))).toBe(false);
+    expect(weiboPlugin.match(new URL("https://wx1.sinaimg.cn/large/a.jpg"))).toBe(true);
+    expect(weiboPlugin.match(new URL("https://example.com/1/AbC?weibo=post"))).toBe(false);
   });
 
-  it("配置关闭时不接管，保证回退 generic", () => {
-    const config = disabledConfig().settings;
-    expect(weiboPlugin.match(new URL("https://wx1.sinaimg.cn/large/a.jpg"), config)).toBe(false);
-    expect(weiboPlugin.match(new URL("https://weibo.com/1/AbC?weibo=post"), config)).toBe(false);
+  it("配置关闭时由 enabled 统一过滤，保证回退 generic", () => {
+    const config = disabledConfig();
+    expect(weiboPlugin.enabled?.(config)).toBe(false);
   });
 });
 
@@ -305,6 +305,7 @@ describe("plugin fetch", () => {
     const config: FetchPluginContext = {
       settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
       secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+      getSecret: (path) => getSecretAtPath(secrets, path),
     };
     const url = new URL("https://weibo.com/1/Cached?weibo=post");
     await weiboPlugin.fetch(url, config);

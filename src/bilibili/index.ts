@@ -221,7 +221,20 @@ async function fetchBilibili(url: URL, ctx: FetchPluginContext): Promise<FetchPl
 }
 
 export const bilibiliPlugin: FetchPlugin = {
+  id: "bilibili",
+  platform: "bilibili",
   name: "bilibili",
+  displayName: "Bilibili",
+  aliases: ["bili", "B站", "哔哩哔哩"],
+  settingsKey: "bilibili",
+  capabilities: ["video", "article", "comments"],
+  requires: [
+    { type: "backend", anyOf: ["bilibili:kukemc", "bilibili:ytdlp", "bilibili:article"] },
+    { type: "secret", path: "secrets.bilibili.http.token", optional: true },
+  ],
   match: (url) => isBilibiliUrl(url) && (isBiliContentUrl(url) || isShortLink(url)),
+  enabled: (ctx) => ctx.settings.bilibili.enabled,
+  // 实际后端可用性由 router 按动作/路由处理，这里只声明插件可被调用。
+  available: () => true,
   fetch: fetchBilibili,
 };

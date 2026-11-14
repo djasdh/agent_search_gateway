@@ -3,7 +3,7 @@ import type { FetchSettings, Settings, SsrfSettings } from "./types.js";
 
 export { loadSettings, defaultConfigPath, defaultSecretsPath } from "./load.js";
 export type { LoadedSettings, LoadSettingsOptions } from "./load.js";
-export { defaultSecrets, secretsSchema } from "./secrets.js";
+export { defaultSecrets, secretsSchema, getSecretAtPath } from "./secrets.js";
 export type { Secrets } from "./secrets.js";
 export * from "./types.js";
 

@@ -1,7 +1,7 @@
 import type { Logger } from "../logger.js";
 import { baseContentType, classifyContentType, formatBytes } from "./convert.js";
-import { findPlugin } from "./plugins/index.js";
-import type { FetchPluginResult } from "./plugins/types.js";
+import { fetchPluginRegistry } from "./plugins/index.js";
+import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./plugins/types.js";
 import { isPrivateHost } from "./ssrf.js";
 import type { FetchPluginSecrets, FetchPluginSettings, FetchSettings } from "../settings/index.js";
 
@@ -11,6 +11,7 @@ export interface DirectFetchDeps {
   plugins: {
     settings: FetchPluginSettings;
     secrets: FetchPluginSecrets;
+    getSecret: (path: string) => string | undefined;
   };
 }
 
@@ -146,15 +147,14 @@ async function readLimited(
 
 /** 命中取件插件时的分支：插件自管请求与重定向，网关只看产物。 */
 async function fetchViaPlugin(
-  plugin: NonNullable<ReturnType<typeof findPlugin>>,
+  plugin: FetchPlugin,
   url: URL,
-  deps: DirectFetchDeps,
-  logger?: Logger,
+  ctx: FetchPluginContext,
 ): Promise<DirectFetchResult> {
   const base = { plugin: plugin.name, finalUrl: url.toString() } as const;
   let r: FetchPluginResult;
   try {
-    r = await plugin.fetch(url, { settings: deps.plugins.settings, secrets: deps.plugins.secrets, logger });
+    r = await plugin.fetch(url, ctx);
   } catch (err) {
     return {
       ok: false,
@@ -257,11 +257,18 @@ export async function directFetch(
     return { ok: false, errorKind: "invalid_url", errorMessage: `非法 URL: ${urlStr}` };
   }
 
-  // 取件插件优先（ADR-0007 D5）：匹配表由插件提供，网关无条件信任
-  const plugin = findPlugin(url, deps.plugins.settings);
+  // 取件插件优先（ADR-0007 D5）：匹配表由插件提供，网关无条件信任。
+  // enabled 由注册表统一过滤，禁用后自动回退通用抓取。
+  const pluginCtx: FetchPluginContext = {
+    settings: deps.plugins.settings,
+    secrets: deps.plugins.secrets,
+    getSecret: deps.plugins.getSecret,
+    logger,
+  };
+  const plugin = fetchPluginRegistry.find(url, pluginCtx);
   if (plugin) {
     logger?.debug(`fetch plugin matched: ${plugin.name} ${url.toString()}`);
-    return await fetchViaPlugin(plugin, url, deps, logger);
+    return await fetchViaPlugin(plugin, url, pluginCtx);
   }
 
   // SSRF 防护（初始 URL；重定向目标在循环内同样检查）

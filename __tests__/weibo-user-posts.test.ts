@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSettings } from "../src/settings/index.js";
+import { getSecretAtPath, loadSettings } from "../src/settings/index.js";
 import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
 import { weiboPlugin } from "../src/weibo/index.js";
 
@@ -77,6 +77,7 @@ function makeConfig(mode: string, overrides: Record<string, string> = {}): Fetch
   return {
     settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
     secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+    getSecret: (path) => getSecretAtPath(secrets, path),
   };
 }
 

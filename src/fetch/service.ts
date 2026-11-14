@@ -43,6 +43,7 @@ export interface FetchServiceDeps {
   plugins: {
     settings: FetchPluginSettings;
     secrets: FetchPluginSecrets;
+    getSecret: (path: string) => string | undefined;
   };
 }
 

@@ -10,7 +10,8 @@ import { FetchStore } from "../src/fetch/store.js";
 import type { Logger } from "../src/logger.js";
 import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
 import type { Settings } from "../src/settings/index.js";
-import { deepMerge, fetchServiceDeps, makeSettings, type DeepPartial } from "./helpers/settings.js";
+import { deepMerge, fetchServiceDeps, makeSecrets, makeSettings, type DeepPartial } from "./helpers/settings.js";
+import { getSecretAtPath } from "../src/settings/index.js";
 
 const silentLogger: Logger = {
   debug: () => {},
@@ -36,9 +37,11 @@ function makeConfig(overrides: DeepPartial<Settings> = {}): Settings {
 
 function pluginCtx(overrides: DeepPartial<Settings> = {}): FetchPluginContext {
   const settings = makeConfig(overrides);
+  const secrets = makeSecrets();
   return {
     settings: { fetch: settings.fetch, bilibili: settings.bilibili },
-    secrets: { bilibili: { http: { token: "" } } },
+    secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+    getSecret: (path) => getSecretAtPath(secrets, path),
     logger: silentLogger,
   };
 }

@@ -519,11 +519,20 @@ async function fetchWeibo(url: URL, ctx: FetchPluginContext): Promise<FetchPlugi
 }
 
 export const weiboPlugin: FetchPlugin = {
+  id: "weibo",
+  platform: "weibo",
   name: "weibo",
-  match: (url, settings) => {
-    // 默认关闭时不接管任何 URL，保证关闭后行为与改动前一致。
-    if (settings && !settings.weibo.enabled) return false;
-    return isWeiboImageUrl(url) || (isWeiboUrl(url) && url.searchParams.has("weibo"));
-  },
+  displayName: "微博",
+  aliases: ["微博"],
+  settingsKey: "weibo",
+  capabilities: ["post", "comments", "user", "user-posts", "image"],
+  requires: [
+    { type: "command", path: "weibo.cli.command", default: "opencli" },
+    { type: "backend", anyOf: ["weibo:opencli"] },
+  ],
+  // 纯 URL 匹配；开关统一由 enabled 过滤，禁用后回退通用抓取。
+  match: (url) => isWeiboImageUrl(url) || (isWeiboUrl(url) && url.searchParams.has("weibo")),
+  enabled: (ctx) => ctx.settings.weibo.enabled,
+  available: (ctx) => ctx.settings.weibo.cli.command.trim().length > 0,
   fetch: fetchWeibo,
 };

@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { BrowserPool } from "./browser/pool.js";
 import { BrowserTools } from "./browser/tools.js";
-import { ssrfOf, type GatewaySettings, type Secrets, type Settings } from "./settings/index.js";
+import { getSecretAtPath, ssrfOf, type GatewaySettings, type Secrets, type Settings } from "./settings/index.js";
 import { fetchAdList, isAdListStale, startAdListScheduler } from "./filter/adlist.js";
 import { buildDomainFilter, type DomainFilter } from "./filter/domain-filter.js";
 import { createFlareSolverrClient, type FlareSolverrClient } from "./fetch/flaresolverr.js";
@@ -311,6 +311,7 @@ export async function createServer(settings: Settings, secrets: Secrets, logger:
       plugins: {
         settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
         secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+        getSecret: (path) => getSecretAtPath(secrets, path),
       },
     },
     logger,
@@ -409,7 +410,8 @@ export async function createServer(settings: Settings, secrets: Secrets, logger:
         "微博 URL 加 ?weibo= 触发：?weibo=post（单条正文/转发 + 图片外链）、?weibo=comments&limit=20（评论）、" +
         "?weibo=user（用户信息）、?weibo=user-posts&days=30（博主时间线，最近 N 天，1-90，默认 7）、" +
         "?weibo=user-posts&start=2026-10-01&end=2026-10-31（绝对日期区间，含边界）。" +
-        "微博搜索/热搜用 search 工具的 categories=weibo / weibo_hot。",
+        "微博搜索/热搜用 search 工具的 categories=weibo / weibo_hot。\n\n" +
+        "平台规范 ID：bilibili / weibo / cnki（知网 PDF 取件）。旧别名 bili 仍可用于 CLI，但 fetch 输出统一使用规范 ID。",
       inputSchema: {
         url: z.string().url().describe("要抓取的网页 URL；微博可带 ?weibo= 动作参数（见工具说明）"),
         max_chars: z

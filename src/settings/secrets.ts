@@ -70,6 +70,26 @@ export const secretsSchema = z
 
 export type Secrets = z.infer<typeof secretsSchema>;
 
+/**
+ * 按路径读密钥：兼容 `secrets.bilibili.http.token` 与 `bilibili.http.token`。
+ * 存在且是字符串时返回（可能为空串），路径不存在/不是字符串返回 undefined。
+ */
+export function getSecretAtPath(secrets: Secrets, path: string): string | undefined {
+  const parts = path
+    .split(".")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts[0] === "secrets") parts.shift();
+  if (parts.length === 0) return undefined;
+
+  let current: unknown = secrets;
+  for (const key of parts) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return typeof current === "string" ? current : undefined;
+}
+
 /** 全空密钥：secrets.yaml 缺失时的默认值。 */
 export function defaultSecrets(): Secrets {
   return secretsSchema.parse({});

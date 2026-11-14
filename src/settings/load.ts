@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import YAML from "yaml";
 import { settingsSchema } from "./schema.js";
 import { applySecretEnv, defaultSecrets, secretsPermissionWarning, secretsSchema, type Secrets } from "./secrets.js";
+import { resolveSecretTree } from "./secret-ref.js";
 import type { Settings } from "./types.js";
 
 /** 展开路径开头的 `~` 为当前用户 home（配置文件里的可读写法）。 */
@@ -178,7 +179,8 @@ export function loadSettingsFrom(
   const rawSecrets = readYaml(secretsPath, false);
   let secrets: Secrets;
   if (rawSecrets === undefined || rawSecrets === null) {
-    secrets = defaultSecrets();
+    // 默认值里没有 env:，仍走一次解析，保持与文件路径一致的行为。
+    secrets = resolveSecretTree(defaultSecrets(), env);
   } else {
     if (typeof rawSecrets !== "object" || Array.isArray(rawSecrets)) {
       throw new Error(`${secretsPath} 内容格式非法`);
@@ -187,7 +189,7 @@ export function loadSettingsFrom(
     if (!parsedSecrets.success) {
       throw new Error(`${secretsPath} 校验失败: ${formatIssues(parsedSecrets.error.issues)}`);
     }
-    secrets = parsedSecrets.data;
+    secrets = resolveSecretTree(parsedSecrets.data, env);
   }
 
   applySecretEnv(secrets, env);

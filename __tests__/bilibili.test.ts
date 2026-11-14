@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSettings } from "../src/settings/index.js";
+import { getSecretAtPath, loadSettings } from "../src/settings/index.js";
 import type { FetchPluginContext } from "../src/fetch/plugins/types.js";
 import { bilibiliPlugin, buildArticleSummary, buildVideoSummary } from "../src/bilibili/index.js";
 import { createCommentStore } from "../src/bilibili/store.js";
@@ -21,6 +21,7 @@ function cfg(yaml = "gateway: { host: 127.0.0.1 }\nbilibili: { enabled: true }\n
   return {
     settings: { fetch: settings.fetch, bilibili: settings.bilibili },
     secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+    getSecret: (path) => getSecretAtPath(secrets, path),
   };
 }
 

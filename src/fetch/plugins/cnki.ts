@@ -267,7 +267,15 @@ async function fetchCnki(url: URL, ctx: FetchPluginContext): Promise<FetchPlugin
 }
 
 export const cnkiPlugin: FetchPlugin = {
+  id: "cnki",
+  platform: "cnki",
   name: "cnki",
+  displayName: "知网",
+  aliases: ["知网"],
+  capabilities: ["pdf"],
+  requires: [],
+  enabled: () => true,
+  available: () => true,
   match(url: URL): boolean {
     if (!isCnkiHost(url)) return false;
     return (
