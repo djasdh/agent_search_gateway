@@ -2,6 +2,26 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
+## [0.3.2] - 2026-11-14
+
+### Added
+
+- 抓取插件统一契约：`bilibili` / `weibo` / `cnki` 规范平台 ID 与别名归一化。
+- 新增 `FetchPluginRegistry`，重复 ID fail-fast，统一 `enabled` 过滤；禁用后回退通用抓取。
+- 新增 `env:NAME` 密钥引用与 `getSecretAtPath`，`secrets.yaml` 可引用环境变量。
+- 新增 `FetchChannel` / `CliChannel` / `HttpChannel` 通道契约。
+- 新增 `runCliProcess`，Bilibili / Weibo CLI 统一进程执行，永不 `shell:true`。
+- 新增通道注册表：`bilibili:kukemc` / `bilibili:ytdlp` / `bilibili:article` / `weibo:opencli` / `cnki:http`。
+- `asg plugins` 输出 `platform` / `channel` / `channel_id`，输入接受规范通道 ID 与旧别名。
+- 新增 `docs/fetch-plugin-contract.md`。
+
+### Changed
+
+- 抓取插件 `match(url)` 改为纯 URL；`enabled(ctx)` 统一过滤；`available(ctx)` 仅用于维护面。
+- 插件增加 `platform` / `aliases` / `displayName` / `settingsKey` / `capabilities` / `requires` / `channels`。
+- Bilibili / Weibo CLI 执行统一走 `runCliProcess`。
+- `fetch` 工具描述补充平台与通道列表；`fetch` 输出统一使用规范平台 ID。
+
 ## [0.3.1] - 2026-11-14
 
 ### Added
