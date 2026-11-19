@@ -64,7 +64,6 @@ describe("loadSettings (gateway.yaml + secrets.yaml)", () => {
     expect(secrets.embedding.api_key).toBe("");
     expect(secrets.search.reverse_image.saucenao.api_key).toBe("");
     expect(secrets.search.deepseek.api_key).toBe("");
-    expect(secrets.bilibili.http.token).toBe("");
     expect(secrets.browser.proxy_password).toBe("");
   });
 
@@ -121,9 +120,6 @@ search:
   reverse_image:
     saucenao:
       api_key: sauce-key
-bilibili:
-  http:
-    token: bili-token
 browser:
   proxy_password: proxy-pass
 `,
@@ -132,7 +128,6 @@ browser:
     expect(secrets.gateway.token).toBe("from-secrets");
     expect(secrets.embedding.api_key).toBe("emb-key");
     expect(secrets.search.reverse_image.saucenao.api_key).toBe("sauce-key");
-    expect(secrets.bilibili.http.token).toBe("bili-token");
     expect(secrets.browser.proxy_password).toBe("proxy-pass");
   });
 
@@ -150,13 +145,11 @@ browser:
       GATEWAY_TOKEN: "env-token",
       EMBEDDING_API_KEY: "env-emb",
       SAUCENAO_API_KEY: "env-sauce",
-      BILIBILI_HTTP_TOKEN: "env-bili",
       BROWSER_PROXY_PASSWORD: "env-proxy",
     });
     expect(secrets.gateway.token).toBe("env-token");
     expect(secrets.embedding.api_key).toBe("env-emb");
     expect(secrets.search.reverse_image.saucenao.api_key).toBe("env-sauce");
-    expect(secrets.bilibili.http.token).toBe("env-bili");
     expect(secrets.browser.proxy_password).toBe("env-proxy");
 
     const second = load(d, { EMBEDDING_API_KEY: "" });
@@ -263,14 +256,11 @@ searxng:
   url: http://localhost:8888///
 search:
   quota_ledger_path: ~/quota.json
-bilibili:
-  comment_db: ~/bili.sqlite
 `,
     );
     const { settings } = load(d);
     expect(settings.searxng.url).toBe("http://localhost:8888");
     expect(settings.search.quota_ledger_path).toBe(join(homedir(), "quota.json"));
-    expect(settings.bilibili.comment_db).toBe(join(homedir(), "bili.sqlite"));
   });
 
   it("rerank.diversity 默认关闭；非法 mmr_lambda 直接报错（不再静默回退）", () => {

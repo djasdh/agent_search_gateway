@@ -47,13 +47,16 @@ describe("secrets 加载与读取", () => {
       const configPath = join(dir, "gateway.yaml");
       const secretsPath = join(dir, "secrets.yaml");
       writeFileSync(configPath, "gateway: { host: 127.0.0.1 }\n");
-      writeFileSync(secretsPath, "bilibili:\n  http:\n    token: env:MY_BILI_TOKEN\n");
+      writeFileSync(
+        secretsPath,
+        "extensions:\n  demo:\n    token: env:MY_DEMO_TOKEN\n",
+      );
 
-      const { secrets } = loadSettingsFrom(configPath, secretsPath, { MY_BILI_TOKEN: "real-token" });
-      expect(secrets.bilibili.http.token).toBe("real-token");
+      const { secrets } = loadSettingsFrom(configPath, secretsPath, { MY_DEMO_TOKEN: "real-token" });
+      expect(secrets.extensions.demo!.token).toBe("real-token");
 
       const missing = loadSettingsFrom(configPath, secretsPath, {});
-      expect(missing.secrets.bilibili.http.token).toBe("");
+      expect(missing.secrets.extensions.demo!.token).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -61,11 +64,11 @@ describe("secrets 加载与读取", () => {
 
   it("getSecretAtPath 支持带/不带 secrets. 前缀", () => {
     const secrets = defaultSecrets();
-    secrets.bilibili.http.token = "tok";
-    expect(getSecretAtPath(secrets, "secrets.bilibili.http.token")).toBe("tok");
-    expect(getSecretAtPath(secrets, "bilibili.http.token")).toBe("tok");
-    expect(getSecretAtPath(secrets, "weibo.cli.command")).toBeUndefined();
-    expect(getSecretAtPath(secrets, "bilibili.http")).toBeUndefined();
+    secrets.extensions.demo = { token: "tok" };
+    expect(getSecretAtPath(secrets, "secrets.extensions.demo.token")).toBe("tok");
+    expect(getSecretAtPath(secrets, "extensions.demo.token")).toBe("tok");
+    expect(getSecretAtPath(secrets, "extensions.missing.token")).toBeUndefined();
+    expect(getSecretAtPath(secrets, "extensions.demo")).toBeUndefined();
     expect(getSecretAtPath(secrets, "secrets")).toBeUndefined();
   });
 });

@@ -27,7 +27,7 @@ const LEGACY_SECRET_PATHS: Array<{ path: string[]; hint: string }> = [
     hint: "secrets.yaml 的 search.reverse_image.saucenao.api_key",
   },
   { path: ["search", "deepseek", "api_key"], hint: "secrets.yaml 的 search.deepseek.api_key" },
-  { path: ["bilibili", "http", "token"], hint: "secrets.yaml 的 bilibili.http.token" },
+  { path: ["bilibili", "http", "token"], hint: "secrets.yaml 的 extensions.bilibili.token" },
   { path: ["browser", "proxy_password"], hint: "secrets.yaml 的 browser.proxy_password" },
 ];
 
@@ -109,8 +109,6 @@ function normalizeSettings(settings: Settings): Settings {
     settings.search.reverse_image.baidu.url,
   );
   settings.search.quota_ledger_path = expandHome(settings.search.quota_ledger_path);
-  settings.bilibili.http.base_url = stripTrailingSlashes(settings.bilibili.http.base_url);
-  settings.bilibili.comment_db = expandHome(settings.bilibili.comment_db);
   settings.embedding.base_url = stripTrailingSlashes(settings.embedding.base_url);
   return settings;
 }

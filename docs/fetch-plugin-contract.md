@@ -1,56 +1,15 @@
 # 抓取插件契约
 
 本文定义抓取插件（fetch plugin）与抓取通道（fetch channel）的统一契约：
-平台 ID、`match` / `enabled` / `available` 语义、密钥引用、结果 helper，以及通道层与
-`asg plugins` 的元数据对应关系。
+平台 ID、`match` / `enabled` / `available` 语义、密钥引用与结果 helper。
 
-## 平台规范
+## 平台与通道由扩展声明
 
-平台 ID 使用小写英文规范名；中文与旧写法只作为输入别名，所有输出统一用规范 ID。
+核心不再维护平台/通道注册表。平台 ID、通道 ID、别名和能力都来自已安装扩展：
 
-| 规范 ID | 显示名 | 别名 | 能力（capabilities） |
-| --- | --- | --- | --- |
-| `bilibili` | Bilibili | `bili`、`B站`、`哔哩哔哩` | `video`、`article`、`comments` |
-| `weibo` | 微博 | `微博` | `post`、`comments`、`user`、`user-posts`、`image` |
-| `cnki` | 知网 | `知网` | `pdf` |
-
-代码入口：`src/fetch/platforms.ts`
-
-```ts
-normalizePlatform("bili");                 // "bilibili"
-normalizePlatform("微博");                  // "weibo"
-normalizePlatform("知网");                  // "cnki"
-normalizePlatform("unknown");              // undefined
-canonicalChannelId("bilibili", "kukemc");  // "bilibili:kukemc"
-```
-
-规则：
-
-- `trim` + `toLowerCase` 后**精确匹配**，不做模糊纠错。
-- 未知输入返回 `undefined`，由调用方报错或回退。
-- 通道 ID 统一为 `platform:channel`，后续通道层直接复用。
-
-## 平台与通道
-
-平台对象负责 URL 匹配与取件编排；通道对象描述具体后端（CLI / HTTP / 会话）。
-一个平台可以有多个通道：
-
-| 平台 | 通道 ID | 通道名 | 类型 | 能力 | 别名 |
-| --- | --- | --- | --- | --- | --- |
-| `bilibili` | `bilibili:kukemc` | kukemc | `cli` | detail、comments | `bili`、`cli-kukemc` |
-| `bilibili` | `bilibili:ytdlp` | yt-dlp | `cli` | detail、audio | `ytdlp`、`cli-ytdlp` |
-| `bilibili` | `bilibili:article` | article | `http` | detail、comments、audio、article | `article`、`bilibili:http` |
-| `weibo` | `weibo:opencli` | OpenCLI | `cli` | post、comments、user、user-posts、image | `opencli`、`weibo` |
-| `cnki` | `cnki:http` | CNKI HTTP | `http` | pdf | `cnki` |
-
-代码入口：`src/fetch/channels/`
-
-```ts
-normalizeChannel("bili");            // bilibili:kukemc
-normalizeChannel("bilibili:ytdlp");  // bilibili:ytdlp
-normalizeChannel("opencli");         // weibo:opencli
-normalizeChannel("cnki");            // cnki:http
-```
+- V2 manifest 的 `fetch_channels[].id` 使用 `platform:channel`，platform 取第一段前缀；
+- 入口可以导出 `channels`；不导出时 manifest 的 `fetch_channels` 只用于展示；
+- 通道对象是静态元数据，不参与 `find`。
 
 ### 通道契约
 
@@ -78,10 +37,19 @@ interface FetchChannel {
 ### 插件声明通道
 
 ```ts
-export const bilibiliPlugin: FetchPlugin = {
-  id: "bilibili",
+export const examplePlugin: FetchPlugin = {
+  id: "example-plugin",
   // ...
-  channels: [BILIBILI_KUKEMC, BILIBILI_YTDLP, BILIBILI_ARTICLE],
+  channels: [
+    {
+      id: "example:cli",
+      platform: "example",
+      channel: "cli",
+      displayName: "Example CLI",
+      kind: "cli",
+      capabilities: ["page"],
+    },
+  ],
 };
 ```
 
@@ -89,31 +57,19 @@ export const bilibiliPlugin: FetchPlugin = {
 
 ### `asg plugins` 的 NAME 与通道
 
-`asg plugins` 的 `NAME` 是**安装名**（`bili` / `ytdlp` / `opencli` / `article`）；
-表格里的 `PLATFORM` 是平台 ID，`CHANNEL` 是完整通道 ID。JSON 同时给出
-`channel`（通道名）与 `channel_id`（完整 ID）：
-
-| 安装名 NAME | PLATFORM | CHANNEL（完整 ID） | channel |
-| --- | --- | --- | --- |
-| `bili` | `bilibili` | `bilibili:kukemc` | `kukemc` |
-| `ytdlp` | `bilibili` | `bilibili:ytdlp` | `ytdlp` |
-| `article` | `bilibili` | `bilibili:article` | `article` |
-| `opencli` | `weibo` | `weibo:opencli` | `opencli` |
-
-`install` / `remove` 同时接受旧安装名、规范通道 ID 与通道别名；输出与 JSON
-始终使用规范 ID / 安装名。`cnki:http` 是通道 ID，CNKI 取件插件通过
-`asg extensions install djasdh/agent-search-gateway-plugin-cnki` 安装，不走 `asg plugins`。
+`asg plugins` 只保留为兼容 facade：`NAME` 来自扩展 manifest 的 `backends[].aliases[0]`
+或 `backend.id`；`PLATFORM` / `CHANNEL` 字段暂为空字符串。通道信息以
+`asg extensions list` 的 `CHANNELS` 为准。
 
 ## 插件契约
 
 ```ts
 interface FetchPlugin {
-  id: string;                 // 规范平台 ID
-  platform: string;           // 与 id 相同
+  id: string;                 // 扩展 ID；由 manifest.id 覆盖
+  platform: string;           // V2 从 fetch_channels 前缀派生，V1 从 manifest.platform 回退
   name: string;               // 兼容旧日志/结果标注
   displayName: string;
   aliases?: readonly string[];
-  settingsKey?: string;       // 旧内置实现的设置段（如 "bilibili"）；外部插件改用 config_schema
   capabilities: readonly string[];
   requires?: readonly FetchPluginRequirement[];
   channels?: readonly FetchChannel[];
@@ -183,9 +139,9 @@ export const examplePlugin: FetchPlugin = {
 `secrets.yaml` 里的字符串支持 `env:NAME`：
 
 ```yaml
-bilibili:
-  http:
-    token: env:BILIBILI_HTTP_TOKEN
+extensions:
+  example-fetch:
+    api_key: env:EXAMPLE_API_KEY
 ```
 
 - 只支持 `env:NAME`；`env:` 前后允许空白。
@@ -193,16 +149,6 @@ bilibili:
 - 非 `env:` 的值原样返回，作为兼容保留。
 - **推荐**：生产环境用环境变量注入密钥，不建议长期把明文密钥写在本程序的
   `secrets.yaml` 里。
-
-加载时先 `resolveSecretTree` 解析引用，再执行原有的 `applySecretEnv`
-（`BILIBILI_HTTP_TOKEN` 等固定环境变量仍可覆盖）。
-
-内置插件读取密钥统一走 `ctx.getSecret(path)`，路径支持带或不带 `secrets.` 前缀：
-
-```ts
-ctx.getSecret("secrets.bilibili.http.token");
-ctx.getSecret("bilibili.http.token");
-```
 
 外部插件不读 `getSecret()`，而是读 `ctx.pluginSecrets`：
 
@@ -249,8 +195,8 @@ errorResult(code, message, { status?, finalUrl?, hint? });
 官方插件仓库：`djasdh/agent-search-gateway-plugin-{bilibili,weibo,cnki}`。
 第三方插件按 `docs/extensions.md` 的 manifest 与单文件 ESM 约定发布，核心不再内置平台实现。
 
-1. 在 `src/fetch/platforms.ts` 的 `PLATFORMS` 里登记规范 ID、显示名与别名（仅当需要**新的平台 ID**；
-   插件私有参数不需要改核心，写在 manifest 的 `config_schema` 里）。
+1. 不需要改核心平台表：V2 manifest 用 `fetch_channels[].id` 声明平台/通道，
+   平台前缀由第一段派生。
 2. 在插件仓库实现 `FetchPlugin`：填写 `id` / `platform` / `name` / `displayName` /
    `capabilities` / `requires`，并实现 `match` 与 `fetch`。
 3. `match` 只做纯 URL 判断；开关与参数读 `ctx.pluginConfig`（如
@@ -259,7 +205,7 @@ errorResult(code, message, { status?, finalUrl?, hint? });
 4. 在 `asg-extension.json`（V2）或 `asg-plugin.json`（V1）的 `config_schema` 里声明
    私有配置；用户用 `asg extensions config <id> --set key=value` 修改，密钥用
    `asg extensions secret <id> --name <name> --stdin` 写入。**不再**需要改核心
-   `settings/schema.ts`。V1 的平台回退仍读旧的 `platforms.ts`；V2 从
+   `settings/schema.ts`。V1 从 `manifest.platform` 回退，V2 从
    `fetch_channels[0].id` 前缀派生。
 5. 插件入口导出命名 `fetch`，由 `asg extensions install` 安装到
    `data/extensions/<id>/`；网关启动时自动加载。V2 声明 `backends` 时，运行时用

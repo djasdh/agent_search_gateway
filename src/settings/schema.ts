@@ -92,18 +92,6 @@ const reverseImageSchema = z
   })
   .strict();
 
-const searchWeiboSchema = z
-  .object({
-    enabled: z.boolean().default(false),
-    category: z.string().default("weibo"),
-    hot_category: z.string().default("weibo_hot"),
-    limit: z.number().int().positive().max(50).default(10),
-    timeout_ms: z.number().int().positive().default(30000),
-    cache_ttl_ms: z.number().int().nonnegative().default(60000),
-    retry: z.number().int().min(0).max(3).default(1),
-  })
-  .strict();
-
 const searchDeepseekApiSchema = z
   .object({
     base_url: z.string().url().default("https://api.deepseek.com/v1/tools"),
@@ -157,8 +145,6 @@ export const searchSchema = z
     // 类别感知超时（ADR-0008 / ADR-0013）：science 等类别的引擎更慢
     category_timeout_ms: z.record(z.string(), z.number().int().positive()).default({}),
     reverse_image: reverseImageSchema.default(() => reverseImageSchema.parse({})),
-    // 微博搜索/热搜（网关侧文本源）：categories 命中才启用；命中时不请求 searxng。
-    weibo: searchWeiboSchema.default(() => searchWeiboSchema.parse({})),
     deepseek: searchDeepseekSchema.default(() => searchDeepseekSchema.parse({})),
   })
   .strict();
@@ -218,110 +204,6 @@ export const fetchSchema = z
     download_ttl_ms: z.number().int().positive().default(604800000),
     download_max_total_bytes: z.number().int().positive().default(4294967296),
     files_route: z.boolean().default(true),
-  })
-  .strict();
-
-const bilibiliRoutesSchema = z
-  .object({
-    detail: z.array(z.string()).default(["cli-kukemc", "cli-ytdlp", "http"]),
-    comments: z.array(z.string()).default(["cli-kukemc", "http"]),
-    audio: z.array(z.string()).default(["cli-ytdlp", "http"]),
-    article: z.array(z.string()).default(["http"]),
-  })
-  .strict();
-
-const bilibiliKukemcSchema = z
-  .object({
-    command: z.string().default("bili"),
-    timeout_ms: z.number().int().positive().default(30000),
-  })
-  .strict();
-
-const bilibiliYtdlpSchema = z
-  .object({
-    command: z.string().default("yt-dlp"),
-    cookies_file: z.string().default(""),
-    probe_command: z.string().default(""),
-    timeout_ms: z.number().int().positive().default(30000),
-  })
-  .strict();
-
-const bilibiliHttpSchema = z
-  .object({
-    base_url: z.string().url().default("http://127.0.0.1:8010"),
-    // 非空时由插件负责拉起/回收；空 = 只连常驻服务。
-    command: z.array(z.string()).default([]),
-    startup_timeout_ms: z.number().int().positive().default(10000),
-    request_timeout_ms: z.number().int().positive().default(15000),
-  })
-  .strict();
-
-const bilibiliCommentsSchema = z
-  .object({
-    page_size: z.number().int().positive().max(50).default(20),
-    search_limit: z.number().int().positive().max(200).default(50),
-    // 单次 fetch 最多拉多少页，避免一次调用挂太久；没拉完下次续传。
-    max_pages_per_fetch: z.number().int().positive().max(500).default(20),
-  })
-  .strict();
-
-export const bilibiliSchema = z
-  .object({
-    enabled: z.boolean().default(false),
-    routes: bilibiliRoutesSchema.default(() => bilibiliRoutesSchema.parse({})),
-    cli_kukemc: bilibiliKukemcSchema.default(() => bilibiliKukemcSchema.parse({})),
-    cli_ytdlp: bilibiliYtdlpSchema.default(() => bilibiliYtdlpSchema.parse({})),
-    http: bilibiliHttpSchema.default(() => bilibiliHttpSchema.parse({})),
-    auth_probe_ttl_ms: z.number().int().positive().default(60000),
-    comment_db: z.string().default("data/bilibili.sqlite"),
-    comments: bilibiliCommentsSchema.default(() => bilibiliCommentsSchema.parse({})),
-  })
-  .strict();
-
-const weiboCliSchema = z
-  .object({
-    command: z.string().default("opencli"),
-    timeout_ms: z.number().int().positive().default(30000),
-  })
-  .strict();
-
-const weiboDefaultsSchema = z
-  .object({
-    comments_limit: z.number().int().positive().max(50).default(20),
-    // OpenCLI user-posts adapter 的 limit 上限为 100；时间段抓取按 100 逐段拉取。
-    user_posts_limit: z.number().int().positive().max(100).default(100),
-  })
-  .strict();
-
-const weiboUserPostsSchema = z
-  .object({
-    default_days: z.number().int().positive().max(90).default(7),
-    max_days: z.number().int().positive().max(3650).default(90),
-    max_items: z.number().int().positive().max(5000).default(500),
-    max_calls: z.number().int().positive().max(500).default(30),
-    budget_ms: z.number().int().positive().default(120000),
-    max_chars: z.number().int().positive().default(500),
-  })
-  .strict();
-
-const weiboImagesSchema = z
-  .object({
-    enabled: z.boolean().default(true),
-    referer: z.string().default("https://weibo.com/"),
-    max_bytes: z.number().int().positive().default(20971520),
-    timeout_ms: z.number().int().positive().default(20000),
-    retry_tvax: z.boolean().default(true),
-  })
-  .strict();
-
-export const weiboSchema = z
-  .object({
-    enabled: z.boolean().default(false),
-    cli: weiboCliSchema.default(() => weiboCliSchema.parse({})),
-    defaults: weiboDefaultsSchema.default(() => weiboDefaultsSchema.parse({})),
-    user_posts: weiboUserPostsSchema.default(() => weiboUserPostsSchema.parse({})),
-    images: weiboImagesSchema.default(() => weiboImagesSchema.parse({})),
-    cache_ttl_ms: z.number().int().nonnegative().default(60000),
   })
   .strict();
 
@@ -407,8 +289,6 @@ export const settingsSchema = z
     rerank: rerankSchema.default(() => rerankSchema.parse({})),
     ad_filter: adFilterSchema.default(() => adFilterSchema.parse({})),
     fetch: fetchSchema.default(() => fetchSchema.parse({})),
-    bilibili: bilibiliSchema.default(() => bilibiliSchema.parse({})),
-    weibo: weiboSchema.default(() => weiboSchema.parse({})),
     browser: browserSchema.default(() => browserSchema.parse({})),
     embedding: embeddingSchema.default(() => embeddingSchema.parse({})),
     corpus: corpusSchema.default(() => corpusSchema.parse({})),

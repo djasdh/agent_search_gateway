@@ -47,6 +47,13 @@
 - `asg extensions install/setup/remove` 不自动重启网关；`config` / `secret` 写入仍整栈重启。
 - 插件 `config` 写入在 setup 子进程内同样按 `config_schema` 校验，失败不落盘。
 
+### Removed
+
+- 删除核心平台配置段：`gateway.yaml` 的顶层 `bilibili` / `weibo`、`search.weibo`，以及 `secrets.yaml` 的 `bilibili`。
+- 删除 `BILIBILI_HTTP_TOKEN` 环境变量映射；平台密钥改走 `extensions.<id>.<name>`。
+- 删除 `src/fetch/platforms.ts`、`src/fetch/channels/registry.ts` 与对应静态平台/通道测试；平台与通道改由扩展 manifest 声明。
+- 删除 `FetchPlugin.settingsKey`。
+
 ### Fixed
 
 - 安装器：`$VAR` 紧跟全角括号会被 bash 3.2 吞进变量名并触发 `unbound variable`，统一改为 `${VAR}` 写法。

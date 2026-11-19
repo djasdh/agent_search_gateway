@@ -44,16 +44,14 @@ export type FetchPluginRequirement =
   | { type: "command"; path: string; default?: string; optional?: boolean };
 
 export interface FetchPlugin {
-  /** 规范平台 ID（见 `src/fetch/platforms.ts`）。 */
+  /** 扩展 ID；由 manifest.id 覆盖。 */
   id: string;
-  /** 与 id 相同，保留给按平台分组的调用方。 */
+  /** 平台 ID；V2 从 fetch_channels 前缀派生，V1 从 manifest.platform 回退。 */
   platform: string;
   /** 插件名，兼容旧日志/结果标注。 */
   name: string;
   displayName: string;
   aliases?: readonly string[];
-  /** 对应设置段（如 `bilibili`）。 */
-  settingsKey?: string;
   capabilities: readonly string[];
   requires?: readonly FetchPluginRequirement[];
   /** 该平台可用的通道（静态元数据；运行时执行仍由插件内部实现）。 */

@@ -7,7 +7,7 @@
 | 类别 | 归属 | 谁执行 | 启用状态存哪里 |
 |---|---|---|---|
 | searxng 引擎 | `EngineGroup = "searxng"` | searxng 进程 | `data/deps/searxng/settings.yml` 的 `engines[].disabled` |
-| 网关原生引擎 | `gateway.reverse_image` / `gateway.search` / `gateway.upstream` | gateway（Node） | `gateway.yaml`：`search.reverse_image.sources` / `search.weibo.enabled` / `search.deepseek.enabled` |
+| 网关原生引擎 | `gateway.reverse_image` / `gateway.search` / `gateway.upstream` | gateway（Node） | 内置源写 `gateway.yaml` 的 `search.*`；扩展源写 `extensions.<id>.config` |
 
 - **searxng 引擎**由 searxng 自己执行；网关只负责改 settings.yml，然后把引擎名转发给 searxng。
 - **网关原生引擎**由 gateway 自己执行。provider 同时提供 CLI 需要的元数据（名称、可用性、routing、requires）和运行期需要的调用实现。
@@ -92,7 +92,7 @@ interface EngineProvider {
 
 不需要改 CLI 命令、`GatewayStore` 或 `service.ts`。CLI 的 `asg engines list` 会通过 `providersForGroup("gateway.reverse_image")` 自动出现该源，运行期也会按 `search.reverse_image.sources` 自动分发。
 
-文本源（`gateway.search`）同理：新建 provider、在 registry 注册，并声明 `enabled(ctx)` 与 `enabledPath`（如 weibo 的 `["search","weibo","enabled"]`）。CLI 的 `GatewayStore` 会按 `enabledPath` 自动读写，运行期按 `providersForGroup("gateway.search")` 依次询问 `enabled()` / `plan()`，不需要再改 store 或 `service.ts`。**内置 provider** 如果带独立配置段，仍需在 `settings/schema.ts` 增加对应 schema；复用现有配置段则不必。第三方扩展不需要改核心 schema：用 manifest 的 `config_schema` 声明私有配置（见 3.1）。
+文本源（`gateway.search`）同理：新建 provider、在 registry 注册，并声明 `enabled(ctx)` 与 `enabledPath`（扩展源如 `["extensions","weibo","config","enabled"]`）。CLI 的 `GatewayStore` 会按 `enabledPath` 自动读写，运行期按 `providersForGroup("gateway.search")` 依次询问 `enabled()` / `plan()`，不需要再改 store 或 `service.ts`。**内置 provider** 如果带独立配置段，仍需在 `settings/schema.ts` 增加对应 schema；复用现有配置段则不必。第三方扩展不需要改核心 schema：用 manifest 的 `config_schema` 声明私有配置（见 3.1）。
 
 ### 3.1 第三方扩展的路由、私有配置与密钥
 
@@ -231,7 +231,7 @@ CLI 支持 `asg engines list/enable/disable/secret`；`route` 不支持通用上
 
 当前已知边界：
 
-- `service.ts` 的文本源 `limit` 仍取 `search.weibo.limit`；新增需要独立上限的文本源时，要扩展 `GatewaySearchPlan` / `GatewaySearchOptions`。
+- `service.ts` 的文本源 `limit` 取请求值与 `search.max_results_cap`，不再有平台独立上限；新增需要独立上限的文本源时，要扩展 `GatewaySearchPlan` / `GatewaySearchOptions`。
 - 新文本源如果带独立配置段，**内置 provider** 仍需同步 `settings/schema.ts`；
   第三方扩展改用 manifest 的 `config_schema` + `extensions.<id>.config`，不再改核心 schema。
 - 通用上游（`gateway.upstream`）v1 只内置：`extensions/loader.ts` 不把该组加入第三方

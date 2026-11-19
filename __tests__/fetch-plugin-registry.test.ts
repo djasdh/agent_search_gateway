@@ -14,13 +14,11 @@ import {
 import type { Settings } from "../src/settings/index.js";
 
 function ctx(overrides: DeepPartial<Settings> = {}): FetchPluginContext {
-  const settings = makeSettings(
-    deepMerge({ bilibili: { enabled: true }, weibo: { enabled: true } }, overrides),
-  );
+  const settings = makeSettings(overrides);
   const secrets = makeSecrets();
   return {
-    settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
-    secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+    settings: { fetch: settings.fetch },
+    secrets: {},
     getSecret: (path) => getSecretAtPath(secrets, path),
   };
 }

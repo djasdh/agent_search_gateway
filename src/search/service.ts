@@ -1,4 +1,4 @@
-import type { RerankSettings, SearchSettings, SearxngSettings, WeiboSettings } from "../settings/index.js";
+import type { RerankSettings, SearchSettings, SearxngSettings } from "../settings/index.js";
 import type { DomainFilter } from "../filter/domain-filter.js";
 import { isBlocked } from "../filter/domain-filter.js";
 import { readFileSync } from "node:fs";
@@ -637,7 +637,6 @@ export interface SearchSettingsDeps {
   saucenao_api_key: string;
   /** DeepSeek 通用上游密钥（secrets.search.deepseek.api_key）。 */
   deepseek_api_key: string;
-  weibo: WeiboSettings;
 }
 
 export function createSearchService(
@@ -646,9 +645,9 @@ export function createSearchService(
   logger: Logger,
   searchDeps: SearchDeps = {},
 ): SearchService {
-  const { search, rerank, searxng, saucenao_api_key, deepseek_api_key, weibo } = deps;
+  const { search, rerank, searxng, saucenao_api_key, deepseek_api_key } = deps;
   const providerCtx: EngineProviderContext = {
-    config: { search: search as unknown, weibo: weibo as unknown },
+    config: { search: search as unknown },
     secrets: {
       search: {
         reverse_image: { saucenao: { api_key: saucenao_api_key } },
@@ -698,8 +697,7 @@ export function createSearchService(
     tStart: number,
   ): Promise<SearchOutcome> {
     const requested = params.numResults ?? search.max_results;
-    // `search.weibo.limit` 是扩展文本源的兼容上限（默认 10），核心不再内置微博实现。
-    const limit = Math.min(requested, search.max_results_cap, search.weibo.limit);
+    const limit = Math.min(requested, search.max_results_cap);
     const query = (params.query ?? "").trim();
     const hot = plan.hot;
     const displayQuery = hot ? `${provider.displayName}热搜` : query;

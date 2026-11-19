@@ -1,5 +1,5 @@
 /**
- * 统一 CLI 进程执行：bilibili / weibo 等所有 CLI 通道共用。
+ * 统一 CLI 进程执行：所有 CLI 通道共用。
  *
  * 永不 `shell: true`；超时、命令不存在、非零退出都收敛成 `CliResult`，
  * 由各后端自己映射成业务错误码。

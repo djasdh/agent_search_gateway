@@ -47,18 +47,6 @@ const searchSecretsSchema = z
   })
   .strict();
 
-const bilibiliHttpSecretsSchema = z
-  .object({
-    token: z.string().default(""),
-  })
-  .strict();
-
-const bilibiliSecretsSchema = z
-  .object({
-    http: bilibiliHttpSecretsSchema.default(() => bilibiliHttpSecretsSchema.parse({})),
-  })
-  .strict();
-
 const browserSecretsSchema = z
   .object({
     proxy_password: z.string().default(""),
@@ -77,7 +65,6 @@ export const secretsSchema = z
     gateway: gatewaySecretsSchema.default(() => gatewaySecretsSchema.parse({})),
     embedding: embeddingSecretsSchema.default(() => embeddingSecretsSchema.parse({})),
     search: searchSecretsSchema.default(() => searchSecretsSchema.parse({})),
-    bilibili: bilibiliSecretsSchema.default(() => bilibiliSecretsSchema.parse({})),
     browser: browserSecretsSchema.default(() => browserSecretsSchema.parse({})),
     extensions: extensionSecretsSchema,
   })
@@ -86,7 +73,7 @@ export const secretsSchema = z
 export type Secrets = z.infer<typeof secretsSchema>;
 
 /**
- * 按路径读密钥：兼容 `secrets.bilibili.http.token` 与 `bilibili.http.token`。
+ * 按路径读密钥：兼容带 `secrets.` 前缀与不带前缀的写法。
  * 存在且是字符串时返回（可能为空串），路径不存在/不是字符串返回 undefined。
  */
 export function getSecretAtPath(secrets: Secrets, path: string): string | undefined {
@@ -116,7 +103,6 @@ const SECRET_ENV: Array<[string, (s: Secrets, v: string) => void]> = [
   ["EMBEDDING_API_KEY", (s, v) => void (s.embedding.api_key = v)],
   ["SAUCENAO_API_KEY", (s, v) => void (s.search.reverse_image.saucenao.api_key = v)],
   ["DEEPSEEK_API_KEY", (s, v) => void (s.search.deepseek.api_key = v)],
-  ["BILIBILI_HTTP_TOKEN", (s, v) => void (s.bilibili.http.token = v)],
   ["BROWSER_PROXY_PASSWORD", (s, v) => void (s.browser.proxy_password = v)],
 ];
 
@@ -131,8 +117,6 @@ export function secretEnvNameForPath(path: readonly string[]): string | undefine
       return "SAUCENAO_API_KEY";
     case "search.deepseek.api_key":
       return "DEEPSEEK_API_KEY";
-    case "bilibili.http.token":
-      return "BILIBILI_HTTP_TOKEN";
     case "browser.proxy_password":
       return "BROWSER_PROXY_PASSWORD";
     default:

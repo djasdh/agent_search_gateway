@@ -305,7 +305,6 @@ export const fetch = examplePlugin;        // 运行期约定：命名导出 fet
 | `name` / `displayName` | 内部名 / 展示名 |
 | `capabilities` | 例如 `["article"]`、`["video", "comments"]`、`["pdf"]` |
 | `aliases?` / `requires?` / `channels?` | 可选元数据 |
-| `settingsKey?` | 旧内置实现的设置段；外部插件不要用，改用 `config_schema` |
 | `match(url)` | **纯 URL 判断**：不读配置、不抛错、不发请求 |
 | `enabled?(ctx)` | 统一开关；返回 false 时宿主跳过插件并回退通用抓取 |
 | `available?(ctx)` | 维护面可用性（健康检查/列表），**不参与** URL 匹配 |

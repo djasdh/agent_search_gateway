@@ -369,7 +369,7 @@ asg engines secret <engine> [--name <name>] --clear
   - `--clear` 删除对应路径；引擎没有密钥依赖且未给 `--name` 报 `ENGINE_NO_SECRET`，未知 `--name` 报 `MISSING_SECRET`（均为退出码 4）；
 - `route` / `secret` 只写一个文件，成功后整栈重启一次；人类输出会提示 MCP 连接会断开；
 - 缺 secret 的引擎 `enable` 直接拒绝：`MISSING_SECRET`，退出码 4；
-- 微博启用依赖顶层 `weibo.enabled`（运行能力开关）：为 `false`/缺失时 `enable gateway.search:weibo` 报 `MISSING_DEPENDENCY`，退出码 4；引擎命令只写 `search.weibo.enabled`，不改顶层开关；
+- 扩展搜索源可以把启用开关声明为 `config:extensions.<id>.config.enabled`；为 `false`/缺失时 `enable` 报 `MISSING_DEPENDENCY`，退出码 4；引擎命令不改扩展私有配置；
 - 批量启用/禁用全有或全无：先全部校验，任一不可用则一个文件都不写；
 - 一次命令涉及两个文件时，先全部写完，再整栈重启一次；写入失败会恢复已写文件；
 - 未知引擎名：`ENGINE_NOT_FOUND`，退出码 4；
@@ -399,7 +399,7 @@ asg engines secret <engine> [--name <name>] --clear
   "enabled": false,
   "available": false,
   "routing": ["category:weibo", "category:weibo_hot"],
-  "requires": ["config:weibo.enabled"]
+  "requires": ["config:extensions.weibo.config.enabled"]
 }
 ```
 

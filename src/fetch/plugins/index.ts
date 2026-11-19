@@ -2,8 +2,8 @@
  * 取件插件注册表默认实例。
  *
  * `directFetch` 入口先查此表：命中即交给插件（跳过 SSRF 与 generic 重定向链），
- * 未命中才走通用抓取。核心不再内置平台实现；bilibili / weibo / cnki 等由
- * `data/extensions` 下的外部插件提供，启动时注入合并后的注册表。
+ * 未命中才走通用抓取。核心不内置平台实现；平台能力由 `data/extensions`
+ * 下的外部插件提供，启动时注入合并后的注册表。
  */
 import { createFetchPluginRegistry, type FetchPluginRegistry } from "./registry.js";
 import type { FetchPlugin, FetchPluginContext } from "./types.js";

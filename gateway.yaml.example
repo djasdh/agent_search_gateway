@@ -84,18 +84,6 @@ search:
       timeout_ms: 15000
       max_results: 8
 
-  # 微博搜索/热搜（ADR-0014）：网关侧文本源（OpenCLI），不经过 searxng。
-  # categories=weibo 只搜微博；categories=weibo_hot 返回热搜（query 可空）。
-  # 还需要 weibo.enabled=true；本开关默认关闭。
-  weibo:
-    enabled: false
-    category: weibo
-    hot_category: weibo_hot
-    limit: 10                # 单次最多返回条数（1-50）
-    timeout_ms: 30000
-    cache_ttl_ms: 60000
-    retry: 1                 # 空结果重试次数（微博搜索页异步加载，首跑常为空）
-
   # DeepSeek 通用搜索上游（ADR-0023）：默认关闭。
   # 开启后仅在 general 查询与 searxng 并发；不新增 MCP 工具/参数。
   # raw 调 /search（按成功请求计费，约 $0.75/1000 次，空结果不计费）；
@@ -191,67 +179,6 @@ fetch:
   download_ttl_ms: 604800000    # 产物 TTL 7 天
   download_max_total_bytes: 4294967296  # 产物总量配额 4GB（超出按最旧优先清理）
   files_route: true             # 提供 GET /files/<id> 下载链接（id = 内容 sha256）
-
-# B 站抓取（全部走 fetch，按 URL 类型自动判定；默认关闭）。
-# 视频/专栏 URL 直接返回摘要；#reply / #comment 抓评论。
-# 多后端按能力路由，失败自动换下一个；未安装后端时返回 BILI_UNAVAILABLE。
-bilibili:
-  enabled: false
-  routes:
-    detail: [cli-kukemc, cli-ytdlp, http]
-    comments: [cli-kukemc, http]
-    audio: [cli-ytdlp, http]          # 音频直链
-    article: [http]                   # 专栏正文目前只有 http 后端
-  cli_kukemc:
-    command: bili                     # kukemc/bili-cli；提供详情与评论
-    timeout_ms: 30000
-  cli_ytdlp:
-    command: yt-dlp                   # 提供详情与音频直链
-    cookies_file: ""                  # Netscape 格式；空=未登录（只能 480p）
-    probe_command: ""                 # 可选；空时首次请求兼作登录态探测
-    timeout_ms: 30000
-  http:
-    base_url: http://127.0.0.1:8010
-    # 与后端约定的 Bearer 写在 secrets.yaml 的 bilibili.http.token
-    command: []                       # 非空时由插件拉起/回收；用 scripts/backends/article.sh install 自动填
-    startup_timeout_ms: 10000
-    request_timeout_ms: 15000
-  auth_probe_ttl_ms: 60000
-  comment_db: data/bilibili.sqlite    # 评论本地库（全量检索用）
-  comments:
-    page_size: 20
-    search_limit: 50
-    max_pages_per_fetch: 20           # 单次 fetch 最多抓多少页，没抓完下次续传
-
-# 微博抓取（全部走 fetch；单 CLI 后端 OpenCLI；默认关闭）。
-# 普通页面 URL 带 ?weibo= 才接管；sinaimg.cn 图片 CDN URL 自动接管为附件。
-# 前置：安装 @jackwener/opencli；Chrome 登录 weibo.com（推荐 CDP 模式，
-# 设置 OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222），或安装 Browser Bridge 扩展；
-# 并执行 scripts/install-weibo-override.sh（给 post 补图片外链字段）。
-weibo:
-  enabled: false
-  cli:
-    command: opencli                 # 或绝对路径
-    timeout_ms: 30000                # 浏览器命令较慢；需 ≥ OPENCLI_BROWSER_CONNECT_TIMEOUT
-  defaults:
-    comments_limit: 20               # 评论条数（1-50）
-    user_posts_limit: 100            # 单次 user-posts 拉取条数（1-100）
-  # 时间段抓取：?weibo=user-posts&days=30 或 start/end。
-  # 整段先拉 100 条；满了就二分区间递归，直到每段不足 100 条。
-  user_posts:
-    default_days: 7                  # 不传 days/start/end 时的窗口
-    max_days: 90                     # 时间段跨度上限
-    max_items: 500                   # 本次返回条数上限
-    max_calls: 30                    # 单次 fetch 最多调用 CLI 次数
-    budget_ms: 120000                # 单次 fetch 抓取预算
-    max_chars: 500                   # 每条正文在 Markdown 里的长度上限
-  images:
-    enabled: true                    # 关闭时图片 URL 返回 WEIBO_UNAVAILABLE
-    referer: https://weibo.com/      # sinaimg 防盗链所需
-    max_bytes: 20971520              # 单张 20MB
-    timeout_ms: 20000
-    retry_tvax: true                 # wx*.sinaimg.cn 失败时换 tvax* 重试一次
-  cache_ttl_ms: 60000                # 同一 URL 短期缓存；0=不缓存
 
 browser:
   enabled: true            # 浏览器能力（fetch 路由③ + browser_* 工具）

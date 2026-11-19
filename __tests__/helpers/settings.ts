@@ -66,8 +66,8 @@ export function directDeps(settings: Settings, secrets: Secrets = makeSecrets())
   return {
     fetch: settings.fetch,
     plugins: {
-      settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
-      secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+      settings: { fetch: settings.fetch },
+      secrets: {},
       getSecret: (path) => getSecretAtPath(secrets, path),
     },
   };
@@ -83,8 +83,8 @@ export function fetchServiceDeps(
     browser: settings.browser,
     files_base_url: filesBaseUrl(settings),
     plugins: {
-      settings: { fetch: settings.fetch, bilibili: settings.bilibili, weibo: settings.weibo },
-      secrets: { bilibili: { http: { token: secrets.bilibili.http.token } } },
+      settings: { fetch: settings.fetch },
+      secrets: {},
       getSecret: (path) => getSecretAtPath(secrets, path),
     },
   };
@@ -104,7 +104,6 @@ export function searchServiceDeps(
     searxng: settings.searxng,
     saucenao_api_key: secrets.search.reverse_image.saucenao.api_key,
     deepseek_api_key: secrets.search.deepseek.api_key,
-    weibo: settings.weibo,
   };
 }
 

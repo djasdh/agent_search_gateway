@@ -3,8 +3,7 @@
  * `gateway.search` 扩展源（路由 / 开关）与 `gateway.upstream` 通用上游（开关）。
  *
  * 引擎元数据（名称 / 可用性 / routing / requires）来自 `src/engines/registry.ts`；
- * 微博 / B 站 / 知网等平台能力由官方扩展提供，`weibo.enabled` 与 `search.weibo.*`
- * 是扩展读取的配置面（requires: config:weibo.enabled），核心不内置实现。
+ * 平台能力由外部扩展提供，扩展私有配置走 `extensions.<id>.config`，核心不内置实现。
  */
 
 import { documentToText, setYamlPath } from "../../config/gateway.js";

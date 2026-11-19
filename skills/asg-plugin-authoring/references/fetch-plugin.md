@@ -9,7 +9,6 @@ export interface FetchPlugin {
   name: string;
   displayName: string;
   aliases?: readonly string[];
-  settingsKey?: string;    // 旧内置实现的设置段；外部插件改用 config_schema
   capabilities: readonly string[];
   requires?: readonly FetchPluginRequirement[];
   channels?: readonly FetchChannel[];
