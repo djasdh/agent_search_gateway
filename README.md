@@ -88,7 +88,7 @@ gateway (本服务, :3000/mcp)
 
 - `cli-kukemc`（`bili` CLI）：详情、评论
 - `cli-ytdlp`（`yt-dlp`）：详情、音频直链
-- `http`：全部能力；`extensions.bilibili.config.http.command` 非空时由插件拉起/回收，否则连 `base_url`。服务端已拆到独立仓库 [djasdh/bilibili-article-server](https://github.com/djasdh/bilibili-article-server)，过渡期仍可用 `asg plugins install article`（旧命令，0.4.1 删除）。
+- `http`：全部能力；`extensions.bilibili.config.http.command` 非空时由插件拉起/回收，否则连 `base_url`。服务端已拆到独立仓库 [djasdh/bilibili-article-server](https://github.com/djasdh/bilibili-article-server)，由 Bilibili 扩展的 setup 安装（0.4.1 起 `asg plugins` 已删除）。
 
 要点：
 
@@ -599,7 +599,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 依赖：`sqlite-vec` 随 npm 安装自带平台二进制，无需手动装扩展。
 - 模型切换：命名空间为 `provider:model@dim`；换模型产生新命名空间，旧向量保留但不参与（多命名空间并存，见 `docs/adr/0001`–`0006`）。
 
-## 后端安装（插件自管；旧 `asg plugins` 已弃用）
+## 后端安装（插件自管；`asg plugins` 已于 0.4.1 删除）
 
 从 0.3.x 起，后端由插件自己安装：manifest（`api_version: 2`）声明 `backends`，入口导出
 `setup(ctx)`，安装/更新/卸载时由 CLI 在独立子进程中调用。新位置是：
@@ -608,8 +608,8 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 data/extension-data/<extension-id>/backends/<backend-id>/
 ```
 
-`data/backends/<name>/` 是旧安装器的目录，只作为只读迁移源：插件应复制需要的文件到新位置，
-不移动、不删除；CLI 也不会主动删除它。
+`data/backends/<name>/` 是 0.3.x 旧安装器的目录，0.4.1 起不再读取：需要保留的数据请自行
+复制到新位置；CLI 不会主动删除它。
 
 ```bash
 asg extensions install <owner>/<repo>@<version>   # 默认执行 manifest 声明的全部后端 setup
@@ -618,44 +618,32 @@ asg extensions list                               # BACKENDS 列显示安装状�
 asg extensions remove <id> [--keep-data] [--force]
 ```
 
-0.4.0 只加载 V2 manifest（`asg-extension.json`，`api_version: 2`）。V2 的
+0.4.1 起只加载 V2 manifest（`asg-extension.json`，`api_version: 2`）。V2 的
 `fetch_channels` 用于派生 platform，`search_engines` 用于补展示名；声明 `backends` 时，
 插件运行时可以通过 `ctx.pluginBackends` 拿到自己安装的后端目录与状态。
 
-`asg plugins list|install|remove` 在 0.4.0 仅作为兼容 facade 保留，**0.4.1 删除**：
-读取已安装 manifest，命中 `backend.id` / `aliases` 时走插件 setup，未命中才回退旧的
-`scripts/backends/cli.mjs` 安装器（安装到 `data/backends/<name>/`）。`asg plugins install` /
-`remove` 仍会整栈重启；`asg extensions install` / `setup` / `remove` 不会。
+`asg plugins` 与旧后端安装器已在 **0.4.1 删除**。所有后端都应由插件在 manifest 里声明
+`backends`，并通过 `setup(ctx)` 安装/更新/卸载；用户只需：
 
-旧安装器支持的后端（0.4.0 过渡期仍可用，0.4.1 随 `asg plugins` 一起删除）：
+```bash
+asg extensions install <owner/repo>[@version]   # 默认执行全部后端 setup
+asg extensions setup <id> [--status] [--uninstall]
+```
 
-| 后端 | 旧命令 | 说明 |
-|---|---|---|
-| B 站 `bili` CLI | `asg plugins install bili` | PyPI `bili-agent`，需要 Python ≥3.10 |
-| `yt-dlp` | `asg plugins install ytdlp` | 官方独立二进制，自动校验 SHA256 |
-| 微博 `OpenCLI` | `asg plugins install opencli` | npm 包；微博 override 由微博扩展负责安装 |
-| B 站专栏 HTTP 服务 | `asg plugins install article` | 独立仓库 `djasdh/bilibili-article-server`（GPL-3.0） |
+旧版 `data/backends/<name>/` 不再被读取或迁移；仍在使用的后端请重新由对应扩展安装。
 
-- 旧安装的目录、版本、原配置值都在 `data/backends/<name>/`。
-- 0.4.0 下这些命令把配置写到 `extensions.<id>.config`（如 `extensions.bilibili.config.cli_kukemc.command`），不再创建顶层平台段。
-- `opencli` 只安装 npm 包；命令路径由微博插件的配置（`extensions.weibo.config`）管理。
-- 专栏服务需要登录态：在启动网关的环境里设置 `BILI_COOKIE` 或 `BILI_COOKIE_FILE`，不要写进 `gateway.yaml`。
-- 如果 PATH 里没有 Node，旧薄包装会自动下载官方 LTS 到 `data/toolchain/node/`。
-- 代理环境：脚本读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`，优先用系统 `curl` 下载（Windows 10+ 自带 `curl.exe`）。
-- GitHub 限流：安装后端/插件前可先 `export GITHUB_TOKEN=$(gh auth token)`（或 `GH_TOKEN`），否则可能遇到 403 `API rate limit exceeded`。
-
-## 从 0.3.x 升级到 0.4.0
+## 从 0.3.x 升级到 0.4.x
 
 0.4.0 删除了 V1 插件加载和旧平台配置（`gateway.yaml` 顶层 `bilibili` / `weibo` /
 `search.weibo`，以及 `secrets.yaml` 的 `bilibili`）。**必须先在 0.3.x 完成迁移**：
 
-1. 先升级到 **0.3.11**（这是最后一个同时兼容 V1/V2 与旧平台配置的版本）：
+1. 先升级到 **0.3.11**（这是最后一个同时兼容 V1/V2 与旧平台配置、并带有迁移脚本的版本）：
 
    ```bash
    asg update apply --version v0.3.11
    ```
 
-2. 运行迁移脚本，把旧平台配置搬到 `extensions.<id>.*`：
+2. 在 0.3.11 里运行迁移脚本，把旧平台配置搬到 `extensions.<id>.*`：
 
    ```bash
    node scripts/migrations/0.3.x.mjs --phase config
@@ -671,12 +659,13 @@ asg extensions remove <id> [--keep-data] [--force]
    asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.2.0
    ```
 
-4. 确认插件目录里是 `asg-extension.json`（`api_version: 2`），再安装/升级到 0.4.0。
+4. 确认插件目录里是 `asg-extension.json`（`api_version: 2`），再安装/升级到 0.4.x。
 
-如果跳过 1–3 步直接 `asg update` 到 0.4.0，网关会因旧配置启动失败，自更新会自动回滚到上一版本；请先完成迁移。
+如果跳过 1–3 步直接 `asg update` 到 0.4.x，网关会因旧配置启动失败，自更新会自动回滚到上一版本；请先完成迁移。
 
-迁移脚本 `scripts/migrations/` 在 **0.4.0 保留**，用于从 0.3.x 升级；**0.4.1 删除**。
-依赖旧后端的用户仍可在 0.4.0 使用 `asg plugins`（deprecated），**0.4.1 删除**。
+迁移脚本 `scripts/migrations/` 与 `asg plugins` 只存在于 0.3.11–0.4.0；**0.4.1 已删除**。
+已经升到 0.4.1 的用户若仍有旧配置，只能手工迁到 `extensions.<id>.config`，或临时回到
+0.3.11 执行迁移。
 
 ## 网关自更新
 
@@ -709,7 +698,6 @@ asg engines list [--all] | enable <name|group:name> | disable <name|group:name>
 asg engines route <engine> resident|rotating|none | --category <name> [--hot-category <name>] | --clear
 asg engines secret <engine> [--name <name>] --stdin | --clear
 asg extensions search|install|setup|list|remove|config|secret
-asg plugins list|install|remove                 # 已弃用，0.4.1 删除；兼容 0.3.x 旧后端名
 asg browser status|install [--full]
 asg adlist update
 asg update check|apply

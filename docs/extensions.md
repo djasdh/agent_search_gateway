@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | `<root>/data/extensions/<id>/` | 已安装插件目录：`asg-extension.json`（V2）、入口与插件自带只读资源 | 否 |
 | `<root>/data/extension-data/<id>/` | 插件数据目录：`state.json`、`backends.json`、`backends/<backend-id>/`、`tmp/` | 是 |
-| `<root>/data/backends/<name>/` | 0.3.x 旧后端的安装目录，只作为迁移读取源 | 否（经 setup 宿主写入会被拒绝） |
+| `<root>/data/backends/<name>/` | 0.3.x 旧后端目录；0.4.1 起不再读取，可自行清理 | 否 |
 | `<root>/gateway.yaml` | 网关配置；`extensions.<id>.config` 由 CLI 或 setup 配置 API 写入 | 仅 config API |
 | `<root>/secrets.yaml` | 密钥；由 `asg extensions secret` 写入 | setup 无写接口 |
 
@@ -32,9 +32,9 @@
   `data/extension-data/<id>`**，否则更新会丢数据。
 - `data/extension-data/<id>` 与插件安装目录分离：更新/重装插件不会删除它；
   `asg extensions remove <id>` 默认会删除它，`--keep-data` 保留。
-- `data/backends` 是旧安装器的目录，只读迁移源：setup 可以读取、复制到
-  `data/extension-data/<id>/backends/<backend-id>`，但**不能写入或删除**；CLI 与迁移脚本
-  也不会删除它。
+- `data/backends` 是 0.3.x 旧安装器的目录；**0.4.1 起 CLI、setup 宿主与运行时都不再读取**。
+  需要保留的数据请自行复制到 `data/extension-data/<id>/backends/<backend-id>`；CLI 不会
+  删除旧目录。
 - `asg extensions list` 遇到损坏的安装目录时只把该条标记为错误（JSON 里有 `error`
   字段），不会让整条命令失败；`backends.json` 损坏只告警并按“未安装”展示。
 
@@ -48,11 +48,11 @@ weibo `0.2.2`。
 文件发现：
 
 ```text
-0.4.0: 只接受 asg-extension.json（api_version: 2）
+0.4.0+: 只接受 asg-extension.json（api_version: 2）
 0.3.x: 优先 asg-extension.json，缺失时回退 asg-plugin.json
 ```
 
-安装 Release 时同样只按这个规则选择资产。**`asg-plugin.json` 在 0.4.0 不再加载。**
+安装 Release 时同样只按这个规则选择资产。**`asg-plugin.json` 在 0.4.0 起不再加载。**
 
 | 字段 | 版本 | 必填 | 规则 |
 | --- | --- | --- | --- |
@@ -350,7 +350,8 @@ CLI 在以下时机启动独立子进程执行它：
 | `asg extensions setup <id> --status` | `status` |
 | `asg extensions setup <id> --uninstall` | `uninstall` |
 | `asg extensions remove <id>`（默认，先卸载后端） | `uninstall` |
-| `asg plugins install/remove <name>`（命中 manifest backend 时） | `install` / `uninstall` |
+
+> `asg plugins install/remove <name>` 只在 0.3.11–0.4.0 存在；0.4.1 已删除，不再触达 setup。
 
 `update` 是契约预留的 action：插件应像 `install` 一样幂等处理，但当前 CLI 不会主动传
 `update`（升级插件仓库时传的是 `install`）。不要依赖某个 action 只出现一次。
@@ -444,17 +445,14 @@ interface SetupContext {
 | `paths.dataDir` | `data/extension-data/<id>`，插件唯一可写数据目录 |
 | `paths.backendDir(id)` | `data/extension-data/<id>/backends/<id>` |
 | `paths.tempDir` | `data/extension-data/<id>/tmp` |
-| `paths.legacyBackendDir(id)` | `data/backends/<旧目录名>`，只读迁移源 |
 | `paths.config` | `<root>/gateway.yaml` |
 | `paths.secrets` | `<root>/secrets.yaml` |
 
 - 相对路径按 `paths.dataDir` 解析；写操作（`mkdir` / `remove` / `rename` / `writeFile` /
   `extract` / 下载目标 / `copy` 目标）只能落在 `dataDir` 或 `tempDir` 内，
   且会检查真实路径，符号链接逃逸会被拒绝。`rename` 的源路径也必须是可写路径。
-- `pluginDir` 只能读，不能写；`paths.legacyBackendDir(id)` 只用于读取旧目录。
-- `legacyBackendDir` 的旧目录名可以由宿主提供的映射决定（兼容历史目录名）；
-  当前 CLI 调用不提供映射，通常按 `backend.id` 解析。插件不要假设它一定等于
-  `backend.id`，直接用这个函数取路径。
+- `pluginDir` 只能读，不能写。
+- 0.4.1 起不再提供 `paths.legacyBackendDir(id)`：旧 `data/backends` 需要由用户自行迁移。
 
 ### 5.3 文件与下载
 
@@ -727,23 +725,20 @@ JSON（`--json`）的 `data` 包含安装结果、`backends`（manifest 声明�
 - 两者都是**先整体校验、再写一次文件、最后整栈重启一次**；校验失败不落盘、不重启。
   `secret` 写入的 `secrets.yaml` 权限固定为 `0600`。
 
-### 7.6 `asg plugins`（0.4.0 已弃用，0.4.1 删除）
+### 7.6 `asg plugins`（0.4.1 起已删除）
 
-`asg plugins list|install|remove` 在 0.4.0 保留为兼容 facade，帮助文本会提示改用
-`asg extensions install/setup/remove`；**0.4.1 连同 `scripts/backends/` 一起删除**。行为：
+`asg plugins list|install|remove` 在 0.3.11–0.4.0 作为兼容 facade 存在；**0.4.1 已连同
+`scripts/backends/` 与 `data/backends` 默认读取一起删除**，CLI 不再接受该命令。
 
-1. **先解析 manifest**：在 `data/extensions/*/asg-extension.json` 的 `backends[]` 中按
-   `backend.id` 或 `aliases` 精确匹配；命中后调用该插件的 setup（`install` / `uninstall`），
-   成功后整栈重启。
-2. **未命中回退旧安装器**：调用 `scripts/backends/cli.mjs <name> <action> --root <ROOT> --json`，
-   名字原样透传；安装器把二进制放到 `data/backends/<name>/`，配置写入
-   `extensions.<id>.config`（0.3.x 写顶层平台段），成功后整栈重启。
-3. 两者都没有：`PLUGIN_UNKNOWN`（退出码 4），提示用 `asg extensions install`。
-4. `list` 先列 manifest 后端（`name` 取 `aliases[0]` 或 `backend.id`），
-   再补上 `data/backends/*` 中未被 manifest 覆盖的旧安装。P1 的 `platform` /
-   `channel` / `channel_id` 字段保留但为空字符串。
+后端统一由插件 manifest 的 `backends` 声明，并通过 `setup(ctx)` 安装/更新/卸载：
 
-新插件不要依赖 `asg plugins`；它只是 0.3.x 的过渡入口，0.4.1 起不存在。
+```bash
+asg extensions install <owner/repo>[@version]
+asg extensions setup <id> [--backend <id>]... [--status] [--uninstall]
+```
+
+旧安装名仍可写在 `backends[].aliases` 里，供扩展命令与历史配置识别；但不会再回退到
+`scripts/backends/cli.mjs`。
 
 ### 7.7 重启矩阵
 
@@ -751,8 +746,6 @@ JSON（`--json`）的 `data` 包含安装结果、`backends`（manifest 声明�
 | --- | --- |
 | `extensions install` / `setup` / `remove` | 否，重启网关后生效 |
 | `extensions config` / `secret` | 是，整栈重启一次 |
-| `plugins install` / `remove` | 是（保持旧行为） |
-| `plugins list` | 否，只读 |
 
 所有子命令都支持全局 `--json`（输出单个 result 对象）；`config` / `secret` 的 JSON 字段
 见 `docs/cli-contract.md` 5.6.1。
@@ -840,23 +833,22 @@ asg extensions secret weibo --name cookie --stdin
 
 插件模板见 [`examples/asg-plugin/`](../examples/asg-plugin/)，发布时请给仓库加 `asg-plugin` topic。
 
-## 10. 迁移与兼容（0.3.x → 0.4.0）
+## 10. 迁移与兼容（0.3.x → 0.4.x）
 
 - **升级顺序**：先升到 0.3.11，运行 `scripts/migrations/0.3.x.mjs`（至少 `--phase config`），
-  把官方插件升到 0.2.x，再安装 0.4.0。
-- **旧后端目录**：0.3.x 的插件后端在 `data/backends/<name>`。新契约下它只是只读迁移源；
-  setup 应把需要的内容复制到 `data/extension-data/<id>/backends/<backend-id>`，
-  不移动、不删除。旧目录可以长期保留，不影响新布局。
-- **旧 CLI 名称**：`asg plugins install/remove <name>` 在 0.4.0 仍可用（deprecated），
-  命中已安装 manifest 的 `backends[].id` / `aliases` 时走新 setup；未命中才回退旧安装器。
-  **0.4.1 删除 `asg plugins` 与 `scripts/backends/`。**
+  把官方插件升到 0.2.x，再安装 0.4.0 或更高版本。迁移脚本只存在于 0.3.11–0.4.0。
+- **旧后端目录**：0.3.x 的插件后端在 `data/backends/<name>`。新契约下后端由插件 setup
+  安装到 `data/extension-data/<id>/backends/<backend-id>`；**0.4.1 起不再读取旧目录**，
+  也不主动删除，需要时请自行迁移或清理。
+- **旧 CLI 名称**：`asg plugins install/remove <name>` 只在 0.3.11–0.4.0 存在；
+  **0.4.1 已删除 `asg plugins`、`scripts/backends/` 与 `data/backends` 默认读取。**
 - **临时迁移脚本**：`scripts/migrations/0.3.x.mjs` 按
   `preflight → plugins → backends → config → restart` 执行；`config` 阶段把
   `bilibili` / `weibo` / `search.weibo` 与旧 bilibili 密钥迁到 `extensions.<id>`。
-  **0.4.0 保留整个目录，0.4.1 删除**，细节见 `scripts/migrations/README.md`。
-- **已发生的清理**：0.4.0 已移除 V1 manifest / V1 加载、旧平台配置键与
+  **0.4.1 已删除整个目录**；已升级到 0.4.1 的用户只能手工迁移，或临时回到 0.3.11。
+- **已发生的清理**：0.4.0 移除 V1 manifest / V1 加载、旧平台配置键与
   `secrets.yaml` 的旧 bilibili 段；0.4.1 再移除 `asg plugins`、`scripts/backends/`、
-  `scripts/migrations/` 与 `data/backends` 的默认迁移读取。
+  `scripts/migrations/`、setup 的 `legacyBackendDir` 与 `data/backends` 默认迁移读取。
 
 相关决策见 `docs/adr/0022-plugin-owned-backends-and-setup-hook.md`；旧的后端安装脚本
 背景见 `docs/adr/0016-backend-install-and-self-update.md`（已由 0022 过渡接管）。

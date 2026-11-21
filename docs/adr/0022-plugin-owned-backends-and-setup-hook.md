@@ -1,10 +1,10 @@
 # 插件自管后端与 setup 钩子
 
-> 0.4.0 保留 asg plugins 与迁移脚本；0.4.1 删除。
+> 0.4.0 保留 asg plugins 与迁移脚本；0.4.1 已删除。本文保留历史设计记录。
 
 - 状态：已接受
 - 日期：2026-11-16
-- 相关：`docs/extensions.md`、`docs/cli-contract.md`、`scripts/migrations/README.md`、
+- 相关：`docs/extensions.md`、`docs/cli-contract.md`、`scripts/migrations/README.md`（0.4.1 已删除）、
   ADR-0016（后端安装脚本与网关自更新）、ADR-0021（插件私有配置）
 
 ## 背景（Context）

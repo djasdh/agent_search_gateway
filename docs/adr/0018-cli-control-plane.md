@@ -4,6 +4,9 @@
 - 日期：2026-11-13
 - 细化契约：`docs/cli-contract.md`
 
+> **状态更新（0.4.1）**：本文提到的 `asg plugins` 与 `scripts/backends/cli.mjs`
+> 已在 0.4.1 删除；后端安装由扩展 manifest + setup 接管。本文保留历史设计记录。
+
 ## 背景
 
 网关的数据面是 MCP server：`/mcp` 提供 search、fetch、browser_*、health 等工具。网关本身只把 searxng 和 FlareSolverr 当作 HTTP 后端，只在 BrowserPool 内懒加载并回收 Playwright Chromium；它**不负责**安装、启动、停止或重启 searxng / FlareSolverr，也不管理 Chromium 二进制。

@@ -1,14 +1,12 @@
 # 后端安装脚本与网关自更新
 
-> 0.4.0 保留 asg plugins 与迁移脚本；0.4.1 删除。
+> 0.4.0 保留 asg plugins 与迁移脚本；0.4.1 已删除。本文保留历史设计记录。
 
-> **过渡说明（2026-11-16，ADR-0022 接管后端安装）**：本文记录的
-> `scripts/backends/` 与 `data/backends/<name>/` 仍作为 0.3.x 兼容路径存在，但新契约已改为
+> **过渡说明（2026-11-16，ADR-0022 接管后端安装；0.4.1 完成清理）**：本文记录的
+> `scripts/backends/` 与 `data/backends/<name>/` 已在 0.4.1 删除/停止读取，新契约是
 > **插件自管后端**：manifest `api_version: 2` 声明 `backends`，插件入口导出 `setup(ctx)`，
-> 后端装到 `data/extension-data/<id>/backends/<backend-id>/`。`asg plugins` 已弃用：只有未命中
-> 已安装 manifest 的 `backend.id` / `aliases` 时才回退本文的旧安装器；`data/backends`
-> 只作为只读迁移源，CLI/迁移脚本不会主动删除。0.4.x 计划移除旧回退与
-> `scripts/migrations/`。自更新部分（版本目录、完整包、回滚）不受本次决策影响。
+> 后端装到 `data/extension-data/<id>/backends/<backend-id>/`。`asg plugins` 与
+> `scripts/migrations/` 也已删除；自更新部分（版本目录、完整包、回滚）不受影响。
 > 历史背景与决策原文保留如下，不重写。
 
 ## 背景

@@ -30,8 +30,8 @@ description: 为 agent-search-gateway（asg）0.4.0+ 编写、迁移或发布 V2
 4. 平台配置只写 `gateway.yaml → extensions.<id>.config`；密钥只写
    `secrets.yaml → extensions.<id>.<name>`。
 5. 官方插件版本：bilibili / cnki `0.2.0`，weibo `0.2.2`。
-6. `scripts/migrations/` 与 `asg plugins` 在 0.4.0 仍保留（已 deprecated），**0.4.1 删除**。
-   从 0.3.x 升级要在 0.4.0 之前跑完迁移脚本。
+6. `scripts/migrations/` 与 `asg plugins` 只存在于 0.3.11–0.4.0；**0.4.1 已删除**。
+   从 0.3.x 升级要在安装 0.4.0 之前跑完迁移脚本。
 
 ## 交付前
 

@@ -1,9 +1,9 @@
 # Extension V2 接口契约
 
-- 状态：0.4.0 起为运行期唯一契约
-- 当前版本：0.4.0 只接受 V2 manifest（`asg-extension.json`，`api_version: 2`）
-- 过渡：`asg plugins`、`scripts/backends/`、`scripts/migrations/` 在 0.4.0 保留并标记
-  deprecated，**0.4.1 删除**
+- 状态：0.4.0 起为运行期唯一契约；0.4.1 完成过渡清理
+- 当前版本：0.4.1 只接受 V2 manifest（`asg-extension.json`，`api_version: 2`）
+- 过渡清理：`asg plugins`、`scripts/backends/`、`scripts/migrations/`、setup 的
+  `legacyBackendDir` 与 `data/backends` 默认读取均已在 **0.4.1 删除**
 - 本文描述最终接口；0.3.x 的 V1 兼容仅保留在历史文档中
 
 ---
@@ -722,12 +722,13 @@ asg extensions config <id> ...
 asg extensions secret <id> ...
 ```
 
-0.4.0 过渡期仍保留（deprecated），0.4.1 删除：
+0.4.0 过渡期保留、0.4.1 已删除：
 
 - `asg plugins`
 - `scripts/backends` 回退
 - `data/backends` 默认迁移读取
 - `scripts/migrations/`
+- setup 的 `paths.legacyBackendDir()`
 
 ### 7.2 重启矩阵
 
@@ -851,11 +852,11 @@ Adapter 规则：
 
 ### 8.3 版本边界
 
-| 版本 | 接受 | 0.4.0/0.4.1 边界 |
+| 版本 | 接受 | 边界 |
 | --- | --- | --- |
 | 0.3.x | V1 + V2 | 不删兼容 |
 | **0.4.0** | **仅 V2** | 删除 V1 加载、`asg-plugin.json`、旧平台配置键；`asg plugins` / `scripts/backends/` / `scripts/migrations/` 保留为 deprecated |
-| 0.4.1 | 仅 V2 | 删除 `asg plugins`、`scripts/backends/`、`scripts/migrations/`、`data/backends` 默认迁移读取 |
+| **0.4.1** | **仅 V2** | 删除 `asg plugins`、`scripts/backends/`、`scripts/migrations/`、setup `legacyBackendDir` 与 `data/backends` 默认迁移读取 |
 
 ### 8.4 文件兼容
 
@@ -871,12 +872,12 @@ Adapter 规则：
 ```text
 data/extensions/<id>/              V1 + V2 共用
 data/extension-data/<id>/          V2 数据
-data/backends/<name>/              V1 旧后端，只读迁移源
+data/backends/<name>/              V1 旧后端；0.4.1 起不再读取
 ```
 
 - `data/extension-data` 是最终命名；旧的 `data/plugin-data` 不再使用。
-- V2 setup 可读取 `data/backends`，复制到 `extension-data/<id>/backends/<backend-id>`。
-- 不移动、不删除旧目录。
+- 0.4.1 起 setup 不再提供 `paths.legacyBackendDir()`，也不读取 `data/backends`。
+- 旧目录不移动、不删除；需要时由用户自行迁移或清理。
 
 ---
 
@@ -953,9 +954,9 @@ interface MigrationChecklist {
 - `capabilities`
 - `CatalogChannel`
 - `PluginStatus`
-- `asg plugins`（0.4.0 仅保留 deprecated facade，0.4.1 删除）
+- `asg plugins`（0.4.1 已删除）
 - `data/plugin-data`
-- `data/backends`（0.4.0 仅只读迁移源，0.4.1 删除默认读取）
+- `data/backends`（0.4.1 起不再读取）
 - `asg-plugin.json`（0.4.0 起不再加载）
 
 ### 10.3 0.4.0 / 0.4.1 清理
@@ -970,14 +971,15 @@ interface MigrationChecklist {
 - 将内置平台相关搜索源迁出核心。
 - 统一 `FetchPlugin` 为 `FetchProvider`。
 
-**0.4.0 保留（deprecated），0.4.1 删除：**
+**0.4.1 已完成：**
 
-- `asg plugins` 与 `PluginStatus`。
-- `scripts/backends/`。
-- `scripts/migrations/` 与 `0.3.x` 迁移步骤。
-- `data/backends` 默认迁移读取（0.4.0 仅作为只读迁移源）。
+- 删除 `asg plugins` 与 `PluginStatus`。
+- 删除 `scripts/backends/`。
+- 删除 `scripts/migrations/` 与 `0.3.x` 迁移步骤（脚本仅保留在 0.3.11–0.4.0 的发布包）。
+- 删除 setup 的 `paths.legacyBackendDir()` / `legacyBackendNames`。
+- 删除 `data/backends` 默认迁移读取。
 
-> 升级顺序：0.3.11 → 跑迁移脚本 → 官方插件升到 0.2.x → 安装 0.4.0。
+> 升级顺序：0.3.11 → 跑迁移脚本 → 官方插件升到 0.2.x → 安装 0.4.x。
 
 ---
 
@@ -987,5 +989,5 @@ interface MigrationChecklist {
    **已解决**：官方插件已发布（bilibili / cnki `0.2.0`，weibo `0.2.2`），迁移清单已填。
 2. 迁移顺序已确定：0.3.11 → 迁移脚本 → 官方插件 0.2.x → 0.4.0。
 3. 官方插件 manifest 必须遵守“backend 不跨 channel 共用”。
-4. 平台无关清理范围大；0.4.0 已完成 V1/旧配置清理，剩余的过渡目录在 0.4.1 删除。
+4. 平台无关清理已完成：0.4.0 完成 V1/旧配置清理，0.4.1 删除剩余过渡目录与旧后端读取。
 5. 0.4.0 要求升级前离线迁移，旧配置解析不再放宽。

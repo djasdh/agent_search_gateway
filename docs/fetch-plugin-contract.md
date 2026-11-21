@@ -62,9 +62,9 @@ export const exampleProvider: FetchProvider = {
 
 ### `asg plugins` 的 NAME 与通道
 
-`asg plugins` 仅作为兼容 facade，0.4.0 deprecated、0.4.1 删除：`NAME` 来自扩展 manifest
-的 `backends[].aliases[0]` 或 `backend.id`；`PLATFORM` / `CHANNEL` 字段暂为空字符串。
-通道信息以 `asg extensions list` 的 `CHANNELS` 为准。
+`asg plugins` 已在 0.4.1 删除；0.3.11–0.4.0 中它只是兼容 facade。旧命令的 `NAME`
+来自扩展 manifest 的 `backends[].aliases[0]` 或 `backend.id`；`PLATFORM` / `CHANNEL`
+字段为空字符串。通道信息以 `asg extensions list` 的 `CHANNELS` 为准。
 
 ## Provider 契约
 
