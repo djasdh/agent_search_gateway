@@ -54,7 +54,7 @@ const browserSecretsSchema = z
   .strict();
 
 /**
- * 第三方扩展密钥：`extensions.<engineId>.<secretName>`。
+ * 第三方扩展密钥：`extensions.<manifest id>.<secretName>`。
  *
  * 值同样支持 `env:NAME`，由 `resolveSecretTree` 统一解析。
  */

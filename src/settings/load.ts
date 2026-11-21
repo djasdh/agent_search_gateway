@@ -27,9 +27,35 @@ const LEGACY_SECRET_PATHS: Array<{ path: string[]; hint: string }> = [
     hint: "secrets.yaml 的 search.reverse_image.saucenao.api_key",
   },
   { path: ["search", "deepseek", "api_key"], hint: "secrets.yaml 的 search.deepseek.api_key" },
-  { path: ["bilibili", "http", "token"], hint: "secrets.yaml 的 extensions.bilibili.token" },
+  {
+    path: ["bilibili", "http", "token"],
+    hint: "secrets.yaml 的 extensions.bilibili.token（0.3.11 可用 node scripts/migrations/0.3.x.mjs --phase config 自动迁移）",
+  },
   { path: ["browser", "proxy_password"], hint: "secrets.yaml 的 browser.proxy_password" },
 ];
+
+/**
+ * 0.4.0 已从 schema 删除的旧平台段；出现时给出可执行的迁移提示。
+ *
+ * 注意只匹配顶层 `bilibili` / `weibo` 与 `search.weibo`，不会误判
+ * `extensions.<id>.config` 下的同名键。
+ */
+const LEGACY_PLATFORM_SECTIONS: Array<{ path: string[]; target: string }> = [
+  { path: ["bilibili"], target: "extensions.bilibili.config" },
+  { path: ["weibo"], target: "extensions.weibo.config" },
+  { path: ["search", "weibo"], target: "extensions.weibo.config.search" },
+];
+
+const LEGACY_PLATFORM_HINT =
+  "请先升级到 0.3.11 并运行 node scripts/migrations/0.3.x.mjs --phase config，或把该段迁到 extensions.<id>.config。";
+
+/** secrets.yaml 里 0.4.0 已删除的旧段。 */
+function assertNoLegacySecrets(raw: JsonObject, secretsPath: string): void {
+  if (!Object.prototype.hasOwnProperty.call(raw, "bilibili")) return;
+  throw new Error(
+    `${secretsPath} 仍包含旧版 bilibili 段：0.4.0 已移除该段，请迁移到 secrets.yaml 的 extensions.bilibili.token。${LEGACY_PLATFORM_HINT}`,
+  );
+}
 
 type JsonObject = Record<string, unknown>;
 
@@ -40,6 +66,18 @@ function dig(obj: unknown, path: string[]): unknown {
     cur = (cur as JsonObject)[key];
   }
   return cur;
+}
+
+/** 路径存在性（值为 null / 空对象也算存在，旧段不能被静默忽略）。 */
+function hasPath(obj: unknown, path: string[]): boolean {
+  let cur: unknown = obj;
+  for (const key of path) {
+    if (!cur || typeof cur !== "object" || !Object.prototype.hasOwnProperty.call(cur, key)) {
+      return false;
+    }
+    cur = (cur as JsonObject)[key];
+  }
+  return true;
 }
 
 function removePath(obj: unknown, path: string[]): void {
@@ -66,6 +104,13 @@ function migrateLegacyFormat(raw: JsonObject, warnings: string[]): void {
     }
     throw new Error(
       `检测到旧版密钥字段 ${path.join(".")}：请将其迁移到 ${hint}，gateway.yaml 不再接受密钥。`,
+    );
+  }
+
+  for (const { path, target } of LEGACY_PLATFORM_SECTIONS) {
+    if (!hasPath(raw, path)) continue;
+    throw new Error(
+      `检测到旧版平台配置段 ${path.join(".")}：0.4.0 已移除该段，请迁移到 ${target}。${LEGACY_PLATFORM_HINT}`,
     );
   }
 
@@ -184,6 +229,7 @@ export function loadSettingsFrom(
     if (typeof rawSecrets !== "object" || Array.isArray(rawSecrets)) {
       throw new Error(`${secretsPath} 内容格式非法`);
     }
+    assertNoLegacySecrets(rawSecrets as JsonObject, secretsPath);
     const parsedSecrets = secretsSchema.safeParse(rawSecrets);
     if (!parsedSecrets.success) {
       throw new Error(`${secretsPath} 校验失败: ${formatIssues(parsedSecrets.error.issues)}`);

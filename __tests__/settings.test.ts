@@ -192,6 +192,54 @@ browser:
     expect(() => load(d)).toThrow(/平铺数组/);
   });
 
+  it("顶层 bilibili 段 → 提示迁移到 extensions.bilibili.config", () => {
+    const d = tempDir();
+    writeFile(d, "gateway.yaml", "bilibili:\n  enabled: true\n");
+    expect(() => load(d)).toThrow(/bilibili/);
+    expect(() => load(d)).toThrow(/extensions\.bilibili\.config/);
+    expect(() => load(d)).toThrow(/0\.3\.11/);
+    expect(() => load(d)).toThrow(/0\.3\.x\.mjs --phase config/);
+  });
+
+  it("顶层 weibo 段 → 提示迁移到 extensions.weibo.config", () => {
+    const d = tempDir();
+    writeFile(d, "gateway.yaml", "weibo:\n  enabled: true\n");
+    expect(() => load(d)).toThrow(/extensions\.weibo\.config/);
+    expect(() => load(d)).toThrow(/0\.3\.11/);
+  });
+
+  it("search.weibo 段 → 提示迁移到 extensions.weibo.config.search", () => {
+    const d = tempDir();
+    writeFile(d, "gateway.yaml", "search:\n  weibo:\n    enabled: true\n");
+    expect(() => load(d)).toThrow(/search\.weibo/);
+    expect(() => load(d)).toThrow(/extensions\.weibo\.config\.search/);
+  });
+
+  it("secrets.yaml 的顶层 bilibili 段 → 提示迁移到 extensions.bilibili.token", () => {
+    const d = tempDir();
+    writeFile(d, "gateway.yaml", "gateway:\n  host: 127.0.0.1\n");
+    writeFile(d, "secrets.yaml", "bilibili:\n  http:\n    token: secret\n");
+    expect(() => load(d)).toThrow(/secrets\.yaml/);
+    expect(() => load(d)).toThrow(/extensions\.bilibili\.token/);
+    expect(() => load(d)).toThrow(/0\.3\.11/);
+  });
+
+  it("extensions.bilibili.config 不会被误判为旧平台段", () => {
+    const d = tempDir();
+    writeFile(
+      d,
+      "gateway.yaml",
+      `
+extensions:
+  bilibili:
+    config:
+      enabled: true
+`,
+    );
+    const { settings } = load(d);
+    expect(settings.extensions.bilibili!.config).toEqual({ enabled: true });
+  });
+
   it("非法配置抛错", () => {
     const d = tempDir();
     writeFile(d, "gateway.yaml", "gateway:\n  port: 99999\n");

@@ -71,6 +71,33 @@ const USER_AGENT = "agent-search-gateway-backend-cli";
 
 const DEFAULT_ARTICLE_PORT = 8010;
 
+/** 本脚本所在发布目录；用于判断核心版本（0.4.0 起平台配置迁到 extensions.<id>.config）。 */
+const SCRIPT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+function supportsExtensionConfig() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(SCRIPT_ROOT, "package.json"), "utf8"));
+    const match = /^(\d+)\.(\d+)/.exec(String(pkg.version || ""));
+    if (!match) return false;
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    return major > 0 || minor >= 4;
+  } catch {
+    return false;
+  }
+}
+
+const EXTENSIONS_CONFIG = supportsExtensionConfig();
+
+/** 平台配置根路径：0.3.x 是顶层段，0.4.0+ 是 extensions.<id>.config。 */
+function configRoot(platform) {
+  return EXTENSIONS_CONFIG ? ["extensions", platform, "config"] : [platform];
+}
+
+function configKey(platform, ...segments) {
+  return [...configRoot(platform), ...segments];
+}
+
 // ---------------------------------------------------------------------------
 // 通用工具
 // ---------------------------------------------------------------------------
@@ -752,10 +779,9 @@ const biliBackend = {
   source: "https://pypi.org/project/bili-agent/",
   installDir: path.join(BACKENDS_DIR, "bili"),
   createConfig: true,
-  statusKeys: ["bilibili.cli_kukemc.command"],
 
   configKeys() {
-    return ["bilibili.cli_kukemc.command"];
+    return [configKey("bilibili", "cli_kukemc", "command").join(".")];
   },
 
   commandPath() {
@@ -789,8 +815,9 @@ const biliBackend = {
   },
 
   applyConfig(document, result) {
-    setConfigValue(document, ["bilibili", "cli_kukemc", "command"], result.command);
-    return ["bilibili.cli_kukemc.command"];
+    const segments = configKey("bilibili", "cli_kukemc", "command");
+    setConfigValue(document, segments, result.command);
+    return [segments.join(".")];
   },
 
   tips(result) {
@@ -826,10 +853,9 @@ const ytdlpBackend = {
   source: "https://github.com/yt-dlp/yt-dlp",
   installDir: path.join(BACKENDS_DIR, "ytdlp"),
   createConfig: true,
-  statusKeys: ["bilibili.cli_ytdlp.command"],
 
   configKeys() {
-    return ["bilibili.cli_ytdlp.command"];
+    return [configKey("bilibili", "cli_ytdlp", "command").join(".")];
   },
 
   commandPath() {
@@ -874,12 +900,14 @@ const ytdlpBackend = {
   },
 
   applyConfig(document, result) {
-    setConfigValue(document, ["bilibili", "cli_ytdlp", "command"], result.command);
-    return ["bilibili.cli_ytdlp.command"];
+    const segments = configKey("bilibili", "cli_ytdlp", "command");
+    setConfigValue(document, segments, result.command);
+    return [segments.join(".")];
   },
 
   tips() {
-    log(this.name, "提示：如需高清或登录态，请在 bilibili.cli_ytdlp.cookies_file 配置 Netscape 格式 Cookie 文件。");
+    const key = configKey("bilibili", "cli_ytdlp", "cookies_file").join(".");
+    log(this.name, `提示：如需高清或登录态，请在 ${key} 配置 Netscape 格式 Cookie 文件。`);
   },
 };
 
@@ -890,11 +918,10 @@ const opencliBackend = {
   source: "https://www.npmjs.com/package/@jackwener/opencli",
   installDir: path.join(BACKENDS_DIR, "opencli"),
   createConfig: false,
-  statusKeys: ["weibo.cli.command"],
 
   configKeys(document) {
-    if (!document || !document.has("weibo")) return [];
-    return ["weibo.cli.command"];
+    if (!EXTENSIONS_CONFIG && (!document || !document.has("weibo"))) return [];
+    return [configKey("weibo", "cli", "command").join(".")];
   },
 
   commandPath() {
@@ -950,17 +977,19 @@ const opencliBackend = {
       log(this.name, "未找到 gateway.yaml，仅安装，未写入配置。");
       return [];
     }
-    if (!document.has("weibo")) {
+    if (!EXTENSIONS_CONFIG && !document.has("weibo")) {
       log(this.name, "当前配置不含微博段（weibo），仅安装，未写入配置。");
       return [];
     }
-    setConfigValue(document, ["weibo", "cli", "command"], result.command);
-    return ["weibo.cli.command"];
+    const segments = configKey("weibo", "cli", "command");
+    setConfigValue(document, segments, result.command);
+    return [segments.join(".")];
   },
 
   statusExtra(document) {
+    if (EXTENSIONS_CONFIG) return;
     if (document && document.has("weibo")) return;
-    log(this.name, "备注：当前配置不含微博段（weibo），不会写入 weibo.cli.command。");
+    log(this.name, "备注：当前配置不含微博段（weibo），不会写入微博命令。");
   },
 
   tips() {
@@ -971,7 +1000,7 @@ const opencliBackend = {
 /** article（djasdh/bilibili-article-server） */
 function resolveArticlePort(document) {
   if (document) {
-    const baseUrl = document.getIn(["bilibili", "http", "base_url"]);
+    const baseUrl = document.getIn(configKey("bilibili", "http", "base_url"));
     if (typeof baseUrl === "string" && baseUrl.trim()) {
       try {
         const parsed = new URL(baseUrl.trim());
@@ -993,10 +1022,12 @@ const articleBackend = {
   source: "https://github.com/djasdh/bilibili-article-server",
   installDir: path.join(BACKENDS_DIR, "article-server"),
   createConfig: true,
-  statusKeys: ["bilibili.http.command", "bilibili.http.base_url"],
 
   configKeys() {
-    return ["bilibili.http.command", "bilibili.http.base_url"];
+    return [
+      configKey("bilibili", "http", "command").join("."),
+      configKey("bilibili", "http", "base_url").join("."),
+    ];
   },
 
   commandPath() {
@@ -1115,14 +1146,19 @@ const articleBackend = {
 
   applyConfig(document, result) {
     const port = resolveArticlePort(document);
-    setConfigValue(document, ["bilibili", "http", "base_url"], `http://127.0.0.1:${port}`);
+    const baseUrlKey = configKey("bilibili", "http", "base_url");
+    const commandKey = configKey("bilibili", "http", "command");
+    setConfigValue(document, baseUrlKey, `http://127.0.0.1:${port}`);
     setConfigValue(
       document,
-      ["bilibili", "http", "command"],
+      commandKey,
       [result.pythonPath, result.serverPath, "--host", "127.0.0.1", "--port", String(port)],
     );
-    log(this.name, `已按端口 ${port} 写入 bilibili.http.command / base_url`);
-    return ["bilibili.http.command", "bilibili.http.base_url"];
+    log(
+      this.name,
+      `已按端口 ${port} 写入 ${commandKey.join(".")} / ${baseUrlKey.join(".")}`,
+    );
+    return [commandKey.join("."), baseUrlKey.join(".")];
   },
 
   statusExtra() {
@@ -1201,7 +1237,8 @@ function statusBackend(backend) {
     log(backend.name, `可执行文件：${commandPath}（${fs.existsSync(commandPath) ? "存在" : "不存在"}）`);
   }
 
-  for (const key of backend.statusKeys) {
+  const keys = backend.configKeys ? backend.configKeys(document) : [];
+  for (const key of keys) {
     const summary = configValueSummary(document, key);
     log(
       backend.name,

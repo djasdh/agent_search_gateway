@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -65,5 +65,34 @@ describe("后端安装 CLI 契约", () => {
       expect(r.stdout).toContain("安装状态");
     }
     expect(existsSync(config)).toBe(false);
+  });
+
+  it("0.4.0 的 status 读取 extensions.<id>.config", () => {
+    const config = join(tmp(), "gateway.yaml");
+    writeFileSync(
+      config,
+      [
+        "extensions:",
+        "  bilibili:",
+        "    config:",
+        "      cli_kukemc:",
+        "        command: /opt/bili",
+        "  weibo:",
+        "    config:",
+        "      cli:",
+        "        command: /opt/opencli",
+        "",
+      ].join("\n"),
+    );
+
+    const bili = run(["bili", "status"], config);
+    expect(bili.status).toBe(0);
+    expect(bili.stdout).toContain("extensions.bilibili.config.cli_kukemc.command");
+    expect(bili.stdout).toContain("/opt/bili");
+
+    const weibo = run(["opencli", "status"], config);
+    expect(weibo.status).toBe(0);
+    expect(weibo.stdout).toContain("extensions.weibo.config.cli.command");
+    expect(weibo.stdout).toContain("/opt/opencli");
   });
 });

@@ -1,5 +1,9 @@
 // @ts-expect-error 纯 JS 安装脚本没有类型声明
-import { prepareConfig, readGatewayPort } from "../../scripts/install/config.mjs";
+import {
+  assertNoLegacyPlatformConfig,
+  prepareConfig,
+  readGatewayPort,
+} from "../../scripts/install/config.mjs";
 // @ts-expect-error 纯 JS 安装脚本没有类型声明
 import {
   launchFile,
@@ -227,6 +231,104 @@ describe("配置生成", () => {
 
     writeFileSync(join(root, "gateway.yaml"), "gateway:\n  host: 127.0.0.1\n");
     await expect(readGatewayPort(root, fallback)).resolves.toBe(fallback);
+  });
+});
+
+describe("旧平台配置守卫", () => {
+  const LEGACY_HINT = /0\.3\.11.*0\.3\.x\.mjs --phase config/;
+
+  it("gateway.yaml 顶层 bilibili 段报错", async () => {
+    const root = tmp();
+    writeFileSync(join(root, "gateway.yaml"), "bilibili:\n  enabled: true\n");
+
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(/gateway\.yaml.*bilibili/);
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(
+      /extensions\.bilibili\.config/,
+    );
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(LEGACY_HINT);
+  });
+
+  it("gateway.yaml 顶层 weibo 段报错", async () => {
+    const root = tmp();
+    writeFileSync(join(root, "gateway.yaml"), "weibo:\n  enabled: true\n");
+
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(/extensions\.weibo\.config/);
+  });
+
+  it("gateway.yaml 的 search.weibo 段报错", async () => {
+    const root = tmp();
+    writeFileSync(join(root, "gateway.yaml"), "search:\n  weibo:\n    enabled: true\n");
+
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(
+      /gateway\.yaml.*search\.weibo/,
+    );
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(
+      /extensions\.weibo\.config\.search/,
+    );
+  });
+
+  it("secrets.yaml 顶层 bilibili 段报错", async () => {
+    const root = tmp();
+    writeFileSync(join(root, "secrets.yaml"), "bilibili:\n  http:\n    token: old\n");
+
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(/secrets\.yaml.*bilibili/);
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(/extensions\.bilibili/);
+  });
+
+  it("只有 extensions.* 配置时通过", async () => {
+    const root = tmp();
+    writeFileSync(
+      join(root, "gateway.yaml"),
+      ["extensions:", "  bilibili:", "    config:", "      enabled: true", ""].join("\n"),
+    );
+    writeFileSync(
+      join(root, "secrets.yaml"),
+      ["extensions:", "  bilibili:", "    token: new-token", ""].join("\n"),
+    );
+
+    await expect(assertNoLegacyPlatformConfig(root)).resolves.toBeUndefined();
+  });
+
+  it("文件缺失或为空时通过", async () => {
+    const root = tmp();
+    await expect(assertNoLegacyPlatformConfig(root)).resolves.toBeUndefined();
+
+    writeFileSync(join(root, "gateway.yaml"), "# 只有注释\n");
+    writeFileSync(join(root, "secrets.yaml"), "");
+    await expect(assertNoLegacyPlatformConfig(root)).resolves.toBeUndefined();
+  });
+
+  it("YAML 无法解析时给出明确错误（不静默放过）", async () => {
+    const root = tmp();
+    writeFileSync(join(root, "gateway.yaml"), "gateway: [\n");
+
+    await expect(assertNoLegacyPlatformConfig(root)).rejects.toThrow(/解析失败/);
+  });
+
+  it("cli 正常安装路径命中旧配置时退出且不切换 current", () => {
+    const root = tmp();
+    writeFileSync(join(root, "gateway.yaml"), "weibo:\n  enabled: true\n");
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(ROOT, "scripts/install/cli.mjs"),
+        "--install-root",
+        root,
+        "--switch-current",
+        "--no-deps",
+        "--no-browser",
+        "--no-service",
+        "--no-start",
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("0.3.11");
+    expect(result.stderr).toContain("extensions.weibo.config");
+    expect(existsSync(join(root, "data", "current.json"))).toBe(false);
+    expect(existsSync(join(root, "data", "current"))).toBe(false);
   });
 });
 

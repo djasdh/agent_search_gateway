@@ -13,7 +13,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { prepareConfig, readGatewayPort } from './config.mjs';
+import { assertNoLegacyPlatformConfig, prepareConfig, readGatewayPort } from './config.mjs';
 import { readCurrentSwitchState, switchCurrent } from './state.mjs';
 import { installBrowser } from './browser.mjs';
 import { installFlareSolverr } from './flaresolverr.mjs';
@@ -441,6 +441,11 @@ async function main(argv = process.argv.slice(2)) {
     log(`依赖更新完成，启动清单: ${launchFile}`);
     return 0;
   }
+
+  // ---- 旧配置守卫 ----
+  // 0.4.0 删除了旧平台段；在重写配置与（随后）切换 current 之前 fail fast。
+  // --launch-only / --deps-only 已提前返回，行为不变。
+  await assertNoLegacyPlatformConfig(installRoot);
 
   // ---- 配置 ----
   const config = await prepareConfig({
