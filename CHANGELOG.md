@@ -7,6 +7,10 @@
 ### Fixed
 
 - adlist 刷新改为后台进行：`createServer` 先用磁盘上现有 hosts 建过滤器并立即返回，过期时的下载不再阻塞 MCP 会话初始化（慢网下拉 2.3MB hosts 曾把 `initialize` 拖到 30–60s，触发客户端连接超时）。新增回归测试覆盖"下载悬而未决时 `initialize` 已完成"。
+- 安装器：FlareSolverr 自检与启动环境会主动查找 Xvfb（`PATH` 之外还覆盖 `/usr/bin`、`/usr/local/bin`、`/opt/X11/bin`、`~/miniconda3/bin`、`~/anaconda3/bin`、`~/miniforge3/bin` 等），并把找到的目录写进 launch 环境；此前 conda 用户的 Xvfb 不在服务管理器 PATH 里，导致 FlareSolverr 被误判为不可用。
+- 安装器：FlareSolverr 自检失败不再只上报 PyInstaller 的 `[PYI-…] Failed to execute script`；会优先挑出 `FileNotFoundError` / `Exception` 行，并在缺少 Xvfb 时给出 Debian/Ubuntu、Arch、Fedora 的安装命令。
+- 安装器：FlareSolverr 自检改为独立进程组，结束后连同它拉起的 Xvfb / chrome 一起清理（此前只杀直接子进程，残留的 Xvfb 会让后续自检偶发卡死）；冷启动超时放宽到 120s（重试 180s），并同时收集 stdout/stderr 作为诊断。
+- `asg doctor` 新增 `xvfb` 检查项（FlareSolverr 启用且为 Linux 时）：找不到 Xvfb 会告警并给出安装命令；FlareSolverr 关闭或非 Linux 平台直接跳过。
 
 ## [0.3.9] - 2026-11-21
 

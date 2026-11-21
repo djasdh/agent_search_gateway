@@ -332,6 +332,14 @@ irm https://raw.githubusercontent.com/djasdh/agent_search_gateway/master/scripts
 - 注册用户级自启（systemd --user / LaunchAgent / 登录计划任务）
 - 启动并做健康检查
 
+> **FlareSolverr 的 Xvfb 依赖（Linux）**：FlareSolverr 要用 Xvfb 跑「有头 Chrome」（不走 `--headless`，为了反检测），上游二进制不自带，官方 Docker 镜像同样是 `apt install xvfb`。安装器会在 `PATH` 以及 `~/miniconda3/bin`、`~/anaconda3/bin`、`~/miniforge3/bin` 等常见目录里查找 Xvfb，找到就写进自检与服务启动环境；找不到时会关闭 FlareSolverr（搜索 / 抓取仍可用，CF 绕过回退到 Playwright 渲染），并在日志里给出安装命令。手动安装：
+>
+> - Debian / Ubuntu：`sudo apt install xvfb`
+> - Arch：`sudo pacman -S xorg-server-xvfb`
+> - Fedora：`sudo dnf install xorg-x11-server-Xvfb`
+>
+> 装好后运行 `asg doctor` 可确认 Xvfb 检查项；重跑安装器会重新启用 FlareSolverr。
+
 常用参数：
 
 ```bash

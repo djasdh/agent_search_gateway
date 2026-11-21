@@ -19,7 +19,11 @@ import { buildHeaders, formatDownloadFailure, proxyEnvName, sha256File, verifySh
 // @ts-expect-error 纯 JS 安装脚本没有类型声明
 import {
   disableBundledReadline,
+  findXvfb,
   isReadlineConflict,
+  prependPath,
+  summarizeSmokeFailure,
+  xvfbCandidateDirs,
 } from "../../scripts/install/flaresolverr.mjs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -35,7 +39,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { parseLaunchConfig } from "../../src/cli/runtime/launch.js";
@@ -367,5 +371,63 @@ describe("引导脚本语法", () => {
         expect(pattern.test(line), `${file}:${index + 1} ${line}`).toBe(false);
       });
     }
+  });
+});
+
+describe("FlareSolverr 的 Xvfb 依赖", () => {
+  it("在 PATH 之外的常见目录（conda）也能找到 Xvfb", () => {
+    const home = tmp();
+    const bin = join(home, "miniconda3", "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "Xvfb"), "");
+
+    expect(findXvfb({ env: { PATH: "/nonexistent" }, home, platform: "linux" })).toEqual({
+      binary: join(bin, "Xvfb"),
+      dir: bin,
+    });
+  });
+
+  it("找不到返回 null；Windows 直接跳过", () => {
+    const home = tmp();
+    const dirs = [join(home, "empty")];
+    expect(findXvfb({ dirs, platform: "linux" })).toBeNull();
+    expect(findXvfb({ dirs: [home], platform: "win32" })).toBeNull();
+  });
+
+  it("候选目录 PATH 优先、去重", () => {
+    const home = tmp();
+    const dirs = xvfbCandidateDirs({
+      env: { PATH: ["/a", "/b"].join(path.delimiter) },
+      home,
+    });
+    expect(dirs.slice(0, 2)).toEqual(["/a", "/b"]);
+    expect(new Set(dirs).size).toBe(dirs.length);
+    expect(dirs).toContain(join(home, "miniconda3", "bin"));
+    expect(dirs).toContain("/usr/bin");
+  });
+
+  it("prependPath 置顶且不重复", () => {
+    expect(prependPath("/x", ["/a", "/x", "/b"].join(path.delimiter))).toBe(
+      ["/x", "/a", "/b"].join(path.delimiter),
+    );
+  });
+
+  it("自检失败上报真实异常（Xvfb），而不是 PYI 最后一行", () => {
+    const stderr = [
+      "Traceback (most recent call last):",
+      '  File "utils.py", line 346, in start_xvfb_display',
+      "FileNotFoundError: Could not find Xvfb. Please install it and try again",
+      "Exception: Error getting browser User-Agent. Could not find Xvfb.",
+      "[PYI-1:ERROR] Failed to execute script 'flaresolverr' due to unhandled exception!",
+    ].join("\n");
+
+    const detail = summarizeSmokeFailure(stderr, 60_000);
+    expect(detail).toContain("Could not find Xvfb");
+    expect(detail).toContain("apt install xvfb");
+    expect(detail).not.toContain("Failed to execute script");
+  });
+
+  it("无 stderr 时说明是健康检查超时", () => {
+    expect(summarizeSmokeFailure("", 90_000)).toContain("90 秒");
   });
 });

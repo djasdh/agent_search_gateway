@@ -6,6 +6,7 @@
 
 import { spawnSync } from "node:child_process";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { loadSettings } from "../../settings/load.js";
@@ -52,6 +53,10 @@ export interface DoctorDeps {
   probe?: (root: string) => Promise<StackStatus>;
   /** 密钥环境变量覆盖；默认 process.env。 */
   env?: NodeJS.ProcessEnv;
+  /** Xvfb 探测（测试可注入）；默认搜 PATH 与常见目录。 */
+  findXvfb?: () => string | null;
+  /** 平台覆盖（测试可注入）；默认 process.platform。 */
+  platform?: NodeJS.Platform;
 }
 
 const MIN_NODE = "20.18.1";
@@ -362,6 +367,56 @@ function checkManager(root: string, deps: DoctorDeps): DoctorCheck {
   }
 }
 
+const XVFB_EXTRA_DIRS = ["/usr/bin", "/usr/local/bin", "/opt/X11/bin", "/opt/homebrew/bin"];
+
+/** 与安装器 scripts/install/flaresolverr.mjs 的 findXvfb 保持同一候选顺序。 */
+function defaultFindXvfb(env: NodeJS.ProcessEnv): string | null {
+  const dirs = [
+    ...String(env.PATH ?? "").split(path.delimiter),
+    ...XVFB_EXTRA_DIRS,
+    ...["miniconda3", "anaconda3", "miniforge3", "mambaforge"].map((name) =>
+      path.join(os.homedir(), name, "bin"),
+    ),
+  ].filter(Boolean);
+  for (const dir of new Set(dirs)) {
+    const candidate = path.join(dir, "Xvfb");
+    if (exists(candidate)) return candidate;
+  }
+  return null;
+}
+
+function checkXvfb(flaresolverrEnabled: boolean, deps: DoctorDeps): DoctorCheck {
+  const platform = deps.platform ?? process.platform;
+  if (platform === "win32" || platform === "darwin") {
+    return { name: "xvfb", ok: true, level: "warn", message: "当前平台不依赖 Xvfb" };
+  }
+  if (!flaresolverrEnabled) {
+    return { name: "xvfb", ok: true, level: "warn", message: "FlareSolverr 未启用，跳过" };
+  }
+  const find = deps.findXvfb ?? (() => defaultFindXvfb(deps.env ?? process.env));
+  try {
+    const binary = find();
+    if (binary) return { name: "xvfb", ok: true, level: "warn", message: binary };
+    return {
+      name: "xvfb",
+      ok: false,
+      level: "warn",
+      code: "XVFB_MISSING",
+      message:
+        "未找到 Xvfb（FlareSolverr 依赖）：Debian/Ubuntu `sudo apt install xvfb`；" +
+        "Arch `sudo pacman -S xorg-server-xvfb`；Fedora `sudo dnf install xorg-x11-server-Xvfb`",
+    };
+  } catch (error) {
+    return {
+      name: "xvfb",
+      ok: false,
+      level: "warn",
+      code: "XVFB_MISSING",
+      message: errorMessage(error),
+    };
+  }
+}
+
 function checkBrowser(deps: DoctorDeps): DoctorCheck {
   try {
     const status = (deps.browser ?? (() => browserStatus()))();
@@ -446,6 +501,7 @@ export async function runDoctor(root: string, deps: DoctorDeps = {}): Promise<Do
   checks.push(await checkPort(root, deps));
   checks.push(checkManager(root, deps));
   checks.push(checkBrowser(deps));
+  checks.push(checkXvfb(config.flaresolverrEnabled, deps));
   checks.push(await checkServices(root, deps, config.flaresolverrEnabled));
   return checks;
 }

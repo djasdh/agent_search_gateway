@@ -3,10 +3,68 @@
  * 其它平台（arm64、macOS）没有官方二进制，返回 enabled=false 让网关关闭该能力。
  */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { download, verifySha256 } from './http.mjs';
+
+/** Xvfb 常见安装位置：PATH 之外，系统包、X11、Homebrew 都要考虑。 */
+const XVFB_EXTRA_DIRS = ['/usr/bin', '/usr/local/bin', '/opt/X11/bin', '/opt/homebrew/bin'];
+/** conda / mamba 发行版默认会把 Xvfb 装在各自 bin 下（用户级，无需 root）。 */
+const XVFB_CONDA_DIRS = [
+  'miniconda3',
+  'anaconda3',
+  'miniforge3',
+  'mambaforge',
+  '.conda',
+  '.local/share/mamba',
+];
+
+function splitPath(value) {
+  return String(value || '')
+    .split(path.delimiter)
+    .filter(Boolean);
+}
+
+/** 查找 Xvfb 的候选目录：PATH 优先，再补常见位置（去重、保持顺序）。 */
+export function xvfbCandidateDirs({ env = process.env, home = os.homedir() } = {}) {
+  const dirs = [...splitPath(env.PATH), ...XVFB_EXTRA_DIRS];
+  for (const name of XVFB_CONDA_DIRS) dirs.push(path.join(home, name, 'bin'));
+  return [...new Set(dirs.filter(Boolean))];
+}
+
+/**
+ * 查找可用的 Xvfb。
+ *
+ * FlareSolverr 在 Linux 上无 DISPLAY 时会用 Xvfb 跑「有头 Chrome」（不走 --headless，
+ * 为反检测），上游二进制不自带，官方 Docker 镜像也是 apt install xvfb。
+ * 服务管理器给的 PATH 通常不含 conda / Homebrew 目录，所以这里主动找。
+ *
+ * @returns {{ binary: string, dir: string } | null}
+ */
+export function findXvfb(options = {}) {
+  const { platform = process.platform, dirs } = options;
+  if (platform === 'win32') return null;
+  for (const dir of dirs ?? xvfbCandidateDirs(options)) {
+    const binary = path.join(dir, 'Xvfb');
+    if (existsSync(binary)) return { binary, dir };
+  }
+  return null;
+}
+
+/** 把目录前置到 PATH（用于自检环境与 launch env）。 */
+export function prependPath(dir, value = process.env.PATH) {
+  const rest = splitPath(value).filter((item) => item !== dir);
+  return [dir, ...rest].join(path.delimiter);
+}
+
+/** FlareSolverr 缺少 Xvfb 时的可操作提示（按发行版给命令）。 */
+export const XVFB_HINT =
+  '需要 Xvfb（FlareSolverr 用它跑有头 Chrome）：Debian/Ubuntu `sudo apt install xvfb`；' +
+  'Arch `sudo pacman -S xorg-server-xvfb`；Fedora `sudo dnf install xorg-x11-server-Xvfb`。' +
+  '未安装时会关闭 FlareSolverr，网关仍可用浏览器渲染兜底。';
 
 function run(command, args) {
   return new Promise((resolve) => {
@@ -76,7 +134,7 @@ function freePort() {
  *
  * 自检失败时返回 enabled=false，让安装器关闭该能力而不是让整栈无法启动。
  */
-async function smokeTest(binary, cwd, timeoutMs = 60_000) {
+async function smokeTest(binary, cwd, timeoutMs = 120_000, options = {}) {
   let port;
   try {
     port = await freePort();
@@ -88,22 +146,27 @@ async function smokeTest(binary, cwd, timeoutMs = 60_000) {
     cwd,
     env: {
       ...process.env,
+      ...options.env,
       PORT: String(port),
       HOST: '127.0.0.1',
       LOG_LEVEL: 'error',
     },
-    stdio: ['ignore', 'ignore', 'pipe'],
+    // 独立进程组：FlareSolverr 会再拉起 Xvfb / chrome，清理时要整组杀掉。
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
 
-  let stderr = '';
+  let output = '';
   let exited = false;
-  child.stderr?.on('data', (chunk) => {
-    stderr = (stderr + chunk.toString('utf8')).slice(-2000);
-  });
+  const append = (chunk) => {
+    output = (output + chunk.toString('utf8')).slice(-8000);
+  };
+  child.stdout?.on('data', append);
+  child.stderr?.on('data', append);
   child.once('error', (error) => {
     exited = true;
-    stderr = `${stderr}\n${error.message}`;
+    output = `${output}\n${error.message}`;
   });
   child.once('exit', () => {
     exited = true;
@@ -126,31 +189,61 @@ async function smokeTest(binary, cwd, timeoutMs = 60_000) {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  try {
-    child.kill('SIGTERM');
-  } catch {
-    // 进程可能已退出。
-  }
-  const killTimer = setTimeout(() => {
-    try {
-      child.kill('SIGKILL');
-    } catch {
-      // 忽略
-    }
-  }, 5000);
-  if (typeof killTimer.unref === 'function') killTimer.unref();
+  // 自检结束就清干净：FlareSolverr + 它拉起的 Xvfb / chrome 都不能留。
+  killProcessTree(child);
 
   if (healthy) {
-    child.unref();
     return { healthy: true };
   }
 
-  const lines = stderr
+  return { healthy: false, detail: summarizeSmokeFailure(output, timeoutMs) };
+}
+
+/** 结束自检进程及其子进程（POSIX 用进程组，Windows 退回单进程）。 */
+function killProcessTree(child) {
+  const signal = (sig) => {
+    try {
+      if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, sig);
+      else child.kill(sig);
+    } catch {
+      // 进程可能已退出。
+    }
+  };
+
+  signal('SIGTERM');
+  const timer = setTimeout(() => signal('SIGKILL'), 5000);
+  if (typeof timer.unref === 'function') timer.unref();
+}
+
+/**
+ * 自检失败原因摘要。
+ *
+ * PyInstaller 的 stderr 最后一行永远是 `[PYI-…] Failed to execute script`，
+ * 真正的异常（如 `FileNotFoundError: Could not find Xvfb`）在它上面几行。
+ * 这里优先挑出异常行，并附带对应平台的处理提示。
+ */
+export function summarizeSmokeFailure(stderr, timeoutMs = 120_000) {
+  const lines = String(stderr || '')
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const detail = lines.length > 0 ? lines[lines.length - 1] : `启动后 ${timeoutMs / 1000} 秒内未通过健康检查`;
-  return { healthy: false, detail };
+  if (lines.length === 0) {
+    return `启动后 ${Math.round(timeoutMs / 1000)} 秒内未通过健康检查`;
+  }
+
+  const reverse = [...lines].reverse();
+  const pick = (re) => reverse.find((line) => re.test(line));
+  const key =
+    pick(/FileNotFoundError|No such file or directory/i) ??
+    pick(/Exception:|Error:/) ??
+    pick(/ERROR/);
+
+  const detail = (key ?? lines[lines.length - 1]).slice(0, 500);
+  if (/Xvfb/i.test(String(stderr))) return `${detail}；${XVFB_HINT}`;
+  if (/readline/i.test(String(stderr))) {
+    return `${detail}；FlareSolverr 自带的 libreadline 与系统 /bin/sh 冲突，可尝试移除包内 libreadline。`;
+  }
+  return detail;
 }
 
 /** PyInstaller 自带的 libreadline 会通过 LD_LIBRARY_PATH 影响子进程 /bin/sh。 */
@@ -236,9 +329,19 @@ export async function installFlareSolverr({ root, platform, pins, logger, port =
     `${JSON.stringify({ version: asset.version, platform, binary, installed_at: new Date().toISOString() }, null, 2)}\n`,
   );
 
+  // FlareSolverr 的浏览器依赖 Xvfb；先找好并注入 PATH，自检与运行时都用同一份。
+  const xvfb = platform.startsWith('win32') ? null : findXvfb();
+  const pathEnv =
+    !platform.startsWith('win32') && xvfb ? { PATH: prependPath(xvfb.dir, process.env.PATH) } : {};
+  if (xvfb) {
+    logger?.(`已找到 Xvfb: ${xvfb.binary}`);
+  } else if (!platform.startsWith('win32')) {
+    logger?.(`未找到 Xvfb。${XVFB_HINT}`);
+  }
+
   if (options?.smokeTest !== false) {
     logger?.('FlareSolverr 启动自检 ...');
-    let smoke = await smokeTest(binary, path.dirname(binary));
+    let smoke = await smokeTest(binary, path.dirname(binary), 60_000, { env: pathEnv });
     if (!smoke.healthy && isReadlineConflict(smoke.detail)) {
       const moved = await disableBundledReadline(path.dirname(binary));
       if (moved.length > 0) {
@@ -248,7 +351,7 @@ export async function installFlareSolverr({ root, platform, pins, logger, port =
             .join(', ')}`,
         );
         // 首次启动 undetected_chromedriver 可能还要下载/初始化，给第二次自检更长时间。
-        smoke = await smokeTest(binary, path.dirname(binary), 90_000);
+        smoke = await smokeTest(binary, path.dirname(binary), 180_000, { env: pathEnv });
       }
     }
     if (!smoke.healthy) {
@@ -274,6 +377,8 @@ export async function installFlareSolverr({ root, platform, pins, logger, port =
         PORT: String(port),
         HOST: '127.0.0.1',
         LOG_LEVEL: 'info',
+        // systemd/launchd 的默认 PATH 很短；把 Xvfb 所在目录带进运行时环境。
+        ...pathEnv,
       },
       health: `http://127.0.0.1:${port}/`,
     },

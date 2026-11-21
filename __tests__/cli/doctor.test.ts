@@ -50,6 +50,8 @@ function goodDeps(): DoctorDeps {
   return {
     nodeVersion: "20.18.1",
     env: {},
+    platform: "linux",
+    findXvfb: () => "/usr/bin/Xvfb",
     python: () => ({ ok: true, version: "3.12.1" }),
     probePort: async () => ({ port: 3000, state: "free" }),
     detect: () => ({ mode: "pid", registered: true, active: true }),
@@ -101,6 +103,7 @@ describe("doctor 检查项", () => {
       "port",
       "service_manager",
       "browser",
+      "xvfb",
       "services",
     ]);
     expect(checks.filter((check) => !check.ok)).toEqual([]);
@@ -131,6 +134,33 @@ describe("doctor 检查项", () => {
     expect(byName(checks, "services")).toMatchObject({
       ok: true,
       message: expect.stringContaining("FlareSolverr 已关闭"),
+    });
+  });
+
+  it("Xvfb 缺失 → xvfb 检查告警并给出各发行版安装命令", async () => {
+    const root = makeRoot();
+    writeFiles(root);
+
+    const checks = await runDoctor(root, { ...goodDeps(), findXvfb: () => null });
+
+    expect(byName(checks, "xvfb")).toMatchObject({ ok: false, code: "XVFB_MISSING" });
+    expect(byName(checks, "xvfb").message).toContain("apt install xvfb");
+    expect(byName(checks, "xvfb").message).toContain("xorg-server-xvfb");
+  });
+
+  it("FlareSolverr 关闭时不要求 Xvfb", async () => {
+    const root = makeRoot();
+    writeFiles(root);
+    fs.writeFileSync(
+      path.join(root, "gateway.yaml"),
+      "gateway:\n  port: 3000\nflaresolverr:\n  enabled: false\n",
+      "utf8",
+    );
+
+    const checks = await runDoctor(root, { ...goodDeps(), findXvfb: () => null });
+    expect(byName(checks, "xvfb")).toMatchObject({
+      ok: true,
+      message: expect.stringContaining("FlareSolverr 未启用"),
     });
   });
 
