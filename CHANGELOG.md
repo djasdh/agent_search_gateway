@@ -2,6 +2,15 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
+## [Unreleased]
+
+### Removed
+
+- 删除核心平台配置段：`gateway.yaml` 的顶层 `bilibili` / `weibo`、`search.weibo`，以及 `secrets.yaml` 的 `bilibili`。
+- 删除 `BILIBILI_HTTP_TOKEN` 环境变量映射；平台密钥改走 `extensions.<id>.<name>`。
+- 删除 `src/fetch/platforms.ts`、`src/fetch/channels/registry.ts` 与对应静态平台/通道测试；平台与通道改由扩展 manifest 声明。
+- 删除 `FetchPlugin.settingsKey`。
+
 ## [0.3.11] - 2026-11-21
 
 ### Added
@@ -46,13 +55,6 @@
 - `asg plugins` 降级为兼容 facade：按已安装 V1/V2 manifest 的 `backends[].id` / `aliases` 解析，未命中回退旧 `scripts/backends/cli.mjs`；`asg extensions` 成为推荐入口。
 - `asg extensions install/setup/remove` 不自动重启网关；`config` / `secret` 写入仍整栈重启。
 - 插件 `config` 写入在 setup 子进程内同样按 `config_schema` 校验，失败不落盘。
-
-### Removed
-
-- 删除核心平台配置段：`gateway.yaml` 的顶层 `bilibili` / `weibo`、`search.weibo`，以及 `secrets.yaml` 的 `bilibili`。
-- 删除 `BILIBILI_HTTP_TOKEN` 环境变量映射；平台密钥改走 `extensions.<id>.<name>`。
-- 删除 `src/fetch/platforms.ts`、`src/fetch/channels/registry.ts` 与对应静态平台/通道测试；平台与通道改由扩展 manifest 声明。
-- 删除 `FetchPlugin.settingsKey`。
 
 ### Fixed
 
