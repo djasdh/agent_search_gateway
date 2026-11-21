@@ -2,6 +2,27 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
+## [0.4.1] - 2026-11-21
+
+### Breaking
+
+- 删除 `asg plugins list|install|remove` 与 `PluginStatus`；后端统一由扩展 manifest 的 `backends` + `setup(ctx)` 管理。
+- 删除 `scripts/backends/` 旧后端安装器与 `scripts/migrations/` 0.3.x 迁移脚本；迁移脚本只保留在 0.3.11–0.4.0 的发布包中。
+- 删除 setup 宿主的 `paths.legacyBackendDir()` / `legacyBackendNames`；`data/backends` 不再被 CLI、setup 或运行时读取（旧目录不会自动删除）。
+- 删除 `scripts/install-weibo-override.sh` 与 `scripts/opencli-overrides/`；不再随网关分发 OpenCLI post adapter override。
+- 删除核心的 `BILI_*` / `WEIBO_*` / `CNKI_*` 错误码常量与 dataplane 平台前缀；插件自定义错误码仍原样透传。
+- 旧平台配置报错提示改为指向 0.3.11：0.4.1 自身不再携带迁移脚本，需先在 0.3.11 完成迁移或手工迁移。
+
+### Changed
+
+- `asg extensions list` 的后端状态只来自 `data/extension-data/<id>/backends.json` 与后端目录，不再合并 `data/backends/*`。
+- CLI 子进程流式工具从 `deps/plugins.ts` 抽到 `deps/stream.ts`，`browser` / `update` 行为不变。
+
+### Upgrade
+
+- 已按 0.4.0 升级说明完成迁移的用户可直接升级到 0.4.1。
+- 仍在使用旧 `bilibili` / `weibo` / `search.weibo` 配置或 `data/backends` 的用户，请先回到 0.3.11 运行 `node scripts/migrations/0.3.x.mjs --phase config`，或手工迁移到 `extensions.<id>.*`。
+
 ## [0.4.0] - 2026-11-21
 
 ### Breaking
