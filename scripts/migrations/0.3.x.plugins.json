@@ -1,4 +1,20 @@
 {
   "schema": 1,
-  "plugins": []
+  "plugins": [
+    {
+      "id": "bilibili",
+      "repo": "djasdh/agent-search-gateway-plugin-bilibili",
+      "version": "0.2.0"
+    },
+    {
+      "id": "weibo",
+      "repo": "djasdh/agent-search-gateway-plugin-weibo",
+      "version": "0.2.0"
+    },
+    {
+      "id": "cnki",
+      "repo": "djasdh/agent-search-gateway-plugin-cnki",
+      "version": "0.2.0"
+    }
+  ]
 }

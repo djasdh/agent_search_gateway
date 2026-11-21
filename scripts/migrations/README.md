@@ -150,7 +150,7 @@ restart 也直接记为 `skipped`，不重启网关。
 ```
 
 - `schema` 目前只接受 `1`；
-- `plugins` 可以为空数组（P1 默认即为空，发布时按需填写）；
+- 0.3.11 起清单包含三个官方插件（`bilibili` / `weibo` / `cnki`，目标 `0.2.0`）；第三方插件仍需通过 `--plugin` 指定；
 - 官方插件 manifest 的 `backends[].aliases` 必须覆盖历史安装名、通道 ID 与别名，
   否则 `asg plugins install <旧名>` 只能回退到旧安装脚本；这是插件仓库的发版检查项；
 - `--plugin <id>=<repo>@<version>` 会按 `id` 覆盖清单条目；也可以新增清单里没有的 id，

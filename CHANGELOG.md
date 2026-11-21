@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- 0.3.x 迁移清单补充 `bilibili` / `weibo` / `cnki` 到 `0.2.0`：已安装的官方插件可由迁移脚本自动升级到 V2 manifest。
+
 ### Fixed
 
 - 安装器升级/重装不再覆盖已有 `gateway.yaml` 的端口、searxng/FlareSolverr 地址与启用状态，只补缺失键。
