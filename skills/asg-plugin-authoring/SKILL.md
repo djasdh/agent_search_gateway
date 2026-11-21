@@ -604,9 +604,9 @@ asg extensions setup <id> --status
 官方插件仓库：
 
 ```bash
-asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.1.0
-asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.1.0
-asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.1.0
+asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.2.0
+asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.0
+asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.2.0
 ```
 
 ## 9. 交付前检查清单

@@ -70,7 +70,7 @@ gateway (本服务, :3000/mcp)
 
 ## B 站抓取
 
-> 需先安装官方插件：`asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.1.0`。
+> 需先安装官方插件：`asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.2.0`。
 
 全部走 `fetch`，不新增工具；B 站视频/专栏 URL 会被插件自动接管，不需要额外参数。默认关闭，在 `gateway.yaml` 里把 `bilibili.enabled` 设为 `true`。
 
@@ -100,7 +100,7 @@ gateway (本服务, :3000/mcp)
 
 ## 微博抓取
 
-> 需先安装官方插件：`asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.1.0`。
+> 需先安装官方插件：`asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.0`。
 
 全部走 `fetch`，不新增工具；默认关闭。普通微博页面 URL 带 `?weibo=` 才接管；`sinaimg.cn` 图片 URL 自动接管为附件。
 
@@ -358,9 +358,9 @@ curl -fsSL .../install.sh | bash -s -- --searxng-url http://192.168.1.10:8888
 0.3.4 起，Bilibili / 微博 / 知网不再内置，改为官方插件仓库：
 
 ```bash
-asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.1.0
-asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.1.0
-asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.1.0
+asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.2.0
+asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.0
+asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.2.0
 asg extensions list
 asg restart
 ```
