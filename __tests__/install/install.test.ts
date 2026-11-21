@@ -466,7 +466,10 @@ describe("FlareSolverr 的 Xvfb 依赖", () => {
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, "Xvfb"), "");
 
-    expect(findXvfb({ env: { PATH: "/nonexistent" }, home, platform: "linux" })).toEqual({
+    const candidates = xvfbCandidateDirs({ env: { PATH: "/nonexistent" }, home });
+    expect(candidates).toContain(bin);
+    // 只喂候选目录，避免宿主 /usr/bin/Xvfb 存在时抢先命中，测试依赖机器环境。
+    expect(findXvfb({ dirs: [bin], platform: "linux" })).toEqual({
       binary: join(bin, "Xvfb"),
       dir: bin,
     });
