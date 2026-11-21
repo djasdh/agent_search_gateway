@@ -1,5 +1,5 @@
 // @ts-expect-error 纯 JS 安装脚本没有类型声明
-import { prepareConfig } from "../../scripts/install/config.mjs";
+import { prepareConfig, readGatewayPort } from "../../scripts/install/config.mjs";
 // @ts-expect-error 纯 JS 安装脚本没有类型声明
 import {
   launchFile,
@@ -162,6 +162,71 @@ describe("配置生成", () => {
       flaresolverrEnabled: true,
     });
     expect(second.token).toBe(first.token);
+
+    // 升级/重装不再覆盖首次安装写入的值。
+    const configAfter = parse(readFileSync(second.configPath, "utf8"));
+    expect(configAfter.gateway.port).toBe(3100);
+    expect(configAfter.searxng.url).toBe("http://127.0.0.1:18888");
+    expect(configAfter.flaresolverr.url).toBe("http://127.0.0.1:18192");
+    expect(configAfter.flaresolverr.enabled).toBe(false);
+  });
+
+  it("已有 gateway.yaml 时保留自定义值，只补缺失键", async () => {
+    const currentDir = tmp();
+    copyFileSync(join(ROOT, "gateway.yaml.example"), join(currentDir, "gateway.yaml.example"));
+    copyFileSync(join(ROOT, "secrets.yaml.example"), join(currentDir, "secrets.yaml.example"));
+
+    const installRoot = tmp();
+    writeFileSync(
+      join(installRoot, "gateway.yaml"),
+      [
+        "gateway:",
+        "  port: 4321",
+        "searxng:",
+        "  url: http://127.0.0.1:19999",
+        "flaresolverr:",
+        "  enabled: false",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await prepareConfig({
+      installRoot,
+      currentDir,
+      port: 3100,
+      searxngUrl: "http://127.0.0.1:18888",
+      flaresolverrUrl: "http://127.0.0.1:18192",
+      flaresolverrEnabled: true,
+    });
+
+    const config = parse(readFileSync(result.configPath, "utf8"));
+    expect(config.gateway.port).toBe(4321);
+    expect(config.searxng.url).toBe("http://127.0.0.1:19999");
+    expect(config.flaresolverr.enabled).toBe(false);
+    // 缺失的键用 CLI 参数补齐。
+    expect(config.flaresolverr.url).toBe("http://127.0.0.1:18192");
+  });
+
+  it("读取 gateway.port：合法值生效，非法/缺失回退", async () => {
+    const root = tmp();
+    const fallback = 3456;
+
+    await expect(readGatewayPort(root, fallback)).resolves.toBe(fallback);
+
+    writeFileSync(join(root, "gateway.yaml"), "gateway:\n  port: 4321\n");
+    await expect(readGatewayPort(root, fallback)).resolves.toBe(4321);
+
+    writeFileSync(join(root, "gateway.yaml"), 'gateway:\n  port: "4321"\n');
+    await expect(readGatewayPort(root, fallback)).resolves.toBe(4321);
+
+    writeFileSync(join(root, "gateway.yaml"), "gateway:\n  port: abc\n");
+    await expect(readGatewayPort(root, fallback)).resolves.toBe(fallback);
+
+    writeFileSync(join(root, "gateway.yaml"), "gateway:\n  port: 70000\n");
+    await expect(readGatewayPort(root, fallback)).resolves.toBe(fallback);
+
+    writeFileSync(join(root, "gateway.yaml"), "gateway:\n  host: 127.0.0.1\n");
+    await expect(readGatewayPort(root, fallback)).resolves.toBe(fallback);
   });
 });
 
@@ -199,6 +264,26 @@ describe("启动清单", () => {
     );
     expect(parsed.services[0]!.required).toBe(false);
     expect(parsed.services[1]!.required).toBe(true);
+  });
+
+  it("--launch-only 使用 gateway.yaml 中的端口（忽略 --port 默认值）", () => {
+    const installRoot = tmp();
+    writeFileSync(join(installRoot, "gateway.yaml"), "gateway:\n  port: 4321\n");
+
+    const result = spawnSync(
+      process.execPath,
+      [join(ROOT, "scripts/install/cli.mjs"), "--install-root", installRoot, "--launch-only"],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(0);
+
+    const written = JSON.parse(
+      readFileSync(join(installRoot, "data", "runtime", "launch.json"), "utf8"),
+    );
+    const gateway = written.services.find(
+      (service: { name: string }) => service.name === "gateway",
+    );
+    expect(gateway.health).toBe("http://127.0.0.1:4321/health");
   });
 });
 

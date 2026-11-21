@@ -2,8 +2,9 @@
 /**
  * 一键安装器编排。
  *
- * 引导脚本（install.sh / install.ps1）负责下载完整包并切换到 data/current，
- * 本脚本负责：生成配置、安装 searxng/flaresolverr/浏览器、注册自启、启动自检。
+ * 引导脚本（install.sh / install.ps1）负责下载完整包；install.sh 在 cli 成功后
+ * 才切换到 data/current。本脚本负责：生成配置、安装 searxng/flaresolverr/浏览器、
+ * 注册自启、启动自检。
  *
  * 用法：
  *   node scripts/install/cli.mjs --install-root <dir> [选项]
@@ -12,7 +13,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { prepareConfig } from './config.mjs';
+import { prepareConfig, readGatewayPort } from './config.mjs';
+import { readCurrentSwitchState, switchCurrent } from './state.mjs';
 import { installBrowser } from './browser.mjs';
 import { installFlareSolverr } from './flaresolverr.mjs';
 import { writeLaunchJson } from './launch.mjs';
@@ -47,6 +49,7 @@ const USAGE = `用法: node scripts/install/cli.mjs --install-root <目录> [选
   --no-python-install     Windows 缺少 Python 时不自动安装
   --deps-only             只更新依赖与 launch.json（自更新联动用）
   --launch-only           只刷新 launch.json（自更新切换版本用）
+  --switch-current        配置/deps/launch 成功后切换 data/current（install.sh 使用）
   --force                 重新生成配置
   --check                 只检查，不安装
   -h, --help              显示帮助
@@ -68,6 +71,7 @@ export function parseArgs(argv) {
     noPythonInstall: false,
     depsOnly: false,
     launchOnly: false,
+    switchCurrent: false,
     force: false,
     check: false,
     help: false,
@@ -125,6 +129,9 @@ export function parseArgs(argv) {
         break;
       case '--launch-only':
         opts.launchOnly = true;
+        break;
+      case '--switch-current':
+        opts.switchCurrent = true;
         break;
       case '--force':
         opts.force = true;
@@ -278,6 +285,27 @@ async function writeInstalledState({ installRoot, version, platform, currentDir 
   return payload;
 }
 
+/** 计算切换 current 时的 previous：优先沿用 installed.json，缺失时回退 current.json。 */
+async function previousForSwitch(installRoot, version) {
+  const state = await readCurrentSwitchState(installRoot);
+  const old =
+    state.installedCurrent ??
+    (state.current?.version
+      ? { version: state.current.version, dir: state.current.dir }
+      : null);
+
+  if (old?.version && old.version !== version) {
+    return { previousDir: old.dir ?? null, previousVersion: old.version };
+  }
+  if (old?.version === version) {
+    return {
+      previousDir: state.installedPrevious?.dir ?? state.current?.previousDir ?? null,
+      previousVersion: state.installedPrevious?.version ?? state.current?.previousVersion ?? null,
+    };
+  }
+  return { previousDir: null, previousVersion: null };
+}
+
 async function installDeps({ installRoot, platform, pins, opts, logger }) {
   let searxngResult = {
     mode: 'external',
@@ -376,6 +404,8 @@ async function main(argv = process.argv.slice(2)) {
   await fs.mkdir(path.join(installRoot, 'data'), { recursive: true });
   await ensureLauncher({ installRoot, currentDir: CURRENT_DIR });
 
+  // --launch-only / --deps-only 不会重写配置，端口应沿用已有 gateway.yaml。
+  const configuredPort = await readGatewayPort(installRoot, opts.port);
   const gatewayLaunch = {
     name: 'gateway',
     command: [node, path.join(CURRENT_DIR, 'dist', 'index.js')],
@@ -384,7 +414,7 @@ async function main(argv = process.argv.slice(2)) {
       GATEWAY_CONFIG_FILE: path.join(installRoot, 'gateway.yaml'),
       GATEWAY_SECRETS_FILE: path.join(installRoot, 'secrets.yaml'),
     },
-    health: `http://127.0.0.1:${opts.port}/health`,
+    health: `http://127.0.0.1:${configuredPort}/health`,
   };
 
   if (opts.launchOnly) {
@@ -423,6 +453,10 @@ async function main(argv = process.argv.slice(2)) {
     logger: log,
   });
 
+  // prepareConfig 对已有配置保留原端口；后续启动/健康检查以实际配置为准。
+  const gatewayPort = await readGatewayPort(installRoot, opts.port);
+  gatewayLaunch.health = `http://127.0.0.1:${gatewayPort}/health`;
+
   // ---- 浏览器 ----
   if (!opts.noBrowser) {
     await installBrowser({ currentDir: CURRENT_DIR, logger: log });
@@ -441,6 +475,19 @@ async function main(argv = process.argv.slice(2)) {
   });
   await writeDepsState({ installRoot, pins });
   log(`启动清单: ${launchFile}`);
+
+  // ---- 切换 current ----
+  // 配置/deps/launch 都成功后才切换；随后的服务启动会使用新版本。
+  if (opts.switchCurrent) {
+    const previous = await previousForSwitch(installRoot, version);
+    await switchCurrent({
+      root: installRoot,
+      dir: CURRENT_DIR,
+      version,
+      ...previous,
+    });
+    log(`已切换 data/current: ${version}`);
+  }
 
   // ---- 自启 ----
   let service = null;
@@ -469,7 +516,7 @@ async function main(argv = process.argv.slice(2)) {
   if (!opts.noStart) {
     if (serviceStarted) {
       log('等待网关健康检查 ...');
-      const ok = await waitHealth(`http://127.0.0.1:${opts.port}/health`, 90_000);
+      const ok = await waitHealth(`http://127.0.0.1:${gatewayPort}/health`, 90_000);
       if (!ok) throw new Error('网关启动后健康检查超时');
       log('网关已就绪');
     } else {
@@ -478,22 +525,18 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   // ---- 记录安装状态（自更新引擎读取 data/installed.json）----
-  let installedDir = CURRENT_DIR;
-  try {
-    installedDir = await fs.realpath(path.join(installRoot, 'data', 'current'));
-  } catch {
-    // data/current 不存在时（例如 --no-start 的自定义布局）退回当前版本目录。
-  }
+  // install.sh 在 cli 成功后才切换 data/current；这里必须写本次安装目录，
+  // 不能从 data/current 读到旧版本目录。
   await writeInstalledState({
     installRoot,
     version,
     platform,
-    currentDir: installedDir,
+    currentDir: CURRENT_DIR,
   });
 
   log('');
   log('安装完成');
-  log(`  网关: http://127.0.0.1:${opts.port}/mcp`);
+  log(`  网关: http://127.0.0.1:${gatewayPort}/mcp`);
   log(`  searxng: ${deps.searxngUrl}`);
   log(`  FlareSolverr: ${deps.flaresolverrUrl}${deps.flaresolverrResult.enabled ? '' : '（已关闭）'}`);
   log(`  配置: ${config.configPath}`);

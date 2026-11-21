@@ -2,6 +2,15 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
+## [Unreleased]
+
+### Fixed
+
+- 安装器升级/重装不再覆盖已有 `gateway.yaml` 的端口、searxng/FlareSolverr 地址与启用状态，只补缺失键。
+- `--launch-only` / `--deps-only` 从 `gateway.yaml` 读取实际端口写 `launch.json`，不再固定用 3000。
+- `install.sh` 改为配置成功后切换 `data/current`，失败时保留旧版本；`current.json` 用 `JSON.stringify` 写绝对路径，支持含引号的目录。
+- 迁移脚本写回 `secrets.yaml` 时保持 0600，`gateway.yaml` 保留原权限。
+
 ## [0.3.10] - 2026-11-21
 
 ### Fixed
@@ -11,6 +20,7 @@
 - 安装器：FlareSolverr 自检失败不再只上报 PyInstaller 的 `[PYI-…] Failed to execute script`；会优先挑出 `FileNotFoundError` / `Exception` 行，并在缺少 Xvfb 时给出 Debian/Ubuntu、Arch、Fedora 的安装命令。
 - 安装器：FlareSolverr 自检改为独立进程组，结束后连同它拉起的 Xvfb / chrome 一起清理（此前只杀直接子进程，残留的 Xvfb 会让后续自检偶发卡死）；冷启动超时放宽到 120s（重试 180s），并同时收集 stdout/stderr 作为诊断。
 - `asg doctor` 新增 `xvfb` 检查项（FlareSolverr 启用且为 Linux 时）：找不到 Xvfb 会告警并给出安装命令；FlareSolverr 关闭或非 Linux 平台直接跳过。
+
 
 ## [0.3.9] - 2026-11-21
 

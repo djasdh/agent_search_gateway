@@ -32,6 +32,26 @@ export function generateToken() {
   return crypto.randomBytes(24).toString('hex');
 }
 
+/** 读取 gateway.yaml 的 gateway.port；文件缺失、键缺失或值非法时回退 fallbackPort。 */
+export async function readGatewayPort(installRoot, fallbackPort = 3000) {
+  const configPath = path.join(installRoot, 'gateway.yaml');
+  let value;
+  try {
+    const doc = parseDocument(await fs.readFile(configPath, 'utf8'));
+    value = doc.getIn(['gateway', 'port']);
+  } catch {
+    return fallbackPort;
+  }
+
+  const port =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value.trim())
+        ? Number.parseInt(value.trim(), 10)
+        : Number.NaN;
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : fallbackPort;
+}
+
 export async function prepareConfig({
   installRoot,
   currentDir,
@@ -41,7 +61,7 @@ export async function prepareConfig({
   flaresolverrEnabled = true,
   logger,
 }) {
-  await copyExample({
+  const configCreated = await copyExample({
     installRoot,
     currentDir,
     source: 'gateway.yaml.example',
@@ -60,10 +80,18 @@ export async function prepareConfig({
   const secretsPath = path.join(installRoot, 'secrets.yaml');
 
   const configDoc = parseDocument(await fs.readFile(configPath, 'utf8'));
-  configDoc.setIn(['gateway', 'port'], port);
-  configDoc.setIn(['searxng', 'url'], searxngUrl);
-  configDoc.setIn(['flaresolverr', 'url'], flaresolverrUrl);
-  configDoc.setIn(['flaresolverr', 'enabled'], Boolean(flaresolverrEnabled));
+  // 首次从 example 复制时写入 CLI 默认值；升级/重装只补缺失键，保留用户已有配置。
+  const defaults = [
+    [['gateway', 'port'], port],
+    [['searxng', 'url'], searxngUrl],
+    [['flaresolverr', 'url'], flaresolverrUrl],
+    [['flaresolverr', 'enabled'], Boolean(flaresolverrEnabled)],
+  ];
+  for (const [keyPath, value] of defaults) {
+    if (configCreated || configDoc.getIn(keyPath) === undefined) {
+      configDoc.setIn(keyPath, value);
+    }
+  }
   await writeAtomic(configPath, String(configDoc));
 
   const secretsDoc = parseDocument(await fs.readFile(secretsPath, 'utf8'));

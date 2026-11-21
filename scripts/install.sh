@@ -5,8 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/djasdh/agent_search_gateway/master/scripts/install.sh | bash
 #   curl -fsSL .../install.sh | bash -s -- --dir ~/agent_search_gateway
 #
-# 引导脚本只负责：准备 Node、下载 Release 完整包、校验、解压、切换 current；
-# 配置/依赖/浏览器/自启交给包内的 scripts/install/cli.mjs。
+# 引导脚本负责：准备 Node、下载 Release 完整包、校验、解压，然后运行包内
+# scripts/install/cli.mjs 做配置/依赖/浏览器/自启，全部成功后才切换 current。
 set -euo pipefail
 
 REPO_DEFAULT="djasdh/agent_search_gateway"
@@ -51,6 +51,15 @@ while [ $# -gt 0 ]; do
       PASSTHRU+=("$1"); shift ;;
   esac
 done
+
+# ---------- 规范化安装根目录 ----------
+# current.json 里必须写绝对路径；先建目录再 cd + pwd -P，避免 --dir 为相对路径
+# 或软链接时状态文件依赖调用者的 cwd。
+if ! mkdir -p "$ROOT" 2>/dev/null; then
+  die "无法创建安装目录: $ROOT"
+fi
+ROOT_ABS="$(cd "$ROOT" 2>/dev/null && pwd -P)" || die "无法解析安装目录: $ROOT"
+ROOT="$ROOT_ABS"
 
 case "$(uname -s 2>/dev/null || echo unknown)" in
   Linux) OS="linux" ;;
@@ -216,29 +225,21 @@ fi
 rm -rf "$TARGET"
 mv "$PKG_ROOT" "$TARGET"
 
-# ---------- 切换 current ----------
-ln -sfn "releases/${RUNTIME_VERSION}-${PLATFORM}" "$ROOT/data/current"
-cat > "$ROOT/data/current.json" <<EOF
-{
-  "dir": "$TARGET",
-  "version": "$RUNTIME_VERSION",
-  "previousDir": null,
-  "previousVersion": null,
-  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
+# ---------- 交给 cli.mjs ----------
+# 先配置、后切换：cli 在配置/deps/launch 成功后才切换 data/current；
+# cli 失败时旧 current / current.json 保持不变。
+log "运行安装配置 ..."
+if [ ${#PASSTHRU[@]} -gt 0 ]; then
+  ASG_REPO="$REPO" "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" \
+    --install-root "$ROOT" --switch-current "${PASSTHRU[@]}"
+else
+  ASG_REPO="$REPO" "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" \
+    --install-root "$ROOT" --switch-current
+fi
 
 # ---------- 稳定入口 ----------
 mkdir -p "$ROOT/bin"
 if [ -f "$TARGET/bin/asg.mjs" ]; then
   cp "$TARGET/bin/asg.mjs" "$ROOT/bin/asg.mjs"
   chmod +x "$ROOT/bin/asg.mjs" 2>/dev/null || true
-fi
-
-# ---------- 交给 cli.mjs ----------
-log "运行安装配置 ..."
-if [ ${#PASSTHRU[@]} -gt 0 ]; then
-  ASG_REPO="$REPO" "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" --install-root "$ROOT" "${PASSTHRU[@]}"
-else
-  ASG_REPO="$REPO" "$NODE_BIN" "$TARGET/scripts/install/cli.mjs" --install-root "$ROOT"
 fi
