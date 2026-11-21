@@ -1,7 +1,7 @@
 /**
  * 把 src/index.ts 打成单文件 ESM（index.mjs）。
  *
- * Release 只上传 index.mjs、asg-plugin.json 与 SHA256SUMS；
+ * Release 只上传 index.mjs、asg-extension.json 与 SHA256SUMS；
  * 因此这里关闭代码分割，只把 Node 内置模块保留为 external。
  */
 import { build } from "esbuild";

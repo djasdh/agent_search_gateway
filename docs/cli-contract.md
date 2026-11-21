@@ -1,6 +1,6 @@
 # asg CLI 契约
 
-- 状态：已实现（0.3.6）
+- 状态：已实现（0.4.0）
 - 目标版本：0.3.0
 - 适用范围：安装完成后的运行期管理，以及只读的数据面冒烟测试
 - 相关：ADR-0018（CLI 控制面）、ADR-0019（GUI 只调 CLI）、ADR-0022（插件自管后端与 setup 钩子）
@@ -264,8 +264,7 @@ asg fetch <url> [--max-chars <n>] [--render auto|always|never] [--timeout <秒>]
 | 通用上游启用/禁用 | `gateway.yaml` → `search.deepseek.enabled` |
 | 扩展引擎路由覆盖 | `gateway.yaml` → `extensions.<engineId>.routing` |
 | 扩展插件私有配置 | `gateway.yaml` → `extensions.<manifest id>.config` |
-| 扩展引擎密钥 | `secrets.yaml` → `extensions.<engineId>.<name>` |
-| 扩展插件密钥（推荐） | `secrets.yaml` → `extensions.<manifest id>.<name>` |
+| 扩展密钥 | `secrets.yaml` → `extensions.<manifest id>.<name>` |
 | 插件后端安装状态 | `data/extension-data/<id>/backends.json`（由插件 setup 写入） |
 | 插件私有数据 | `data/extension-data/<id>/`（更新插件不覆盖） |
 | 插件命令 | `gateway.yaml` |
@@ -343,7 +342,7 @@ asg engines secret <engine> [--name <name>] --clear
 |---|---|---|
 | `searxng` | `searxng` | `data/deps/searxng/settings.yml` → `engines[].disabled` |
 | `gateway.reverse_image` | `gateway` | `gateway.yaml` → `search.reverse_image.sources` |
-| `gateway.search` | `gateway` | `gateway.yaml` → `search.<engine>.enabled` / `extensions.<engineId>.routing` |
+| `gateway.search` | `gateway` | `gateway.yaml` → `extensions.<engineId>.routing`；扩展源开关按 provider 的 `enabledPathV2`（0.4.0+）或 `enabledPath`（0.3.x）写入 |
 | `gateway.upstream` | `gateway` | `gateway.yaml` → `search.deepseek.enabled` |
 
 第一版网关原生以图搜图源固定为 `tracemoe`、`saucenao`、`baidu`；文本源为 `weibo`；
@@ -362,8 +361,8 @@ asg engines secret <engine> [--name <name>] --clear
   - `gateway.upstream`：不支持路由，报 `ENGINE_NO_ROUTING`（退出码 4），用 `enable` / `disable` 控制 `search.deepseek.enabled`；
 - `secret` 从引擎 `requires` 推导密钥路径：
   - `secrets.a.b` → 内置密钥，写 `secrets.yaml` 的 `a.b`；
-  - `secret:<name>` → 扩展密钥，写 `secrets.yaml` 的 `extensions.<engineId>.<name>`；
-    运行期同时兼容 `extensions.<manifest id>.<name>`（后者优先，可用 `asg extensions secret` 写入，见 5.6.1）；
+  - `secret:<name>` → 扩展密钥，写 `secrets.yaml` 的 `extensions.<manifest id>.<name>`
+    （`asg extensions secret` 与 `asg engines secret` 写同一个键，见 5.6.1）；
   - 只有一个可写依赖时可省略 `--name`；多个依赖必须给 `--name`，否则 `ENGINE_SECRET_AMBIGUOUS`（退出码 4）；`--name` 接受完整路径、完整 `secret:name` 或末段短名；
   - 值只从 stdin 读（`--stdin`），不接受位置参数；末尾一个换行会被去掉，空值报错；
   - `--clear` 删除对应路径；引擎没有密钥依赖且未给 `--name` 报 `ENGINE_NO_SECRET`，未知 `--name` 报 `MISSING_SECRET`（均为退出码 4）；
@@ -464,11 +463,12 @@ extensions:
 
 网关原生引擎的元数据与运行期实现由 `src/engines/registry.ts` 的 provider 注册表提供；新增源只需加 provider 文件与注册行，不改 CLI 层。
 
-### 5.6 插件后端（`asg plugins`，已弃用）
+### 5.6 插件后端（`asg plugins`，0.4.0 已弃用，0.4.1 删除）
 
-> **过渡说明（0.3.x）**：后端由插件自己安装（manifest `backends` + `setup`，见
+> **过渡说明**：后端由插件自己安装（manifest `backends` + `setup`，见
 > `docs/extensions.md` 与 ADR-0022）。新用法是 `asg extensions install/setup/remove`；
-> `asg plugins` 只保留为兼容 facade。
+> `asg plugins` 在 0.4.0 只保留为兼容 facade，**0.4.1 删除**（同时删除
+> `scripts/backends/` 与 `data/backends` 的默认迁移读取）。
 
 ```text
 asg plugins list
@@ -478,12 +478,12 @@ asg plugins remove <name>
 
 解析顺序：
 
-1. 在 `data/extensions/*/asg-extension.json` 或 `asg-plugin.json` 的 `backends[]` 中按 `backend.id` 或
+1. 在 `data/extensions/*/asg-extension.json` 的 `backends[]` 中按 `backend.id` 或
    `aliases` 精确匹配；命中后对对应后端执行 setup（`install` / `uninstall`），
    成功后整栈重启；
 2. 未命中时回退旧的 `scripts/backends/cli.mjs <name> <action> --root <ROOT> --json`，
-   名字原样透传；由旧安装器修改 `gateway.yaml`、写 `data/backends/<name>/`；
-   成功后整栈重启；
+   名字原样透传；由旧安装器安装到 `data/backends/<name>/`，配置写入
+   `extensions.<id>.config`（0.3.x 写顶层平台段）；成功后整栈重启；
 3. 两者都没有：`PLUGIN_UNKNOWN`（退出码 4），提示使用 `asg extensions install`。
 
 - `list` 只读、离线可用，不执行插件代码。先列 manifest 后端，再补上
@@ -530,12 +530,13 @@ asg extensions config <id> [--get [key]] [--set key=value]... [--unset key]... [
 asg extensions secret <id> --name <name> --stdin | --clear
 ```
 
-- manifest 文件优先 `asg-extension.json`（V2），缺失时回退 `asg-plugin.json`（V1）。
-- V2 字段：`backends` / `fetch_channels` / `search_engines`；V1 保持旧字段。
-  本版本不做严格校验：未知字段忽略。
-- V1 与 V2 都进入运行时；V2 的 `fetch_channels` 派生 platform，`search_engines`
-  补展示名，`backends` 注入 `ctx.pluginBackends`。
-- 安装包为单文件 ESM：Release 资产包含实际选中的 manifest、`entry` 指向的文件与
+- manifest 固定为 `asg-extension.json`（`api_version: 2`）；0.4.0 不再接受或回退
+  `asg-plugin.json`。
+- V2 字段：`backends` / `fetch_channels` / `search_engines`；V1 manifest 不会被加载。
+- 本版本仍按类型、必填项和路径安全校验；未知字段忽略。
+- V2 的 `fetch_channels` 派生 platform，`search_engines` 补展示名，`backends` 注入
+  `ctx.pluginBackends`。
+- 安装包为单文件 ESM：Release 资产包含 `asg-extension.json`、`entry` 指向的文件与
   `SHA256SUMS`；入口可以额外导出 `setup(ctx)`。
 - 安装目录 `<ROOT>/data/extensions/<id>/`，目录存在即视为已安装；插件可写数据在
   `<ROOT>/data/extension-data/<id>/`，更新插件不会覆盖。`data/backends` 是旧目录，
@@ -555,7 +556,8 @@ asg extensions secret <id> --name <name> --stdin | --clear
   或下次运行 `asg engines` 时生效。
 - `list` 表格列为 `ID / VERSION / PROVIDES / BACKENDS / CHANNELS / ENGINES / ENTRY`；
   `BACKENDS` 渲染为 `<id>@<version>` / `<id>` / `<id>(未安装)`，无后端显示 `-`；
-  `CHANNELS` / `ENGINES` 输出 V2 声明，V1 显示 `-`。读取
+  `CHANNELS` / `ENGINES` 输出 manifest 的 `fetch_channels` / `search_engines`；0.4.0
+  不再有 V1 条目。读取
   `data/extension-data/<id>/backends.json`，不执行插件代码；状态文件损坏只告警。
 - `config` 读写 `gateway.yaml → extensions.<id>.config`；`id` 是 manifest id，不是 engineId；
   `<id>` 必须指向已安装插件（未安装报 `PLUGIN_UNKNOWN`，manifest 损坏报 `PLUGIN_FAILED`）：
@@ -811,7 +813,7 @@ UPDATE_ROLLED_BACK
 | `data/extension-data/<id>/` | 插件 setup | 插件可写数据；`state.json`、`backends.json`、`backends/<id>/`、`tmp/` |
 | `data/extension-data/<id>/backends.json` | 插件 setup | 后端安装状态；`extensions list` / `plugins list` 只读 |
 | `data/backends/<name>/version.json` | 旧安装器 / `asg plugins` 回退 | 0.3.x 旧后端安装记录，只读迁移源 |
-| `data/migrations/0.3.x/` | 临时迁移脚本 | state/备份；0.4.x 随脚本目录删除 |
+| `data/migrations/0.3.x/` | 临时迁移脚本 | state/备份；0.4.0 保留，0.4.1 随脚本目录删除 |
 
 不新增全局 `state.json`、`desired.json`、`pids.json`。插件自己的
 `data/extension-data/<id>/state.json` 属于插件数据，不是 CLI 控制面状态。
@@ -824,8 +826,8 @@ UPDATE_ROLLED_BACK
 scripts/install.sh / install.ps1        引导：Node、下载、校验、解压、切 current
 scripts/install/*.mjs                   作为库被 CLI 调用
 scripts/self-update/cli.mjs             作为库被 asg update 调用
-scripts/backends/cli.mjs                旧安装器；仅作为 asg plugins 未命中 manifest 时的回退
-scripts/migrations/0.3.x.mjs            0.3.x 一次性迁移脚本，0.4.x 删除
+scripts/backends/cli.mjs                旧安装器；0.4.0 仅作为 asg plugins 未命中 manifest 时的回退，0.4.1 删除
+scripts/migrations/0.3.x.mjs            0.3.x 一次性迁移脚本，0.4.0 保留，0.4.1 删除
 scripts/install/make-runtime.mjs        CI 专用
 scripts/bench*                          开发工具，不属于控制面
 ```

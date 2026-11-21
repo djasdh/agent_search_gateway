@@ -62,7 +62,7 @@ gateway (本服务, :3000/mcp)
 | `FETCH_INVALID_URL` | 非法 URL | 放弃 |
 | `BROWSER_UNAVAILABLE` | 浏览器未启用 | 检查配置 |
 | `BROWSER_ERROR` | 浏览器操作失败 | 可重试 |
-| `BILI_UNAVAILABLE` | B 站后端未启用/未安装/连不上 | 看 `bilibili.routes` 与安装提示 |
+| `BILI_UNAVAILABLE` | B 站后端未启用/未安装/连不上 | 看 `extensions.bilibili.config.routes` 与安装提示 |
 | `BILI_AUTH_REQUIRED` | 评论第 2 页或专栏全文需要登录态 | 按提示登录对应后端 |
 | `BILI_CAPABILITY_UNSUPPORTED` | 当前没有支持该动作的后端 | 换/加后端 |
 | `BILI_RISK_CONTROL` | B 站 403/412 风控 | 降频、换出口，稍后重试 |
@@ -72,7 +72,7 @@ gateway (本服务, :3000/mcp)
 
 > 需先安装官方插件：`asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.2.0`。
 
-全部走 `fetch`，不新增工具；B 站视频/专栏 URL 会被插件自动接管，不需要额外参数。默认关闭，在 `gateway.yaml` 里把 `bilibili.enabled` 设为 `true`。
+全部走 `fetch`，不新增工具；B 站视频/专栏 URL 会被插件自动接管，不需要额外参数。默认关闭，用 `asg extensions config bilibili --set enabled=true` 开启（写入 `extensions.bilibili.config.enabled`）。
 
 | 请求 | 说明 |
 |---|---|
@@ -84,11 +84,11 @@ gateway (本服务, :3000/mcp)
 | `.../read/cv123456` | 专栏摘要 JSON（正文 + 封面 + 评论区链接） |
 | `.../read/cv123456#comment` | 专栏评论全量抓取 / 检索 |
 
-多后端按能力路由（`bilibili.routes`），失败自动换下一个：
+多后端按能力路由（`extensions.bilibili.config.routes`），失败自动换下一个：
 
 - `cli-kukemc`（`bili` CLI）：详情、评论
 - `cli-ytdlp`（`yt-dlp`）：详情、音频直链
-- `http`：全部能力；`http.command` 非空时由插件拉起/回收，否则连 `base_url`。服务端已拆到独立仓库 [djasdh/bilibili-article-server](https://github.com/djasdh/bilibili-article-server)，过渡期仍可用 `asg plugins install article`（旧命令）安装。
+- `http`：全部能力；`extensions.bilibili.config.http.command` 非空时由插件拉起/回收，否则连 `base_url`。服务端已拆到独立仓库 [djasdh/bilibili-article-server](https://github.com/djasdh/bilibili-article-server)，过渡期仍可用 `asg plugins install article`（旧命令，0.4.1 删除）。
 
 要点：
 
@@ -96,11 +96,11 @@ gateway (本服务, :3000/mcp)
 - `audio_url` 是带签名的临时直链，过期后重新 fetch 即可；取不到时为 `null`，并带 `audio_error`。
 - 登录态由各后端自己持有；网关只探测一次（60s 缓存），缺了直接返回 `BILI_AUTH_REQUIRED`，不静默降级。
 - 评论按页抓取直到结束或 60 秒预算；没拉完返回 `complete: false`，再次 fetch 同一 URL 续传，不提供翻页参数。
-- 未安装后端或 `bilibili.enabled=false` 时，B 站 URL 会明确返回 `BILI_UNAVAILABLE`，不会静默回退成抓网页。
+- 未安装后端或 `extensions.bilibili.config.enabled=false` 时，B 站 URL 会明确返回 `BILI_UNAVAILABLE`，不会静默回退成抓网页。
 
 ## 微博抓取
 
-> 需先安装官方插件：`asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.0`。
+> 需先安装官方插件：`asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.2`。
 
 全部走 `fetch`，不新增工具；默认关闭。普通微博页面 URL 带 `?weibo=` 才接管；`sinaimg.cn` 图片 URL 自动接管为附件。
 
@@ -167,7 +167,7 @@ export OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222
 | `search(query="洛天依", categories="weibo")` | 只搜微博帖子，不查普通网页 |
 | `search(query="", categories="weibo_hot")` | 微博热搜榜 |
 
-- 微博能力来自官方扩展：先 `asg extensions install djasdh/agent-search-gateway-plugin-weibo`，再开启 `extensions.weibo.config.enabled` 与 `extensions.weibo.config.search.enabled`。
+- 微博能力来自官方扩展：先 `asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.2`，再开启 `extensions.weibo.config.enabled` 与 `extensions.weibo.config.search.enabled`。
 - 微博源是网关侧文本源，直接调 OpenCLI，不经过 searxng；自定义类别也不会转发给 searxng。
 - 空结果会自动重试一次（搜索页异步加载），结果缓存 60 秒。
 - 微博搜索只保留微博候选，不召回本地语料，避免混入普通网页。
@@ -226,11 +226,11 @@ opencli weibo whoami -f json
 | `WEIBO_UNAVAILABLE` | 扩展未启用 / OpenCLI 不存在 | 检查 weibo 扩展配置与 `opencli` 命令 |
 | `WEIBO_AUTH_REQUIRED` | 微博未登录 | 在 Chrome 登录 weibo.com，或 `opencli weibo login` |
 | `WEIBO_BRIDGE_DOWN` | Browser Bridge 未连接 | 启动 Chrome/扩展，跑 `opencli doctor` |
-| `WEIBO_TIMEOUT` | 浏览器命令超时 | 调大 `weibo.cli.timeout_ms` |
+| `WEIBO_TIMEOUT` | 浏览器命令超时 | 调大 `extensions.weibo.config.cli.timeout_ms` |
 | `WEIBO_EMPTY` | 无结果 | 确认帖子可见/有权限 |
 | `WEIBO_IMAGE_FAIL` | 图片下载失败 | 检查 Referer、`max_bytes`、`retry_tvax` |
 
-> `weibo post` 是浏览器操作，单次可能 5–10s。若 Chrome 未连接，OpenCLI 默认会等 45s；把 `OPENCLI_BROWSER_CONNECT_TIMEOUT` 调小（如 20）或把 `weibo.cli.timeout_ms` 设为 45s 以上，才能得到 `WEIBO_BRIDGE_DOWN` 而不是 `WEIBO_TIMEOUT`。
+> `weibo post` 是浏览器操作，单次可能 5–10s。若 Chrome 未连接，OpenCLI 默认会等 45s；把 `OPENCLI_BROWSER_CONNECT_TIMEOUT` 调小（如 20）或把 `extensions.weibo.config.cli.timeout_ms` 设为 45s 以上，才能得到 `WEIBO_BRIDGE_DOWN` 而不是 `WEIBO_TIMEOUT`。
 
 ## DeepSeek 通用搜索上游（可选）
 
@@ -355,15 +355,18 @@ curl -fsSL .../install.sh | bash -s -- --searxng-url http://192.168.1.10:8888
 
 ## 官方插件
 
-0.3.4 起，Bilibili / 微博 / 知网不再内置，改为官方插件仓库：
+0.3.4 起，Bilibili / 微博 / 知网不再内置，改为官方插件仓库。0.4.0 配套版本：
 
 ```bash
 asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.2.0
-asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.0
+asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.2
 asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.2.0
 asg extensions list
 asg restart
 ```
+
+> **0.4.0 只接受 V2 manifest（`asg-extension.json`）。** 仍在用 `asg-plugin.json`
+> 的 V1 插件（含旧版官方插件）必须先升级到上表的 0.2.x，否则 0.4.0 不会加载。
 
 - 插件自己声明 `provides`：`fetch` / `search` / 两者；微博插件同时提供 `fetch` 与搜索源。
 - 需要外部后端的插件可以在 `api_version: 2` manifest 里声明 `backends`，并导出
@@ -372,7 +375,7 @@ asg restart
 - 插件可用可选的 `config_schema` 声明私有配置（默认值、枚举、范围等），用户用
   `asg extensions config <id> --set key=value` 读写；密钥用
   `asg extensions secret <id> --name <name> --stdin` 写入（不进 argv）。
-- 安装位置：`data/extensions/<id>/`（V2 用 `asg-extension.json`，V1 用 `asg-plugin.json`）；
+- 安装位置：`data/extensions/<id>/`，manifest 固定为 `asg-extension.json`；
   插件可写数据在 `data/extension-data/<id>/`，更新插件不会丢后端。卸载用
   `asg extensions remove <id>`（默认删数据，`--keep-data` 保留）。
 - `install` / `setup` / `remove` 不会自动重启网关；`config` / `secret` 写入后仍会整栈重启。
@@ -488,7 +491,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 
 页面内嵌的 `data:` URI 图片不会把 base64 塞进正文：会落盘到 `data/downloads` 并替换成 `/files/<id>` 链接（单张 2MB、单次 10MB / 20 张，超出则省略）。远端 `http(s)` 图片仍原样保留链接。
 
-站点专用取件走**取件插件**：插件按 host 自报匹配、自管会话与逐跳重定向并完成全部下载，`fetch` 只落盘并给出路径/链接（ADR-0007 / 0009）。CNKI 由官方插件 `djasdh/agent-search-gateway-plugin-cnki` 提供（`asg extensions install ...`）：知网摘要页 → `#pdfDown` → 跟随 302 链取 `%PDF` 落盘（不在机构网段、未订购、或该文献只有 HTML 阅读版都会给出可读错误）。
+站点专用取件走**取件插件**：插件按 host 自报匹配、自管会话与逐跳重定向并完成全部下载，`fetch` 只落盘并给出路径/链接（ADR-0007 / 0009）。CNKI 由官方插件 `djasdh/agent-search-gateway-plugin-cnki@0.2.0` 提供（`asg extensions install ...`）：知网摘要页 → `#pdfDown` → 跟随 302 链取 `%PDF` 落盘（不在机构网段、未订购、或该文献只有 HTML 阅读版都会给出可读错误）。
 
 产物相关配置（`fetch` 块）：
 
@@ -596,7 +599,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - 依赖：`sqlite-vec` 随 npm 安装自带平台二进制，无需手动装扩展。
 - 模型切换：命名空间为 `provider:model@dim`；换模型产生新命名空间，旧向量保留但不参与（多命名空间并存，见 `docs/adr/0001`–`0006`）。
 
-## 后端安装（插件自管，0.3.x 过渡）
+## 后端安装（插件自管；旧 `asg plugins` 已弃用）
 
 从 0.3.x 起，后端由插件自己安装：manifest（`api_version: 2`）声明 `backends`，入口导出
 `setup(ctx)`，安装/更新/卸载时由 CLI 在独立子进程中调用。新位置是：
@@ -615,30 +618,65 @@ asg extensions list                               # BACKENDS 列显示安装状�
 asg extensions remove <id> [--keep-data] [--force]
 ```
 
-V2 manifest（`asg-extension.json`）与 V1 一样会加载。V2 的 `fetch_channels` 用于派生
-platform，`search_engines` 用于补展示名；声明 `backends` 时，插件运行时可以通过
-`ctx.pluginBackends` 拿到自己安装的后端目录与状态。
+0.4.0 只加载 V2 manifest（`asg-extension.json`，`api_version: 2`）。V2 的
+`fetch_channels` 用于派生 platform，`search_engines` 用于补展示名；声明 `backends` 时，
+插件运行时可以通过 `ctx.pluginBackends` 拿到自己安装的后端目录与状态。
 
-`asg plugins list|install|remove` 已弃用，仅保留为兼容 facade：读取已安装的
-V1/V2 manifest，命中 `backend.id` / `aliases` 时走插件 setup，未命中才回退旧的
+`asg plugins list|install|remove` 在 0.4.0 仅作为兼容 facade 保留，**0.4.1 删除**：
+读取已安装 manifest，命中 `backend.id` / `aliases` 时走插件 setup，未命中才回退旧的
 `scripts/backends/cli.mjs` 安装器（安装到 `data/backends/<name>/`）。`asg plugins install` /
 `remove` 仍会整栈重启；`asg extensions install` / `setup` / `remove` 不会。
 
-旧安装器支持的后端（过渡期仍可用）：
+旧安装器支持的后端（0.4.0 过渡期仍可用，0.4.1 随 `asg plugins` 一起删除）：
 
 | 后端 | 旧命令 | 说明 |
 |---|---|---|
 | B 站 `bili` CLI | `asg plugins install bili` | PyPI `bili-agent`，需要 Python ≥3.10 |
 | `yt-dlp` | `asg plugins install ytdlp` | 官方独立二进制，自动校验 SHA256 |
-| 微博 `OpenCLI` | `asg plugins install opencli` | npm 包；微博 override 由微博扩展负责安装（过渡期可手动跑 `scripts/install-weibo-override.sh`） |
+| 微博 `OpenCLI` | `asg plugins install opencli` | npm 包；微博 override 由微博扩展负责安装 |
 | B 站专栏 HTTP 服务 | `asg plugins install article` | 独立仓库 `djasdh/bilibili-article-server`（GPL-3.0） |
 
-- 旧安装的目录、版本、原配置值都在 `data/backends/<name>/`，旧 `uninstall` 会还原 `gateway.yaml`。
-- `opencli` 只在 `gateway.yaml` 已有 `weibo` 段时写 `weibo.cli.command`；私有分支没有该段时只安装、不写配置。
+- 旧安装的目录、版本、原配置值都在 `data/backends/<name>/`。
+- 0.4.0 下这些命令把配置写到 `extensions.<id>.config`（如 `extensions.bilibili.config.cli_kukemc.command`），不再创建顶层平台段。
+- `opencli` 只安装 npm 包；命令路径由微博插件的配置（`extensions.weibo.config`）管理。
 - 专栏服务需要登录态：在启动网关的环境里设置 `BILI_COOKIE` 或 `BILI_COOKIE_FILE`，不要写进 `gateway.yaml`。
 - 如果 PATH 里没有 Node，旧薄包装会自动下载官方 LTS 到 `data/toolchain/node/`。
 - 代理环境：脚本读取 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`，优先用系统 `curl` 下载（Windows 10+ 自带 `curl.exe`）。
 - GitHub 限流：安装后端/插件前可先 `export GITHUB_TOKEN=$(gh auth token)`（或 `GH_TOKEN`），否则可能遇到 403 `API rate limit exceeded`。
+
+## 从 0.3.x 升级到 0.4.0
+
+0.4.0 删除了 V1 插件加载和旧平台配置（`gateway.yaml` 顶层 `bilibili` / `weibo` /
+`search.weibo`，以及 `secrets.yaml` 的 `bilibili`）。**必须先在 0.3.x 完成迁移**：
+
+1. 先升级到 **0.3.11**（这是最后一个同时兼容 V1/V2 与旧平台配置的版本）：
+
+   ```bash
+   asg update apply --version v0.3.11
+   ```
+
+2. 运行迁移脚本，把旧平台配置搬到 `extensions.<id>.*`：
+
+   ```bash
+   node scripts/migrations/0.3.x.mjs --phase config
+   # 或完整流程（preflight → plugins → backends → config → restart）
+   node scripts/migrations/0.3.x.mjs
+   ```
+
+3. 把官方插件升级到 0.2.x：
+
+   ```bash
+   asg extensions install djasdh/agent-search-gateway-plugin-bilibili@0.2.0
+   asg extensions install djasdh/agent-search-gateway-plugin-weibo@0.2.2
+   asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.2.0
+   ```
+
+4. 确认插件目录里是 `asg-extension.json`（`api_version: 2`），再安装/升级到 0.4.0。
+
+如果跳过 1–3 步直接 `asg update` 到 0.4.0，网关会因旧配置启动失败，自更新会自动回滚到上一版本；请先完成迁移。
+
+迁移脚本 `scripts/migrations/` 在 **0.4.0 保留**，用于从 0.3.x 升级；**0.4.1 删除**。
+依赖旧后端的用户仍可在 0.4.0 使用 `asg plugins`（deprecated），**0.4.1 删除**。
 
 ## 网关自更新
 
@@ -671,7 +709,7 @@ asg engines list [--all] | enable <name|group:name> | disable <name|group:name>
 asg engines route <engine> resident|rotating|none | --category <name> [--hot-category <name>] | --clear
 asg engines secret <engine> [--name <name>] --stdin | --clear
 asg extensions search|install|setup|list|remove|config|secret
-asg plugins list|install|remove                 # 已弃用，兼容 0.3.x 旧后端名
+asg plugins list|install|remove                 # 已弃用，0.4.1 删除；兼容 0.3.x 旧后端名
 asg browser status|install [--full]
 asg adlist update
 asg update check|apply

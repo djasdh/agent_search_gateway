@@ -197,7 +197,7 @@ asg extensions secret <id> --name api_key --stdin
 setup 里可以用 `ctx.config.get/patch/replace/unset` 读写同一段配置；规则、校验与
 “失败不落盘”与 CLI 一致。详见 [`setup.md`](setup.md)。
 
-字段命名规范见 `../SKILL.md` 的“插件私有配置”一节：统一 snake_case，
+字段命名规范见 `../v1skills.md` 的“插件私有配置”一节：统一 snake_case，
 `enabled` / `base_url` / `timeout_ms` / `limit` / `categories` / `mode` / `user_agent`，
 单位写进后缀，布尔用肯定式。
 

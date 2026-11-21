@@ -13,7 +13,7 @@
  * 私有配置由 `asg-extension.json` 的 `config_schema` 声明，存在
  * `gateway.yaml → extensions.<manifest id>.config`，运行期读 `ctx.pluginConfig`。
  */
-import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./sdk/fetch-plugin.js";
+import type { FetchProvider, FetchProviderContext, FetchProviderResult } from "./sdk/fetch-provider.js";
 
 const ARTICLE_PATH = /^\/article\/(\d+)(?:\/|$)/;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -33,7 +33,7 @@ interface ExampleConfig {
  * 方便单测直接构造不完整的 `pluginConfig`。不要读 `ctx.settings`：那是核心内置
  * 实现的配置切片，外部插件不再依赖。
  */
-function exampleConfig(ctx: FetchPluginContext): ExampleConfig {
+function exampleConfig(ctx: FetchProviderContext): ExampleConfig {
   const conf = ctx.pluginConfig ?? {};
   return {
     enabled: conf.enabled !== false,
@@ -48,7 +48,7 @@ function exampleConfig(ctx: FetchPluginContext): ExampleConfig {
   };
 }
 
-async function fetchArticle(url: URL, ctx: FetchPluginContext): Promise<FetchPluginResult> {
+async function fetchArticle(url: URL, ctx: FetchProviderContext): Promise<FetchProviderResult> {
   const { enabled, timeoutMs, userAgent } = exampleConfig(ctx);
   if (!enabled) {
     return {
@@ -108,7 +108,7 @@ async function fetchArticle(url: URL, ctx: FetchPluginContext): Promise<FetchPlu
   };
 }
 
-export const examplePlugin: FetchPlugin = {
+export const examplePlugin: FetchProvider = {
   id: "example",
   platform: "example",
   name: "example",

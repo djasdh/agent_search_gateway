@@ -1,5 +1,7 @@
 # 后端安装脚本与网关自更新
 
+> 0.4.0 保留 asg plugins 与迁移脚本；0.4.1 删除。
+
 > **过渡说明（2026-11-16，ADR-0022 接管后端安装）**：本文记录的
 > `scripts/backends/` 与 `data/backends/<name>/` 仍作为 0.3.x 兼容路径存在，但新契约已改为
 > **插件自管后端**：manifest `api_version: 2` 声明 `backends`，插件入口导出 `setup(ctx)`，

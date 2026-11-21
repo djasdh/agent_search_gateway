@@ -4,6 +4,9 @@
 - 日期：2026-11-15
 - 相关：`docs/extensions.md`、`docs/engine-provider.md`、`docs/fetch-plugin-contract.md`、`docs/cli-contract.md`
 
+> **状态更新（0.4.0）**：旧 `extensions.<engineId>.<name>` 密钥键不再读取；本文中
+> “兼容旧键”的描述仅适用于 0.3.x。
+
 ## 背景（Context）
 
 第三方扩展的配置一直被塞在核心的 `extensions` 映射里，但只有一层无类型的

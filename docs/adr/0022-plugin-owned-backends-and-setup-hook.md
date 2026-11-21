@@ -1,5 +1,7 @@
 # 插件自管后端与 setup 钩子
 
+> 0.4.0 保留 asg plugins 与迁移脚本；0.4.1 删除。
+
 - 状态：已接受
 - 日期：2026-11-16
 - 相关：`docs/extensions.md`、`docs/cli-contract.md`、`scripts/migrations/README.md`、

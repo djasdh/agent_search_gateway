@@ -3,23 +3,23 @@
 本文说明第三方插件（extension）的 manifest、`setup` 钩子、安装/数据目录与
 `asg extensions` 命令。
 
-> **当前范围**：V1 与 V2 manifest 都会加载。V2 的 `fetch_channels` 用于派生 fetch
-> platform，`search_engines` 用于补搜索源展示名；声明了 `backends` 时，插件运行时
-> 可以通过 `ctx.pluginBackends` 拿到自己安装的后端目录与状态。
+> **0.4.0 起只接受 V2 manifest（`asg-extension.json`，`api_version: 2`）。**
+> V1 manifest（`asg-plugin.json`）与 V1 运行期加载已移除；旧插件需先按
+> [`../skills/asg-plugin-authoring/v2skills.md`](../skills/asg-plugin-authoring/v2skills.md)
+> 迁移。0.3.x 的 V1 说明只保留在
+> [`../skills/asg-plugin-authoring/legacy/`](../skills/asg-plugin-authoring/legacy/)。
 >
-> 后续阶段：
-> 1. 本版本已实现 V2 runtime；
-> 2. 下一版把 V2 作为默认/推荐路径，完成官方插件迁移；
-> 3. 再下一版只保留 V2，V1 直接报错。
+> V2 的 `fetch_channels` 用于派生 fetch platform，`search_engines` 用于补搜索源展示名；
+> 声明了 `backends` 时，插件运行时可以通过 `ctx.pluginBackends` 拿到自己安装的后端
+> 目录与状态。官方插件版本：bilibili / cnki `0.2.0`，weibo `0.2.2`。
 >
-> 本版本不做严格 manifest 校验：未知字段忽略，只保留字段类型、必填项和路径安全约束。
 > 安装、setup、卸载都不会自动重启网关；`config` / `secret` 仍会整栈重启。
 
 ## 1. 目录布局
 
 | 路径 | 用途 | 插件可写 |
 | --- | --- | --- |
-| `<root>/data/extensions/<id>/` | 已安装插件目录：`asg-extension.json`（V2）或 `asg-plugin.json`（V1）、入口与插件自带只读资源 | 否 |
+| `<root>/data/extensions/<id>/` | 已安装插件目录：`asg-extension.json`（V2）、入口与插件自带只读资源 | 否 |
 | `<root>/data/extension-data/<id>/` | 插件数据目录：`state.json`、`backends.json`、`backends/<backend-id>/`、`tmp/` | 是 |
 | `<root>/data/backends/<name>/` | 0.3.x 旧后端的安装目录，只作为迁移读取源 | 否（经 setup 宿主写入会被拒绝） |
 | `<root>/gateway.yaml` | 网关配置；`extensions.<id>.config` 由 CLI 或 setup 配置 API 写入 | 仅 config API |
@@ -40,34 +40,39 @@
 
 `bilibili`、`weibo`、`cnki` 是官方插件 id：核心不再内置对应实现，需通过
 `asg extensions install` 安装官方插件仓库；安装后由扩展机制加载。它们与其他插件一样
-使用本文的 manifest、setup 与数据布局。
+使用本文的 manifest、setup 与数据布局。0.4.0 配套版本：bilibili / cnki `0.2.0`，
+weibo `0.2.2`。
 
 ## 2. manifest
 
-文件发现顺序：
+文件发现：
 
-1. `asg-extension.json`（V2）
-2. `asg-plugin.json`（V1）
+```text
+0.4.0: 只接受 asg-extension.json（api_version: 2）
+0.3.x: 优先 asg-extension.json，缺失时回退 asg-plugin.json
+```
 
-安装 Release 时也按这个顺序选择资产。V1 与 V2 文件都会进入运行时。
+安装 Release 时同样只按这个规则选择资产。**`asg-plugin.json` 在 0.4.0 不再加载。**
 
 | 字段 | 版本 | 必填 | 规则 |
 | --- | --- | --- | --- |
-| `id` | V1 / V2 | 是 | 3–64 位小写字母/数字/`.` `_` `-`，首尾必须是字母或数字；安装目录名必须与它一致 |
-| `name` | V1 / V2 | 是 | 显示名 |
-| `version` | V1 / V2 | 是 | 语义化版本；必须与 Release tag 去掉 `v` 后一致 |
-| `api_version` | V1 / V2 | 是 | `1` 或 `2` |
-| `provides` | V1 / V2 | 是 | 元素只能是 `"search"` / `"fetch"` |
-| `entry` | V1 / V2 | 是 | 单个 `.mjs` / `.js` 文件名；不能含 `/`、`\`、`..`，不能是绝对路径 |
-| `description` | V1 / V2 | 否 | 人类可读摘要 |
-| `config_schema` | V1 / V2 | 否 | 私有配置的 JSON Schema 子集，见第 4 节 |
-| `platform` | 仅 V1 | 否 | 平台回退值；V2 从 `fetch_channels[].id` 前缀派生 |
-| `backends` | 仅 V2 | 否 | 后端声明，见 2.1 |
-| `fetch_channels` | 仅 V2 | 否 | 抓取通道声明，见 2.2 |
-| `search_engines` | 仅 V2 | 否 | 搜索源声明，见 2.3 |
+| `id` | V2 | 是 | 3–64 位小写字母/数字/`.` `_` `-`，首尾必须是字母或数字；安装目录名必须与它一致 |
+| `name` | V2 | 是 | 显示名 |
+| `version` | V2 | 是 | 语义化版本；必须与 Release tag 去掉 `v` 后一致 |
+| `api_version` | V2 | 是 | 固定为 `2` |
+| `provides` | V2 | 是 | 元素只能是 `"search"` / `"fetch"` |
+| `entry` | V2 | 是 | 单个 `.mjs` / `.js` 文件名；不能含 `/`、`\`、`..`，不能是绝对路径 |
+| `description` | V2 | 否 | 人类可读摘要 |
+| `config_schema` | V2 | 否 | 私有配置的 JSON Schema 子集，见第 4 节 |
+| `backends` | V2 | 否 | 后端声明，见 2.1 |
+| `fetch_channels` | V2 | 否 | 抓取通道声明，见 2.2 |
+| `search_engines` | V2 | 否 | 搜索源声明，见 2.3 |
 
-本版本不做严格校验：未知字段忽略，只保留字段类型、必填项和路径安全约束。
-`api_version: 1` 里写 V2 字段不会生效，也不会报错。
+`platform` 是 0.3.x V1 manifest 的字段，0.4.0 不再接受；V2 的 platform 从
+`fetch_channels[].id` 前缀派生。
+
+本版本仍按字段类型、必填项和路径安全约束校验；未知字段会被忽略，但不要依赖这一点。
+`api_version` 不是 `2` 的 manifest 会被拒绝，不再进入运行时。
 
 ### 2.1 `backends`
 
@@ -137,12 +142,12 @@
 }
 ```
 
-### 2.5 `api_version` 1 / 2
+### 2.5 `api_version`
 
-| 版本 | 本版本行为 |
+| 版本 | 0.4.0 行为 |
 | --- | --- |
-| `1` | 正常安装、加载、提供 search / fetch；platform 来自 `manifest.platform` |
-| `2` | 正常安装、加载；platform 从 `fetch_channels[0].id` 前缀派生；`search_engines` 补展示名；`backends` 注入 `ctx.pluginBackends` |
+| `1` | 拒绝，不再加载；`asg-plugin.json` 也不会被发现 |
+| `2` | 唯一受支持的版本；platform 从 `fetch_channels[0].id` 前缀派生；`search_engines` 补展示名；`backends` 注入 `ctx.pluginBackends` |
 
 声明了 `backends` 的插件应在入口导出 `setup`（见第 5 节）；安装时不会检查该导出。
 
@@ -239,7 +244,7 @@ extensions:
 
 ### 4.5 运行期上下文
 
-`search` 插件（`EngineProviderContext`）与 `fetch` 插件（`FetchPluginContext`）都会收到：
+`search` 插件（`EngineProviderContext`）与 `fetch` 插件（`FetchProviderContext`）都会收到：
 
 ```ts
 ctx.pluginConfig?: Readonly<Record<string, unknown>>; // 已补默认值并递归冻结
@@ -270,11 +275,12 @@ interface PluginBackendState {
   路径。
 - `pluginConfig` 来自 `extensions.<manifest id>.config`；声明了 `config_schema` 时即使
   用户没写配置也会注入补齐默认值后的对象。
-- `pluginSecrets` 合并 `extensions.<manifest id>.<name>` 与旧的
-  `extensions.<engineId>.<name>`，同名时 manifest id 优先。旧键兼容保留到 0.4.0。
+- `pluginSecrets` 只读 `extensions.<manifest id>.<name>`；0.4.0 起不再兼容
+  `extensions.<engineId>.<name>`。
 - fetch 的 `match(url)` **不注入配置**：只能看 URL；`enabled` / `available` / `fetch` 才能读 `ctx.pluginConfig`。
-- `ctx.config` / `ctx.secrets`（fetch 侧是 `ctx.settings` / `ctx.secrets`）是核心内置实现使用的
-  配置切片，不属于第三方扩展的稳定契约；第三方扩展只读 `pluginConfig` / `pluginSecrets`。
+- `ctx.config` / `ctx.secrets` 是核心内置实现使用的配置切片，不属于第三方扩展的
+  稳定契约；第三方扩展只读 `pluginConfig` / `pluginSecrets`。0.4.0 起平台专属切片
+  已从 `ctx.settings` 删除，外部插件不应再依赖它。
 - `requires: ["secret:<name>"]` 只声明依赖；缺失时宿主强制 `available()` 返回 false。
 
 ### 4.6 密钥
@@ -286,10 +292,11 @@ extensions:
     api_key: env:EXAMPLE_API_KEY
 ```
 
-- 新键是 `extensions.<manifest id>.<name>`；旧的 `extensions.<engineId>.<name>` 继续兼容，
-  同名时 manifest id 覆盖 engineId。
-- `asg extensions secret <id> --name <name> --stdin` 写新键；
-  `asg engines secret <engine> --name <name> --stdin` 仍按 engineId 写旧键。
+- 密钥键固定为 `extensions.<manifest id>.<name>`；`extensions.<engineId>.<name>` 在
+  0.4.0 起不再读取。
+- `asg extensions secret <id> --name <name> --stdin` 与
+  `asg engines secret <engine> --name <name> --stdin` 都写 manifest id 键；
+  engineId 仅用于 `extensions.<engineId>.routing`。
 - 密钥**不放** `config` / `gateway.yaml`；`config_schema` 只描述非敏感配置。
 - setup 没有写密钥的 API；需要密钥的后端由用户在启动网关的环境里提供（环境变量等），
   或由插件在 setup 中提示用户执行 `asg extensions secret`。
@@ -605,9 +612,9 @@ export async function setup(ctx) {
 
 | 资产 | 必填 | 说明 |
 | --- | --- | --- |
-| `asg-extension.json`（V2）或 `asg-plugin.json`（V1） | 是 | manifest 本体；安装器优先前者，缺失时回退后者 |
+| `asg-extension.json` | 是 | V2 manifest 本体（`api_version: 2`）；0.4.0 不再回退 `asg-plugin.json` |
 | `index.mjs`（或 manifest `entry` 指定的文件名） | 是 | 单文件 ESM 产物；不能依赖同目录其它文件；可同时导出 `fetch` / `engine` / `setup` |
-| `SHA256SUMS` | 是 | `sha256sum` 格式，必须覆盖实际选中的 manifest 与 entry |
+| `SHA256SUMS` | 是 | `sha256sum` 格式，必须覆盖 manifest 与 entry |
 
 生成并发布示例：
 
@@ -621,7 +628,7 @@ gh release create v0.2.0 index.mjs asg-extension.json SHA256SUMS
 安装器会：
 
 1. 解析 GitHub Release（指定版本时先查 `v<version>`，再回退到 `<version>`；否则查 `latest`）。
-2. 优先下载 `asg-extension.json`，缺失时回退 `asg-plugin.json`，到 staging 并校验。
+2. 下载 `asg-extension.json`，到 staging 并校验；缺失即失败，不再回退 V1 manifest。
 3. 再下载 `entry` 与 `SHA256SUMS`。
 4. 用 `SHA256SUMS` 校验 manifest 与 entry；缺失或不匹配立即失败并清理 staging。
 5. 旧目录移到 `.trash-*`，staging 原子换到 `data/extensions/<id>/`；失败时回滚旧目录。
@@ -687,13 +694,13 @@ JSON（`--json`）的 `data` 包含安装结果、`backends`（manifest 声明�
 - `BACKENDS` 每个后端渲染为 `<id>@<version>`（`backends.json` 有版本时）、
   `<id>`（已安装但无版本）或 `<id>(未安装)`；没有声明后端时显示 `-`。
 - `CHANNELS` / `ENGINES` 输出 V2 manifest 的 `fetch_channels[].id` /
-  `search_engines[].id`；V1 显示 `-`。
+  `search_engines[].id`；0.4.0 不再有 V1 条目。
 - 读取 `data/extension-data/<id>/backends.json`，**不执行任何插件代码**。
 - 状态文件缺失按“未安装”处理；损坏时在 stderr/`reporter.info` 告警，列表仍可用。
 - JSON 返回 `{ "extensions": [...] }`；每个后端条目包含 manifest 的
   `id` / `name` / `description` / `aliases`，并附加
   `installed` / `enabled`，有值时附加 `version` / `path`。
-- V2 扩展同时返回 `fetch_channels` 与 `search_engines`；V1 返回空数组。
+- 扩展同时返回 `fetch_channels` 与 `search_engines`；0.4.0 不再有 V1 条目。
 
 ### 7.4 `remove`
 
@@ -720,22 +727,23 @@ JSON（`--json`）的 `data` 包含安装结果、`backends`（manifest 声明�
 - 两者都是**先整体校验、再写一次文件、最后整栈重启一次**；校验失败不落盘、不重启。
   `secret` 写入的 `secrets.yaml` 权限固定为 `0600`。
 
-### 7.6 `asg plugins`（已弃用）
+### 7.6 `asg plugins`（0.4.0 已弃用，0.4.1 删除）
 
-`asg plugins list|install|remove` 保留为兼容 facade，帮助文本会提示改用
-`asg extensions install/setup/remove`。行为：
+`asg plugins list|install|remove` 在 0.4.0 保留为兼容 facade，帮助文本会提示改用
+`asg extensions install/setup/remove`；**0.4.1 连同 `scripts/backends/` 一起删除**。行为：
 
-1. **先解析 manifest**：在 `data/extensions/*/asg-extension.json` 或
-   `asg-plugin.json` 的 `backends[]` 中按 `backend.id` 或 `aliases` 精确匹配；
-   命中后调用该插件的 setup（`install` / `uninstall`），成功后整栈重启。
+1. **先解析 manifest**：在 `data/extensions/*/asg-extension.json` 的 `backends[]` 中按
+   `backend.id` 或 `aliases` 精确匹配；命中后调用该插件的 setup（`install` / `uninstall`），
+   成功后整栈重启。
 2. **未命中回退旧安装器**：调用 `scripts/backends/cli.mjs <name> <action> --root <ROOT> --json`，
-   名字原样透传，成功后整栈重启。
+   名字原样透传；安装器把二进制放到 `data/backends/<name>/`，配置写入
+   `extensions.<id>.config`（0.3.x 写顶层平台段），成功后整栈重启。
 3. 两者都没有：`PLUGIN_UNKNOWN`（退出码 4），提示用 `asg extensions install`。
 4. `list` 先列 manifest 后端（`name` 取 `aliases[0]` 或 `backend.id`），
    再补上 `data/backends/*` 中未被 manifest 覆盖的旧安装。P1 的 `platform` /
    `channel` / `channel_id` 字段保留但为空字符串。
 
-新插件不要依赖 `asg plugins`；它只是 0.3.x 的过渡入口。
+新插件不要依赖 `asg plugins`；它只是 0.3.x 的过渡入口，0.4.1 起不存在。
 
 ### 7.7 重启矩阵
 
@@ -785,22 +793,24 @@ export GITHUB_TOKEN=ghp_xxx
 网关启动时（`createServer` 首次调用，进程级只执行一次）以及 `asg engines list|enable|disable|route|secret`
 会扫描 `data/extensions`：
 
-1. 发现 `data/extensions/<id>/asg-extension.json`（V2）或 `asg-plugin.json`（V1），
-   目录名必须等于 `manifest.id`。
+1. 发现 `data/extensions/<id>/asg-extension.json`（`api_version: 2`），
+   目录名必须等于 `manifest.id`；`asg-plugin.json` 在 0.4.0 不再被发现。
 2. 按 manifest id 读取 `gateway.yaml → extensions.<manifest id>.config`，
    用 `config_schema` 校验并补默认值；非法配置直接跳过该插件（不 import 入口）。
-3. 解析 `secrets.yaml → extensions.<id>.<name>`（同时合并旧 `extensions.<engineId>.<name>`，
-   manifest id 优先），解析 `env:NAME`，空值不注入。
+3. 解析 `secrets.yaml → extensions.<id>.<name>`（只按 manifest id），解析
+   `env:NAME`，空值不注入。
 4. `import()` 安装目录内 `entry` 指向的文件（单个 ESM 文件，不得引用其它插件文件）。
    `setup` 导出不会在加载阶段执行。
 5. 按 `provides` 读取命名导出：
-   - `fetch`：抓取插件对象（`match` / `enabled` / `available` / `fetch`），manifest 覆盖 `id` / `name` / `displayName`；
-     platform 优先级为入口 `platform` > V2 `fetch_channels[0].id` 前缀 > V1 `manifest.platform` > `manifest.id`；
-   - `engine`：搜索源对象（`id` / `group` / `name` / `runtime` 等）；V2 用匹配的
-     `search_engines[].name` 补 `displayName`。
+   - `fetch`：`FetchProvider` 对象（`match` / `enabled` / `available` / `fetch`），manifest 覆盖 `id` / `name` / `displayName`；
+     platform 优先级为入口 `platform` > `fetch_channels[0].id` 前缀 > `manifest.id`；
+   - `engine`：搜索源对象（`id` / `group` / `name` / `runtime` 等）；用匹配的
+     `search_engines[].name` 补 `displayName`。扩展引擎的启用路径与依赖优先读
+     `enabledPathV2` / `requiresV2`（指向 `extensions.<id>.*`），旧 `enabledPath` /
+     `requires` 只用于 0.3.x 兼容。
 6. V2 声明了 `backends` 时，构造 `pluginBackends`（`ids` / `dir` / `state`）；
 7. 注入上下文：包装 `enabled` / `available` / `fetch` / `runtime`，把 `pluginConfig`
-   （递归冻结）、`pluginSecrets` 与 `pluginBackends` 放进 `FetchPluginContext` /
+   （递归冻结）、`pluginSecrets` 与 `pluginBackends` 放进 `FetchProviderContext` /
    `EngineProviderContext`。`match(url)` 保持原函数，不读上下文。
 8. 同一批外部插件内 id 重复视为扩展自身错误；重复插件会被跳过并记录错误。
 9. 单个插件加载失败只影响该插件，不影响网关启动与其它插件。
@@ -821,31 +831,32 @@ asg extensions secret weibo --name cookie --stdin
 - `routing` 写入 `gateway.yaml` 的 `extensions.<engineId>.routing`，覆盖插件的 `routing()` / `plan()`；
 - 私有配置写入 `gateway.yaml` 的 `extensions.<manifest id>.config`，运行期通过
   `ctx.pluginConfig` 注入；
-- 密钥写入 `secrets.yaml` 的 `extensions.<manifest id>.<name>`（新键）或
-  `extensions.<engineId>.<name>`（旧键，继续兼容），支持 `env:NAME`，运行期通过
-  `ctx.pluginSecrets` 注入；插件用 `requires: ["secret:<name>"]` 声明依赖。
-  注意：`asg engines enable` 的依赖检查同时认两个键：先查
-  `extensions.<manifest id>.<name>`，解析后为空（含 `env:` 为空）再回退
-  `extensions.<engineId>.<name>`；任一非空即满足。
+- 密钥写入 `secrets.yaml` 的 `extensions.<manifest id>.<name>`，支持 `env:NAME`，
+  运行期通过 `ctx.pluginSecrets` 注入；插件用 `requires: ["secret:<name>"]` 声明依赖。
+  `asg engines enable` 的依赖检查也只认 manifest id 键。
 
 插件不得 import 网关内部模块，也不得依赖宿主 `node_modules` 中的非内置包；
 需要跨进程能力时应通过 CLI / HTTP 自行实现。
 
-插件模板见 `examples/asg-plugin/`，发布时请给仓库加 `asg-plugin` topic。
+插件模板见 [`examples/asg-plugin/`](../examples/asg-plugin/)，发布时请给仓库加 `asg-plugin` topic。
 
-## 10. 迁移与兼容（0.3.x → 0.4.x）
+## 10. 迁移与兼容（0.3.x → 0.4.0）
 
+- **升级顺序**：先升到 0.3.11，运行 `scripts/migrations/0.3.x.mjs`（至少 `--phase config`），
+  把官方插件升到 0.2.x，再安装 0.4.0。
 - **旧后端目录**：0.3.x 的插件后端在 `data/backends/<name>`。新契约下它只是只读迁移源；
   setup 应把需要的内容复制到 `data/extension-data/<id>/backends/<backend-id>`，
   不移动、不删除。旧目录可以长期保留，不影响新布局。
-- **旧 CLI 名称**：`asg plugins install/remove <name>` 仍可用。命中已安装 manifest 的
-  `backends[].id` / `aliases` 时走新 setup；未命中才回退旧安装器。
-- **临时迁移脚本**：`scripts/migrations/0.3.x.mjs` 在 0.3.x 期间按
+- **旧 CLI 名称**：`asg plugins install/remove <name>` 在 0.4.0 仍可用（deprecated），
+  命中已安装 manifest 的 `backends[].id` / `aliases` 时走新 setup；未命中才回退旧安装器。
+  **0.4.1 删除 `asg plugins` 与 `scripts/backends/`。**
+- **临时迁移脚本**：`scripts/migrations/0.3.x.mjs` 按
   `preflight → plugins → backends → config → restart` 执行；`config` 阶段把
   `bilibili` / `weibo` / `search.weibo` 与旧 bilibili 密钥迁到 `extensions.<id>`。
-  0.4.x 起删除整个目录，细节见 `scripts/migrations/README.md`。
-- **阶段边界**：本文只描述已实现的安装/setup/CLI 契约。本版本不迁移旧配置，也不执行
-  0.4.x 的清理；不要把迁移脚本的占位阶段当作已完成能力。
+  **0.4.0 保留整个目录，0.4.1 删除**，细节见 `scripts/migrations/README.md`。
+- **已发生的清理**：0.4.0 已移除 V1 manifest / V1 加载、旧平台配置键与
+  `secrets.yaml` 的旧 bilibili 段；0.4.1 再移除 `asg plugins`、`scripts/backends/`、
+  `scripts/migrations/` 与 `data/backends` 的默认迁移读取。
 
 相关决策见 `docs/adr/0022-plugin-owned-backends-and-setup-hook.md`；旧的后端安装脚本
 背景见 `docs/adr/0016-backend-install-and-self-update.md`（已由 0022 过渡接管）。

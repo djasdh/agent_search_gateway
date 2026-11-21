@@ -1,4 +1,4 @@
-# 0.3.x 临时升级/迁移脚本（P1）
+# 0.3.x 临时升级/迁移脚本
 
 本目录是 **0.3.x 兼容版本的一次性过渡工具**，不进入运行时，也不属于稳定 CLI。
 
@@ -14,7 +14,7 @@ preflight -> plugins -> backends -> config -> restart
   `search.weibo` → `extensions.weibo.config.search`
 - `secrets.yaml`：`bilibili.http.token` → `extensions.bilibili.token`
 
-**0.4.x 起整个 `scripts/migrations/` 目录删除。**
+**0.4.0 保留本目录用于 0.3.x → 0.4.0 升级；0.4.1 删除。**
 
 > **与插件契约的关系**：本脚本只调用公开 CLI，不 import 网关内部模块，也不属于插件
 > 契约。后端由插件 `setup` 安装到 `data/extension-data/<id>/backends/<backend-id>/`；
@@ -52,7 +52,7 @@ node scripts/migrations/0.3.x.mjs --phase restart --no-restart
 
 # 5. 临时覆盖/新增一个目标（只处理已安装插件）
 node scripts/migrations/0.3.x.mjs \
-  --plugin weibo=djasdh/agent-search-gateway-plugin-weibo@0.2.0
+  --plugin weibo=djasdh/agent-search-gateway-plugin-weibo@0.2.2
 
 # 6. 回滚配置与插件版本
 node scripts/migrations/0.3.x.mjs --rollback
@@ -144,13 +144,13 @@ restart 也直接记为 `skipped`，不重启网关。
 {
   "schema": 1,
   "plugins": [
-    { "id": "weibo", "repo": "djasdh/agent-search-gateway-plugin-weibo", "version": "0.2.0" }
+    { "id": "weibo", "repo": "djasdh/agent-search-gateway-plugin-weibo", "version": "0.2.2" }
   ]
 }
 ```
 
 - `schema` 目前只接受 `1`；
-- 0.3.11 起清单包含三个官方插件（`bilibili` / `weibo` / `cnki`，目标 `0.2.0`）；第三方插件仍需通过 `--plugin` 指定；
+- 0.4.0 清单包含三个官方插件（`bilibili` / `cnki` 目标 `0.2.0`，`weibo` 目标 `0.2.2`）；第三方插件仍需通过 `--plugin` 指定；
 - 官方插件 manifest 的 `backends[].aliases` 必须覆盖历史安装名、通道 ID 与别名，
   否则 `asg plugins install <旧名>` 只能回退到旧安装脚本；这是插件仓库的发版检查项；
 - `--plugin <id>=<repo>@<version>` 会按 `id` 覆盖清单条目；也可以新增清单里没有的 id，
@@ -245,16 +245,14 @@ restart 也直接记为 `skipped`，不重启网关。
 
 ## 阶段边界
 
-- **P1（本脚本当前状态）**：只执行 `preflight` / `plugins` / `backends` / `restart`；
-  `config` 是 skipped 占位，不迁移任何旧配置键或密钥。
-- **P2**：补 `config` 阶段，迁移旧配置键/密钥；不改变插件 setup/CLI 契约。
-- **0.4.x**：删除 `scripts/migrations/`；旧的 `scripts/backends` 回退也计划移除。
-  本 README 不表示这些清理已经执行。
+- **当前状态**：五个阶段均已实现；`config` 会迁移旧平台配置键与 bilibili 密钥。
+- **0.4.0**：保留 `scripts/migrations/` 用于 0.3.x → 0.4.0 升级；`asg plugins` 与
+  旧 `scripts/backends` 回退也保留为 deprecated。
+- **0.4.1**：删除 `scripts/migrations/`、`asg plugins` 与旧 `scripts/backends` 回退。
 
 ## 已知限制
 
-- **临时工具**：0.4.x 删除本目录，不做长期兼容承诺；
-- `config` 阶段在 P1 为空操作，旧配置键/密钥的迁移要等 P2；
+- **临时工具**：0.4.1 删除本目录，不做长期兼容承诺；
 - 插件后端是否安装成功以 `asg extensions setup` 退出码为准，脚本不验证后端进程本身；
 - 每条 `asg` 子命令默认 30 分钟超时（可用 `ASG_MIGRATION_COMMAND_TIMEOUT_MS` 覆盖，
   仅供测试/应急），超时会终止整个进程树；stdout/stderr 各保留最后 1MB；

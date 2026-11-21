@@ -1,13 +1,21 @@
 {
   "id": "example-fetch",
-  "name": "Example Fetch Plugin",
+  "name": "Example Fetch Extension",
   "version": "0.1.0",
-  "api_version": 1,
+  "api_version": 2,
   "provides": ["fetch"],
   "entry": "index.mjs",
-  "description": "示例 asg 插件：接管 example.com 的抓取",
+  "description": "示例 asg V2 扩展：接管 example.com 的抓取",
+  "fetch_channels": [
+    {
+      "id": "example:http",
+      "name": "Example HTTP",
+      "description": "纯 JS/HTTP 抓取，无外部后端"
+    }
+  ],
   "config_schema": {
     "type": "object",
+    "additionalProperties": false,
     "properties": {
       "enabled": {
         "type": "boolean",

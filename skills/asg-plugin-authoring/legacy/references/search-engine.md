@@ -120,7 +120,7 @@ type SourceCall =
 
 ## 示例
 
-见 `examples/search-engine.ts`（文本源）。要点：
+见 `../../examples/search-engine.ts`（文本源）。要点：
 
 ```ts
 const conf = (ctx) => ctx.pluginConfig ?? {};

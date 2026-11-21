@@ -1,17 +1,21 @@
 # V2 插件开发指南
 
-本文只讲 `api_version: 2`。V1 流程仍保留在 [`SKILL.md`](SKILL.md) 与
-[`references/`](references/)，不要按本文删改 V1 文档。
+本文只讲 `api_version: 2`。0.4.0 起运行期只接受 V2 manifest，V1 流程仅保留在
+[`legacy/v1skills.md`](legacy/v1skills.md) 与 [`legacy/references/`](legacy/references/)，
+供维护 0.3.x 旧插件使用。
 
 ## 0. 先看版本边界
 
-| 网关版本 | V1 manifest | V2 manifest | 平台配置 |
+| 网关版本 | V1 manifest（`asg-plugin.json`） | V2 manifest（`asg-extension.json`） | 平台配置 |
 | --- | --- | --- | --- |
 | 0.3.9 | 加载 | 加载 | 旧 `bilibili` / `weibo` / `search.weibo` 仍兼容 |
-| 0.4.x | 报错 | 唯一路径 | 旧平台配置删除，只能用 `extensions.<id>.*` |
+| **0.4.0** | **报错，不再加载** | **唯一路径** | 旧平台配置删除，只能用 `extensions.<id>.*` |
 
-V2 插件从 0.3.9 起就能运行。新插件直接按本文写；已有 V1 插件先保持
-`SKILL.md` 的流程，再按第 9 节迁移。
+- V2 插件从 0.3.9 起就能运行；0.4.0 是唯一受支持的路径。
+- 已有 V1 插件必须在升级到 0.4.0 之前按第 9 节迁移。
+- 迁移脚本 `scripts/migrations/0.3.x.mjs` 在 **0.4.0 保留**，供 0.3.x 升级使用；
+  **0.4.1 删除**。`asg plugins` 同样是 0.4.0 保留（deprecated）、0.4.1 删除。
+- 官方插件版本：bilibili `0.2.0`、cnki `0.2.0`、weibo `0.2.2`。
 
 ---
 
@@ -102,7 +106,8 @@ export async function setup(ctx) { ... }
 
 规则：
 
-- 文件名是 `asg-extension.json`；V1 的 `asg-plugin.json` 只用于兼容。
+- 文件名是 `asg-extension.json`；`api_version` 必须是 `2`。0.4.0 起不再加载
+  `asg-plugin.json`（该文件只用于 0.3.x 兼容）。
 - `version` 必须等于 Release tag 去掉 `v`。
 - `fetch_channels[].id` 必须是 `platform:channel`；同一个扩展用同一个 platform 前缀。
 - `search_engines[].id` 只能是 `gateway.search:<name>` 或
@@ -147,6 +152,9 @@ interface PluginBackendState {
 ---
 
 ## 4. 实现 fetch
+
+入口导出的 `fetch` 对象形状是 **`FetchProvider`**（0.3.x 文档里的 `FetchPlugin`
+已更名，字段语义不变）。
 
 ```js
 export const fetch = {
@@ -365,6 +373,7 @@ extensions:
 | `secrets.yaml → bilibili.http.token` | `extensions.bilibili.token` |
 
 插件只读 `pluginConfig` / `pluginSecrets`，不要读旧顶层段。
+迁移脚本在 0.4.0 保留（0.4.1 删除）；升级到 0.4.0 前必须完成 `config` 阶段。
 
 ---
 
@@ -398,33 +407,40 @@ sha256sum index.mjs asg-extension.json > SHA256SUMS
 gh release create v0.2.0 index.mjs asg-extension.json SHA256SUMS
 ```
 
-过渡期如果还要支持 0.3.8 及更早版本，Release 同时带 V1 manifest：
+过渡期如果还要支持 0.3.8 及更早版本，Release 可以同时带 V1 manifest：
 
 ```text
 asg-extension.json   V2
-asg-plugin.json      V1
+asg-plugin.json      V1（仅 0.3.x）
 index.mjs
 SHA256SUMS           覆盖两个 manifest 与 entry
 ```
 
-0.3.9 安装器优先 V2；0.3.8 只认 V1。
+0.3.9 安装器优先 V2；0.3.8 只认 V1。**0.4.0 起 Release 只带 V2 manifest**，
+`asg-plugin.json` 不再被加载。
 
 ---
 
 ## 9. 从 V1 迁到 V2
 
-1. 新增 `asg-extension.json`，保留 `asg-plugin.json` 作为过渡。
-2. `api_version` 改为 `2`。
-3. 加 `fetch_channels`：id 用 `platform:channel`。
-4. 有搜索源时加 `search_engines`：id 用 `gateway.search:<name>` /
-   `gateway.reverse_image:<name>`。
-5. 有后端时加 `backends`，并导出 `setup(ctx)`。
-6. 运行期配置从 `ctx.settings` / `ctx.config` 改成 `ctx.pluginConfig`。
-7. 密钥从旧顶层段改成 `ctx.pluginSecrets`。
-8. 需要后端时用 `ctx.pluginBackends.dir/state`。
-9. 真实安装一次：`asg extensions install <owner>/<repo>@<version>`。
+0.4.0 不再加载 V1 manifest，迁移必须在升级到 0.4.0 之前完成：
 
-V1 文档仍在 [`SKILL.md`](SKILL.md)，不要因为迁移删除它。
+1. 先把网关升到 **0.3.11**，运行 `node scripts/migrations/0.3.x.mjs --phase config`
+   （或 `all`）把旧平台配置迁到 `extensions.<id>.*`。
+2. 新增 `asg-extension.json` 作为唯一 manifest。0.3.x 兼容期可以暂时同时保留
+   `asg-plugin.json`，但 **0.4.0 起 Release 只带 V2 manifest**。
+3. `api_version` 改为 `2`。
+4. 加 `fetch_channels`：id 用 `platform:channel`。
+5. 有搜索源时加 `search_engines`：id 用 `gateway.search:<name>` /
+   `gateway.reverse_image:<name>`。
+6. 有后端时加 `backends`，并导出 `setup(ctx)`。
+7. 运行期配置从 `ctx.settings` / `ctx.config` 改成 `ctx.pluginConfig`。
+8. 密钥从旧顶层段改成 `ctx.pluginSecrets`。
+9. 需要后端时用 `ctx.pluginBackends.dir/state`。
+10. 升级官方插件到 bilibili / cnki `0.2.0`、weibo `0.2.2`。
+11. 真实安装一次：`asg extensions install <owner>/<repo>@<version>`，再安装 0.4.0。
+
+V1 文档仅用于 0.3.x：见 [`legacy/v1skills.md`](legacy/v1skills.md)，不要因为迁移删除它。
 
 ---
 
@@ -455,4 +471,4 @@ V1 文档仍在 [`SKILL.md`](SKILL.md)，不要因为迁移删除它。
 | 后端目录拿不到 | manifest 没声明 `backends`，`pluginBackends` 为 `undefined` |
 | 后端显示已安装但不可用 | 只复制了文件，没写 `backendState`，`enabled` 为 false |
 | 安装成功但运行时报缺配置 | 代码还在读 `ctx.settings` / `ctx.config` |
-| 0.4.x 启动失败 | 旧 `bilibili` / `weibo` 配置没跑迁移脚本 |
+| 0.4.0 启动失败 | 旧 `bilibili` / `weibo` 配置没跑迁移脚本 |

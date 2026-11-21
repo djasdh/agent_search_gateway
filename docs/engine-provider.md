@@ -27,14 +27,20 @@ interface EngineProvider {
   kind: EngineKind;
   displayName: string;     // 面向用户/错误文案
   routing(ctx): string[];
-  requires?: string[];     // secrets.… / secret:<name> / config:…
+  requires?: string[];     // secrets.… / secret:<name> / config:…（0.3.x 内置/兼容）
+  requiresV2?: string[];   // 0.4.0 优先：扩展引擎的 V2 依赖声明
   available(ctx): boolean; // 前置条件（密钥 / 上游能力开关）
   enabled?(ctx): boolean;  // 引擎自身的启用状态
-  enabledPath?: string[];  // gateway.search / gateway.upstream 写回 gateway.yaml 的布尔路径
+  enabledPath?: string[];  // 仅 0.3.x 兼容：gateway.search / gateway.upstream 写回 gateway.yaml 的布尔路径
+  enabledPathV2?: string[]; // 0.4.0 优先：扩展引擎写回 extensions.<id>.config 的布尔路径
   runtime?: EngineRuntime;
   authHint?: string;
 }
 ```
+
+`enabledPathV2` / `requiresV2` 是 0.4.0 的优先字段：扩展引擎的开关写到
+`extensions.<id>.config.enabled`，依赖检查读 `extensions.<id>.*`。旧的 `enabledPath` /
+`requires` 只在 0.3.x 兼容路径上使用；新插件不要只写旧字段。
 
 `EngineProviderContext` 是 provider 唯一的输入：
 
@@ -49,25 +55,26 @@ interface EngineProvider {
 ```
 
 - CLI 传原始 `configPlain`（整份 gateway.yaml）与 secrets。
-- 运行期传 `{ search, weibo }` 与 `{ search: { reverse_image: { saucenao: { api_key } }, deepseek: { api_key } } }`。
+- 运行期传 `{ search }` 与 `{ search: { reverse_image: { saucenao: { api_key } }, deepseek: { api_key } } }`；
+  扩展插件走 `pluginConfig` / `pluginSecrets`，不再读顶层平台段。
 - provider 内部一律用 `asObject` / `dig` 读取，不依赖完整 schema 类型，因此两种调用方可以共用。
 - 第三方 search 插件读取 `ctx.pluginConfig`：来源是 `gateway.yaml` 的
   `extensions.<manifest id>.config`，已按 manifest 的 `config_schema` 校验并补齐默认值，递归冻结。
 - 第三方 search 插件读取 `ctx.pluginSecrets`：来源是 `secrets.yaml` 的
-  `extensions.<manifest id>.<name>`，兼容旧的 `extensions.<engineId>.<name>`
-  （manifest id 优先），`env:NAME` 已解析，空值不注入。
+  `extensions.<manifest id>.<name>`，`env:NAME` 已解析，空值不注入。
+  0.4.0 起不再读取 `extensions.<engineId>.<name>`。
 
 `requires` 支持三种依赖：
 
 - `secrets.a.b`：内置密钥，读 `secrets.yaml` 的 `a.b`；
-- `secret:<name>`：扩展密钥，优先读 `secrets.yaml` 的
-  `extensions.<manifest id>.<name>`，并继续兼容旧的 `extensions.<engineId>.<name>`；
-  运行期两者都会合并进 `ctx.pluginSecrets`，值为空（含解析后的 `env:` 为空）时
-  `available()` 强制返回 false。
-  注意：`asg engines enable` 的依赖检查同样先查
-  `extensions.<manifest id>.<name>`，解析后为空（含 `env:` 为空）再回退
-  `extensions.<engineId>.<name>`；两者任一非空即满足。
+- `secret:<name>`：扩展密钥，读 `secrets.yaml` 的
+  `extensions.<manifest id>.<name>`；值为空（含解析后的 `env:` 为空）时
+  `available()` 强制返回 false。`asg engines enable` 的依赖检查只认这一个键。
 - `config:a.b`：配置依赖，读 `gateway.yaml`。
+
+扩展引擎（`data/extensions` 加载的 provider）在 0.4.0 优先读 `requiresV2`：依赖路径以
+`extensions.<manifest id>.*` 为准；只有插件没有提供 `requiresV2` 时才回退旧的
+`requires`（0.3.x 兼容）。CLI 的 `asg engines enable` 使用同一优先级。
 
 运行期分三种：
 
@@ -92,7 +99,13 @@ interface EngineProvider {
 
 不需要改 CLI 命令、`GatewayStore` 或 `service.ts`。CLI 的 `asg engines list` 会通过 `providersForGroup("gateway.reverse_image")` 自动出现该源，运行期也会按 `search.reverse_image.sources` 自动分发。
 
-文本源（`gateway.search`）同理：新建 provider、在 registry 注册，并声明 `enabled(ctx)` 与 `enabledPath`（扩展源如 `["extensions","weibo","config","enabled"]`）。CLI 的 `GatewayStore` 会按 `enabledPath` 自动读写，运行期按 `providersForGroup("gateway.search")` 依次询问 `enabled()` / `plan()`，不需要再改 store 或 `service.ts`。**内置 provider** 如果带独立配置段，仍需在 `settings/schema.ts` 增加对应 schema；复用现有配置段则不必。第三方扩展不需要改核心 schema：用 manifest 的 `config_schema` 声明私有配置（见 3.1）。
+文本源（`gateway.search`）同理：新建 provider、在 registry 注册，并声明 `enabled(ctx)` 与
+`enabledPathV2`（0.4.0 扩展源如 `["extensions","weibo","config","enabled"]`；旧
+`enabledPath` 仅用于 0.3.x 兼容）。CLI 的 `GatewayStore` 会按 `enabledPathV2` 自动读写，
+运行期按 `providersForGroup("gateway.search")` 依次询问 `enabled()` / `plan()`，不需要再改
+store 或 `service.ts`。**内置 provider** 如果带独立配置段，仍需在 `settings/schema.ts`
+增加对应 schema；复用现有配置段则不必。第三方扩展不需要改核心 schema：用 manifest 的
+`config_schema` 声明私有配置（见 3.1）。
 
 ### 3.1 第三方扩展的路由、私有配置与密钥
 
@@ -115,7 +128,7 @@ extensions:
 - `config` 按 **manifest id** 读取，交给 manifest 的 `config_schema` 校验并补默认值，
   再以 `ctx.pluginConfig` 注入插件的 `routing()` / `available()` / `enabled()` / `runtime`。
   配置未声明 schema 时原样透传；空对象不注入。
-- `secrets` 同时认 manifest id 与 engineId，manifest id 优先（见第 2 节 `secret:<name>`）。
+- `secrets` 只认 manifest id：`extensions.<manifest id>.<name>`（见第 2 节 `secret:<name>`）。
 
 有 `routing.category` / `routing.hot_category` 时，loader 包装 provider：
 
@@ -124,16 +137,28 @@ extensions:
   **hot 命中 → `{ hot: true }`，普通类别命中 → `{ hot: false }`，都不中 → `undefined`**；
 - 类别匹配大小写不敏感、按逗号分隔，与插件 SDK 的 `hasCategory` 一致。
 
-插件可以把 `enabledPath` 指向自己的私有配置，让 `asg engines enable/disable` 直接写回
-`gateway.yaml`（`GatewayStore` 只按路径写布尔值，不关心它属于哪个段）：
+0.4.0 的扩展引擎用 `enabledPathV2` / `requiresV2` 指向自己的私有配置，让
+`asg engines enable/disable` 直接写回 `gateway.yaml`（`GatewayStore` 只按路径写布尔值，
+不关心它属于哪个段）：
 
 ```ts
-enabledPath: ["extensions", "example", "config", "enabled"],
+enabledPathV2: ["extensions", "example", "config", "enabled"],
+requiresV2: ["config:extensions.example.config.enabled"],
 enabled: (ctx) => ctx.pluginConfig?.enabled !== false,
 ```
 
 对应 `config_schema` 里声明 `enabled: { "type": "boolean", "default": true }`，
 用户也可以直接用 `asg extensions config example --set enabled=false` 修改同一个开关。
+
+官方微博插件（0.2.2）的等价写法：搜索源开关是 `search.enabled`，但依赖插件总开关
+`config.enabled`：
+
+```ts
+enabledPathV2: ["extensions", "weibo", "config", "search", "enabled"],
+requiresV2: ["config:extensions.weibo.config.enabled"],
+```
+
+旧的 `enabledPath` / `requires` 只在 0.3.x 兼容路径上使用；0.4.0 起新插件不要只写旧字段。
 
 `--clear` 会删除 `extensions.<engineId>.routing`，插件恢复自己的默认 `routing()` 与 `plan()`。
 没有路由 / 配置 / 密钥的插件不会被包装，行为与插件自身实现完全一致。
@@ -206,8 +231,8 @@ CLI 支持 `asg engines list/enable/disable/secret`；`route` 不支持通用上
 
 - 遍历 `providersForGroup("gateway.reverse_image")` 生成记录：`id/name/kind` 直接取 provider，`enabled` 由 `search.reverse_image.sources` 决定，`available/routing/requires` 调 provider；
 - 遍历 `providersForGroup("gateway.search")` 生成记录，`enabled` / `available` / `routing` / `requires` 全部来自 provider（含 loader 施加的 `extensions` 覆盖）；
-- 遍历 `providersForGroup("gateway.upstream")` 生成记录，`enabled` 按 provider 的 `enabledPath`（如 `search.deepseek.enabled`）读取；该组不支持 `route`；
-- **写入仍由 store 负责**：reverse_image 增删 `sources` 数组；文本源与通用上游按 provider 的 `enabledPath` 写布尔值。provider 不碰 YAML。
+- 遍历 `providersForGroup("gateway.upstream")` 生成记录，`enabled` 按 provider 的 `enabledPath`（内置源，如 `search.deepseek.enabled`）读取；该组不支持 `route`；
+- **写入仍由 store 负责**：reverse_image 增删 `sources` 数组；文本源按 `enabledPathV2`（扩展）/ `enabledPath`（内置）写布尔值，通用上游按 `enabledPath` 写。provider 不碰 YAML。
 
 ### 运行期
 
@@ -226,8 +251,8 @@ CLI 支持 `asg engines list/enable/disable/secret`；`route` 不支持通用上
 - 内置 provider 没有动态发现；第三方扩展通过 `data/extensions` 加载 search 引擎（见 `docs/extensions.md`），再以 overlay 形式合并进注册表。
 
 `extensions.<engineId>.routing` 只覆盖路由/类别判断，不改变 provider 的启用状态；启用/禁用
-仍由 `asg engines enable/disable` 按 provider 的 `enabledPath` 写入（内置源写 `search.*`，
-扩展源可以指向 `extensions.<id>.config.enabled`）。
+仍由 `asg engines enable/disable` 按 provider 的 `enabledPathV2`（扩展）或 `enabledPath`
+（内置源写 `search.*`）写入。
 
 当前已知边界：
 

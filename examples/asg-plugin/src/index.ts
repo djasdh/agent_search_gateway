@@ -1,9 +1,10 @@
 /**
- * 示例抓取插件。
+ * 示例抓取插件（V2 FetchProvider）。
  *
  * 约定：不 import 网关内部模块，只导出运行期约定的命名导出 `fetch`。
- * 私有配置由 `asg-plugin.json` 的 `config_schema` 声明；运行期从
+ * 私有配置由 `asg-extension.json` 的 `config_schema` 声明；运行期从
  * `ctx.pluginConfig` 读取（宿主已补默认值并冻结），密钥从 `ctx.pluginSecrets` 读取。
+ * 平台/通道身份由 manifest 的 `fetch_channels` 声明，入口不再写 V1 的 `platform`。
  */
 
 export interface ExampleFetchContext {
@@ -51,8 +52,23 @@ export const fetch = {
   id: "example-fetch",
   platform: "example",
   name: "example-fetch",
-  displayName: "Example Fetch Plugin",
+  displayName: "Example Fetch Extension",
   capabilities: ["html"],
+
+  /**
+   * 可选运行时通道元数据；id 集合必须与 manifest 的 fetch_channels 一致。
+   * 不导出时 manifest 的 fetch_channels 只用于展示与 platform 派生。
+   */
+  channels: [
+    {
+      id: "example:http",
+      platform: "example",
+      channel: "http",
+      displayName: "Example HTTP",
+      kind: "http",
+      capabilities: ["html"],
+    },
+  ],
 
   /** 只做纯 URL 判断，不读配置、不抛错。 */
   match(url: URL): boolean {

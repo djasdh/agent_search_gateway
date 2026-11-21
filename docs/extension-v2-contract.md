@@ -1,10 +1,10 @@
-# Extension V2 接口契约（目标）
+# Extension V2 接口契约
 
-- 状态：目标契约，分阶段实现
-- 当前版本：V2 runtime 已实现；V1 与 V2 同时加载
-- 下一版：把 V2 作为默认/推荐路径，完成官方插件迁移
-- 最后：只保留 V2，V1 直接报错
-- 本文描述最终接口，不代表当前版本已经实现
+- 状态：0.4.0 起为运行期唯一契约
+- 当前版本：0.4.0 只接受 V2 manifest（`asg-extension.json`，`api_version: 2`）
+- 过渡：`asg plugins`、`scripts/backends/`、`scripts/migrations/` 在 0.4.0 保留并标记
+  deprecated，**0.4.1 删除**
+- 本文描述最终接口；0.3.x 的 V1 兼容仅保留在历史文档中
 
 ---
 
@@ -722,11 +722,12 @@ asg extensions config <id> ...
 asg extensions secret <id> ...
 ```
 
-V2 没有：
+0.4.0 过渡期仍保留（deprecated），0.4.1 删除：
 
 - `asg plugins`
 - `scripts/backends` 回退
-- `data/backends`
+- `data/backends` 默认迁移读取
+- `scripts/migrations/`
 
 ### 7.2 重启矩阵
 
@@ -850,10 +851,11 @@ Adapter 规则：
 
 ### 8.3 版本边界
 
-| 版本 | 接受 | 删除 |
+| 版本 | 接受 | 0.4.0/0.4.1 边界 |
 | --- | --- | --- |
 | 0.3.x | V1 + V2 | 不删兼容 |
-| 0.4.0 | 仅 V2 | V1、`asg plugins`、旧文件、旧目录、旧配置键 |
+| **0.4.0** | **仅 V2** | 删除 V1 加载、`asg-plugin.json`、旧平台配置键；`asg plugins` / `scripts/backends/` / `scripts/migrations/` 保留为 deprecated |
+| 0.4.1 | 仅 V2 | 删除 `asg plugins`、`scripts/backends/`、`scripts/migrations/`、`data/backends` 默认迁移读取 |
 
 ### 8.4 文件兼容
 
@@ -951,33 +953,39 @@ interface MigrationChecklist {
 - `capabilities`
 - `CatalogChannel`
 - `PluginStatus`
-- `asg plugins`
-- `data/extension-data`
-- `data/backends`
-- `asg-plugin.json`
+- `asg plugins`（0.4.0 仅保留 deprecated facade，0.4.1 删除）
+- `data/plugin-data`
+- `data/backends`（0.4.0 仅只读迁移源，0.4.1 删除默认读取）
+- `asg-plugin.json`（0.4.0 起不再加载）
 
-### 10.3 0.4.0 清理
+### 10.3 0.4.0 / 0.4.1 清理
 
-- 只接受 V2 manifest。
-- 删除 V1 adapter。
-- 删除 `asg plugins`。
-- 删除 `PluginStatus`。
-- 删除 `scripts/backends/`。
-- 删除 `data/backends` 默认迁移读取。
-- 删除旧平台配置键。
-- 删除 `scripts/migrations/` 与 `0.3.x` 迁移步骤。
-- 删除 `asg-plugin.json` 回退。
+**0.4.0 已完成：**
+
+- 只接受 V2 manifest（`asg-extension.json`，`api_version: 2`）。
+- 删除 V1 adapter 与 `asg-plugin.json` 回退。
+- 删除旧平台配置键（`gateway.yaml` 顶层 `bilibili` / `weibo` / `search.weibo`，
+  `secrets.yaml` 的 `bilibili`）。
 - 删除硬编码平台/通道注册表。
-- 删除平台相关 settings 段。
 - 将内置平台相关搜索源迁出核心。
 - 统一 `FetchPlugin` 为 `FetchProvider`。
+
+**0.4.0 保留（deprecated），0.4.1 删除：**
+
+- `asg plugins` 与 `PluginStatus`。
+- `scripts/backends/`。
+- `scripts/migrations/` 与 `0.3.x` 迁移步骤。
+- `data/backends` 默认迁移读取（0.4.0 仅作为只读迁移源）。
+
+> 升级顺序：0.3.11 → 跑迁移脚本 → 官方插件升到 0.2.x → 安装 0.4.0。
 
 ---
 
 ## 11. 开放项
 
-1. 官方插件 v0.2.0 尚未发布，真实清单和 config 映射无法填。
-2. 如果 v0.2.0 硬依赖 0.4.0，迁移顺序需调整。
-3. 官方 v0.2.0 manifest 必须遵守“backend 不跨 channel 共用”。
-4. 平台无关清理范围大，需区分过渡版边界与 0.4.x 实际迁出。
-5. 是否需要在网关启动前离线迁移，取决于后续版本是否放宽旧配置解析。
+1. ~~官方插件 v0.2.0 尚未发布，真实清单和 config 映射无法填。~~
+   **已解决**：官方插件已发布（bilibili / cnki `0.2.0`，weibo `0.2.2`），迁移清单已填。
+2. 迁移顺序已确定：0.3.11 → 迁移脚本 → 官方插件 0.2.x → 0.4.0。
+3. 官方插件 manifest 必须遵守“backend 不跨 channel 共用”。
+4. 平台无关清理范围大；0.4.0 已完成 V1/旧配置清理，剩余的过渡目录在 0.4.1 删除。
+5. 0.4.0 要求升级前离线迁移，旧配置解析不再放宽。

@@ -133,7 +133,8 @@ export const exampleProvider: EngineProvider = {
   routing: (ctx) => [`category:${categoryOf(ctx)}`, `category:${hotCategoryOf(ctx)}`],
 
   // 私有配置由 manifest 的 config_schema 声明，不需要核心 settings/schema.ts。
-  enabledPath: ["extensions", "example", "config", "enabled"],
+  // 0.4.0 用 enabledPathV2；旧 enabledPath 只用于 0.3.x 兼容。
+  enabledPathV2: ["extensions", "example", "config", "enabled"],
 
   // 前置条件：没有额外密钥/上游开关；用户关闭后由 enabled 处理。
   available: () => true,

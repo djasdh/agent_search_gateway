@@ -26,13 +26,13 @@ jobs:
         run: npm run build
 
       - name: 生成校验文件
-        run: sha256sum index.mjs asg-plugin.json > SHA256SUMS
+        run: sha256sum index.mjs asg-extension.json > SHA256SUMS
 
       - name: 发布 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            index.mjs asg-plugin.json SHA256SUMS \
+            index.mjs asg-extension.json SHA256SUMS \
             --title "${GITHUB_REF_NAME}" \
             --notes "asg 插件 ${GITHUB_REF_NAME}"
