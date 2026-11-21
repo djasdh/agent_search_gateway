@@ -6,7 +6,7 @@ import type { EngineProvider } from "../../src/engines/provider.js";
 import type { Logger } from "../../src/logger.js";
 import { extensionsDir, loadExtensions } from "../../src/extensions/loader.js";
 import { backendInstallDir, extensionDataDir } from "../../src/extensions/paths.js";
-import { createFetchRegistry } from "../../src/fetch/plugins/index.js";
+import { createFetchProviderRegistry } from "../../src/fetch/plugins/index.js";
 
 const tempDirs: string[] = [];
 
@@ -25,9 +25,7 @@ function writeExtension(
 ): string {
   const dir = path.join(extensionsDir(root), dirName);
   fs.mkdirSync(dir, { recursive: true });
-  const manifestName =
-    manifest.api_version === 2 ? "asg-extension.json" : "asg-plugin.json";
-  fs.writeFileSync(path.join(dir, manifestName), JSON.stringify(manifest), "utf8");
+  fs.writeFileSync(path.join(dir, "asg-extension.json"), JSON.stringify(manifest), "utf8");
   fs.writeFileSync(path.join(dir, entryName), entryText, "utf8");
   return dir;
 }
@@ -37,7 +35,7 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
     id: "demo-fetch",
     name: "Demo Fetch",
     version: "1.0.0",
-    api_version: 1,
+    api_version: 2,
     provides: ["fetch"],
     entry: "index.mjs",
     ...overrides,
@@ -304,26 +302,28 @@ describe("坏包隔离与校验", () => {
     });
   });
 
-  it("api_version 不兼容时跳过并记录 error", async () => {
-    const root = tempRoot();
-    writeExtension(root, "demo-fetch", manifest({ api_version: 3 }), FETCH_ENTRY);
+  it("asg-extension.json 的 api_version 不是 2 时跳过并记录 error", async () => {
+    for (const apiVersion of [1, 3]) {
+      const root = tempRoot();
+      writeExtension(root, "demo-fetch", manifest({ api_version: apiVersion }), FETCH_ENTRY);
 
-    const loaded = await loadExtensions(root);
-    expect(loaded.fetch).toEqual([]);
-    expect(loaded.errors[0]).toMatchObject({
-      id: "demo-fetch",
-      error: expect.stringContaining("api_version"),
-    });
+      const loaded = await loadExtensions(root);
+      expect(loaded.fetch).toEqual([]);
+      expect(loaded.errors[0]).toMatchObject({
+        id: "demo-fetch",
+        error: expect.stringContaining("api_version: 2"),
+      });
+      expect(loaded.errors[0]!.error).toContain("asg-extension.json");
+    }
   });
 
-  it("api_version 2 与 api 1 同时加载", async () => {
+  it("多个 V2 扩展同时加载", async () => {
     const root = tempRoot();
     writeExtension(
       root,
       "demo-v2",
       manifest({
         id: "demo-v2",
-        api_version: 2,
         backends: [
           {
             id: "demo-api",
@@ -340,6 +340,28 @@ describe("坏包隔离与校验", () => {
     const loaded = await loadExtensions(root);
     expect(loaded.errors).toEqual([]);
     expect(loaded.fetch.map((plugin) => plugin.id)).toEqual(["demo-v1", "demo-v2"]);
+  });
+
+  it("只有 asg-plugin.json 时产生可操作的升级错误", async () => {
+    const root = tempRoot();
+    const dir = path.join(extensionsDir(root), "demo-v1");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "asg-plugin.json"),
+      JSON.stringify({ ...manifest(), api_version: 1 }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(dir, "index.mjs"), FETCH_ENTRY, "utf8");
+
+    const loaded = await loadExtensions(root);
+    expect(loaded.fetch).toEqual([]);
+    expect(loaded.errors).toEqual([
+      {
+        id: "demo-v1",
+        error: expect.stringContaining("未找到 asg-extension.json"),
+      },
+    ]);
+    expect(loaded.errors[0]!.error).toContain("请执行 asg extensions install");
   });
 
   it("缺少 manifest / 条目导入失败时只记录对应错误", async () => {
@@ -360,7 +382,7 @@ describe("坏包隔离与校验", () => {
     expect(loaded.fetch).toEqual([]);
     expect(loaded.errors).toEqual([
       { id: "import-fails", error: expect.stringContaining("boom") },
-      { id: "no-manifest", error: expect.stringContaining("asg-plugin.json") },
+      { id: "no-manifest", error: expect.stringContaining("asg-extension.json") },
     ]);
     expect(warnings).toHaveLength(2);
   });
@@ -399,7 +421,7 @@ describe("外部插件注册", () => {
     const loaded = await loadExtensions(root);
     expect(loaded.fetch.map((plugin) => plugin.id)).toEqual(["bilibili"]);
 
-    const registry = createFetchRegistry(loaded.fetch);
+    const registry = createFetchProviderRegistry(loaded.fetch);
     expect(registry.list().map((plugin) => plugin.id)).toEqual(["bilibili"]);
     const matched = registry.find(new URL("https://example.com/a"), {} as never);
     expect(matched?.id).toBe("bilibili");
@@ -482,7 +504,7 @@ describe("扩展配置覆盖（routing / secret）", () => {
     );
 
     const loaded = await loadExtensions(root, {
-      extensionSecrets: { "gateway.search:demo": { cookie: "env:DEMO_COOKIE" } },
+      extensionSecrets: { "demo-search": { cookie: "env:DEMO_COOKIE" } },
       env: { DEMO_COOKIE: "cookie-value" },
     });
     const runtime = loaded.engines[0]!.runtime!;
@@ -490,7 +512,7 @@ describe("扩展配置覆盖（routing / secret）", () => {
     expect(runtime.plan("demo", ctx)).toEqual({ hot: true });
 
     const missing = await loadExtensions(root, {
-      extensionSecrets: { "gateway.search:demo": { cookie: "env:DEMO_COOKIE" } },
+      extensionSecrets: { "demo-search": { cookie: "env:DEMO_COOKIE" } },
       env: {},
     });
     const missingRuntime = missing.engines[0]!.runtime!;
@@ -529,13 +551,13 @@ describe("扩展配置覆盖（routing / secret）", () => {
     expect(missing.engines[0]!.available(ctx)).toBe(false);
 
     const unresolved = await loadExtensions(root, {
-      extensionSecrets: { "gateway.search:demo": { cookie: "env:DEMO_COOKIE" } },
+      extensionSecrets: { "demo-search": { cookie: "env:DEMO_COOKIE" } },
       env: {},
     });
     expect(unresolved.engines[0]!.available(ctx)).toBe(false);
 
     const satisfied = await loadExtensions(root, {
-      extensionSecrets: { "gateway.search:demo": { cookie: "env:DEMO_COOKIE" } },
+      extensionSecrets: { "demo-search": { cookie: "env:DEMO_COOKIE" } },
       env: { DEMO_COOKIE: "cookie-value" },
     });
     expect(satisfied.engines[0]!.available(ctx)).toBe(true);
@@ -817,8 +839,8 @@ describe("fetch 插件的配置与密钥注入", () => {
   });
 });
 
-describe("密钥键兼容 engineId 与 manifest id", () => {
-  it("旧的 engineId 键仍生效，manifest id 键覆盖它", async () => {
+describe("密钥只认 manifest id", () => {
+  it("旧的 engineId 键不再注入，只认 extensions.<manifest id>.<name>", async () => {
     const root = tempRoot();
     writeExtension(
       root,
@@ -831,23 +853,20 @@ describe("密钥键兼容 engineId 与 manifest id", () => {
       extensionSecrets: { "gateway.search:demo": { cookie: "legacy-value" } },
     });
     const legacyProbe = await readContextProbe(legacy.engines[0]!);
-    expect(legacyProbe.secrets).toEqual({ cookie: "legacy-value" });
+    expect(legacyProbe.secrets).toBeNull();
 
-    const overridden = await loadExtensions(root, {
+    const current = await loadExtensions(root, {
       extensionSecrets: {
         "gateway.search:demo": { cookie: "legacy-value", token: "legacy-token" },
         "demo-search": { cookie: "manifest-value" },
       },
     });
-    const overriddenProbe = await readContextProbe(overridden.engines[0]!);
-    expect(overriddenProbe.secrets).toEqual({
-      cookie: "manifest-value",
-      token: "legacy-token",
-    });
-    expect(overriddenProbe.secretsFrozen).toBe(true);
+    const currentProbe = await readContextProbe(current.engines[0]!);
+    expect(currentProbe.secrets).toEqual({ cookie: "manifest-value" });
+    expect(currentProbe.secretsFrozen).toBe(true);
   });
 
-  it("search 的 secret: 依赖按合并后的密钥判定", async () => {
+  it("search 的 secret: 依赖只看 manifest id 密钥", async () => {
     const root = tempRoot();
     const entry = CONTEXT_PROBE_ENGINE_ENTRY.replace(
       '  available: () => true,',
@@ -872,7 +891,7 @@ describe("密钥键兼容 engineId 与 manifest id", () => {
     const viaLegacy = await loadExtensions(root, {
       extensionSecrets: { "gateway.search:demo": { cookie: "legacy-cookie" } },
     });
-    expect(viaLegacy.engines[0]!.available(ctx)).toBe(true);
+    expect(viaLegacy.engines[0]!.available(ctx)).toBe(false);
   });
 });
 
@@ -1034,7 +1053,7 @@ describe("V2 runtime", () => {
     expect(installed.engines[0]!.available(ctx)).toBe(true);
   });
 
-  it("V1 不注入 pluginBackends", async () => {
+  it("没有 backends 时不注入 pluginBackends", async () => {
     const root = tempRoot();
     writeExtension(root, "demo-fetch", manifest(), [
       "export const fetch = {",

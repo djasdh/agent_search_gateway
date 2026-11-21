@@ -13,7 +13,7 @@ const USAGE = `用法: asg plugins <list|install|remove> [name]
   remove <name>  卸载并整栈重启
 
 ${DEPRECATED}
-旧名/通道名由已安装插件的 asg-plugin.json → backends[].aliases 提供。`;
+旧名/通道名由已安装插件的 asg-extension.json → backends[].aliases 提供。`;
 
 function renderList(plugins: PluginStatus[]): string {
   const header = ["NAME", "PLATFORM", "CHANNEL", "INSTALLED", "VERSION", "ENABLED"];

@@ -54,7 +54,7 @@ function writeExtension(
 ): string {
   const target = path.join(root, "data", "extensions", dir);
   fs.mkdirSync(target, { recursive: true });
-  fs.writeFileSync(path.join(target, "asg-plugin.json"), JSON.stringify(manifest), "utf8");
+  fs.writeFileSync(path.join(target, "asg-extension.json"), JSON.stringify(manifest), "utf8");
   return target;
 }
 

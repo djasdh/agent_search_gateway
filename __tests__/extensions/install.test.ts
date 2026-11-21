@@ -17,7 +17,7 @@ const MANIFEST = {
   id: "demo-fetch",
   name: "Demo Fetch",
   version: "1.2.3",
-  api_version: 1,
+  api_version: 2,
   provides: ["fetch"],
   entry: "index.mjs",
   description: "示例插件",
@@ -37,7 +37,7 @@ function sha256(text: string): string {
 }
 
 function sums(manifestText: string, entryName = "index.mjs", entryText = ENTRY_TEXT): string {
-  return `${sha256(manifestText)}  asg-plugin.json\n${sha256(entryText)}  ${entryName}\n`;
+  return `${sha256(manifestText)}  asg-extension.json\n${sha256(entryText)}  ${entryName}\n`;
 }
 
 interface FakeDepsOptions {
@@ -55,7 +55,9 @@ interface FakeDepsOptions {
 }
 
 function makeRelease(tag: string, omit: string[] = [], urls: Record<string, string> = {}) {
-  const names = ["asg-plugin.json", "index.mjs", "SHA256SUMS"].filter((name) => !omit.includes(name));
+  const names = ["asg-extension.json", "index.mjs", "SHA256SUMS"].filter(
+    (name) => !omit.includes(name),
+  );
   return {
     tag_name: tag,
     assets: names.map((name) => ({
@@ -77,7 +79,6 @@ function fakeDeps(options: FakeDepsOptions = {}): InstallDeps {
   }
   const release = options.release ?? makeRelease(options.tag ?? `v${version}`, options.omit, options.urls);
   const contents: Record<string, string> = {
-    "asg-plugin.json": manifestText,
     "asg-extension.json": manifestText,
     "index.mjs": entryText,
     SHA256SUMS: options.sumsText ?? sums(manifestText, "index.mjs", entryText),
@@ -139,7 +140,7 @@ describe("安装扩展", () => {
     expect(fs.readFileSync(path.join(result.path, "index.mjs"), "utf8")).toBe(ENTRY_TEXT);
     expect(fs.readdirSync(extensionsPath(root))).toEqual(["demo-fetch"]);
 
-    expect(assetNames(deps)).toEqual(["asg-plugin.json", "index.mjs", "SHA256SUMS"]);
+    expect(assetNames(deps)).toEqual(["asg-extension.json", "index.mjs", "SHA256SUMS"]);
 
     const fetchJson = deps.fetchJson as ReturnType<typeof vi.fn>;
     expect(fetchJson.mock.calls[0]![0]).toBe(
@@ -154,11 +155,10 @@ describe("安装扩展", () => {
     expect(request.headers["User-Agent"]).toMatch(/^asg\//);
   });
 
-  it("优先安装 asg-extension.json 并返回 V2 字段", async () => {
+  it("只安装 asg-extension.json 并返回 V2 字段", async () => {
     const root = tempRoot();
     const v2 = {
       ...MANIFEST,
-      api_version: 2,
       backends: [{ id: "demo-api", name: "Demo API", aliases: ["demo_old"] }],
       fetch_channels: [
         {
@@ -175,8 +175,8 @@ describe("安装扩展", () => {
     const release = {
       tag_name: "v1.2.3",
       assets: [
-        { name: "asg-extension.json", browser_download_url: "https://example.test/asg-extension.json" },
         { name: "asg-plugin.json", browser_download_url: "https://example.test/asg-plugin.json" },
+        { name: "asg-extension.json", browser_download_url: "https://example.test/asg-extension.json" },
         { name: "index.mjs", browser_download_url: "https://example.test/index.mjs" },
         { name: "SHA256SUMS", browser_download_url: "https://example.test/SHA256SUMS" },
       ],
@@ -190,11 +190,36 @@ describe("安装扩展", () => {
       "gateway.search:example",
     ]);
     expect(assetNames(deps)[0]).toBe("asg-extension.json");
+    expect(assetNames(deps)).not.toContain("asg-plugin.json");
     expect(fs.existsSync(path.join(result.path, "asg-extension.json"))).toBe(true);
     expect(fs.existsSync(path.join(result.path, "asg-plugin.json"))).toBe(false);
   });
 
-  it("api_version 2 的 backends 会写入安装结果与列表", async () => {
+  it("release 只有 asg-plugin.json 时拒绝安装", async () => {
+    const deps = fakeDeps({ omit: ["asg-extension.json"] });
+    await expect(
+      installExtension({ root: tempRoot(), repo: "owner/demo", deps }),
+    ).rejects.toMatchObject({
+      code: "PLUGIN_FAILED",
+      message: expect.stringMatching(
+        /缺少资产 asg-extension\.json（0\.4\.0 起不再接受 asg-plugin\.json）/,
+      ),
+    });
+  });
+
+  it("asg-extension.json 的 api_version 不是 2 时拒绝安装", async () => {
+    const deps = fakeDeps({
+      manifestText: JSON.stringify({ ...MANIFEST, api_version: 1 }),
+    });
+    await expect(
+      installExtension({ root: tempRoot(), repo: "owner/demo", deps }),
+    ).rejects.toMatchObject({
+      code: "PLUGIN_FAILED",
+      message: expect.stringContaining("asg-extension.json"),
+    });
+  });
+
+  it("backends 会写入安装结果与列表", async () => {
     const root = tempRoot();
     const backends = [
       {
@@ -315,7 +340,7 @@ describe("安装扩展", () => {
   it("缺少 SHA256SUMS / manifest / entry 资产时失败", async () => {
     for (const [omit, pattern] of [
       [["SHA256SUMS"], /缺少资产 SHA256SUMS/],
-      [["asg-plugin.json"], /缺少资产 asg-extension\.json 或 asg-plugin\.json/],
+      [["asg-extension.json"], /缺少资产 asg-extension\.json/],
       [["index.mjs"], /缺少 manifest\.entry/],
     ] as const) {
       const deps = fakeDeps({ omit: [...omit] });
@@ -391,14 +416,14 @@ describe("解析 SHA256SUMS", () => {
     const parsed = parseChecksums(
       [
         "# comment",
-        `${"a".repeat(64)}  asg-plugin.json`,
+        `${"a".repeat(64)}  asg-extension.json`,
         `${"b".repeat(64)} *index.mjs`,
         `${"c".repeat(64)}  ./extra.js`,
         "not a checksum",
         "",
       ].join("\n"),
     );
-    expect(parsed.get("asg-plugin.json")).toBe("a".repeat(64));
+    expect(parsed.get("asg-extension.json")).toBe("a".repeat(64));
     expect(parsed.get("index.mjs")).toBe("b".repeat(64));
     expect(parsed.get("extra.js")).toBe("c".repeat(64));
     expect(parsed.size).toBe(3);
@@ -406,10 +431,15 @@ describe("解析 SHA256SUMS", () => {
 });
 
 describe("列出与卸载扩展", () => {
-  function writeExtension(root: string, dir: string, text: string): void {
+  function writeExtension(
+    root: string,
+    dir: string,
+    text: string,
+    fileName = "asg-extension.json",
+  ): void {
     const target = path.join(extensionsPath(root), dir);
     fs.mkdirSync(target, { recursive: true });
-    fs.writeFileSync(path.join(target, "asg-plugin.json"), text, "utf8");
+    fs.writeFileSync(path.join(target, fileName), text, "utf8");
   }
 
   it("读取有效目录，坏包返回 error 而不抛整条命令", () => {
@@ -436,6 +466,30 @@ describe("列出与卸载扩展", () => {
       path: path.join(extensionsPath(root), "demo-fetch"),
     });
     expect(list[1]!.error).toBeUndefined();
+  });
+
+  it("只有 asg-plugin.json 时提示升级插件", () => {
+    const root = tempRoot();
+    writeExtension(
+      root,
+      "demo-fetch",
+      JSON.stringify({ ...MANIFEST, api_version: 1 }),
+      "asg-plugin.json",
+    );
+
+    const item = listExtensions(root)[0]!;
+    expect(item.id).toBe("demo-fetch");
+    expect(item.error).toContain("未找到 asg-extension.json");
+    expect(item.error).toContain("asg extensions install");
+  });
+
+  it("没有 manifest 时提示未找到 asg-extension.json", () => {
+    const root = tempRoot();
+    fs.mkdirSync(path.join(extensionsPath(root), "no-manifest"), { recursive: true });
+
+    const item = listExtensions(root)[0]!;
+    expect(item.error).toContain("未找到 asg-extension.json");
+    expect(item.error).not.toContain("asg extensions install");
   });
 
   it("目录名与 manifest.id 不一致时标记 error", () => {

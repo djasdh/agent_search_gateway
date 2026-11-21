@@ -35,10 +35,15 @@ function fakeReporter(events: Array<Record<string, unknown>> = []): Reporter {
   } as unknown as Reporter;
 }
 
-function writeManifest(root: string, text: string, dir = "demo-fetch"): string {
+function writeManifest(
+  root: string,
+  text: string,
+  dir = "demo-fetch",
+  fileName = "asg-extension.json",
+): string {
   const target = path.join(root, "data", "extensions", dir);
   fs.mkdirSync(target, { recursive: true });
-  fs.writeFileSync(path.join(target, "asg-plugin.json"), text, "utf8");
+  fs.writeFileSync(path.join(target, fileName), text, "utf8");
   return target;
 }
 
@@ -52,7 +57,7 @@ const MANIFEST = JSON.stringify({
   id: "demo-fetch",
   name: "Demo Fetch",
   version: "1.0.0",
-  api_version: 1,
+  api_version: 2,
   provides: ["fetch"],
   entry: "index.mjs",
 });
@@ -83,7 +88,7 @@ function configManifest(schema: unknown = CONFIG_SCHEMA): string {
     id: "demo-fetch",
     name: "Demo Fetch",
     version: "1.0.0",
-    api_version: 1,
+    api_version: 2,
     provides: ["fetch"],
     entry: "index.mjs",
     ...(schema === undefined ? {} : { config_schema: schema }),
@@ -266,6 +271,31 @@ describe("asg extensions list", () => {
           search_engines: [{ id: "gateway.search:example" }],
         },
       ],
+    });
+  });
+
+  it("只有 asg-plugin.json 的目录在列表里提示升级插件", async () => {
+    const root = tempRoot();
+    writeManifest(
+      root,
+      JSON.stringify({
+        id: "demo-fetch",
+        name: "Demo Fetch",
+        version: "1.0.0",
+        api_version: 1,
+        provides: ["fetch"],
+        entry: "index.mjs",
+      }),
+      "demo-fetch",
+      "asg-plugin.json",
+    );
+
+    const result = await run({ root, reporter: fakeReporter(), rest: ["list"] });
+
+    expect(result.human).toContain("asg-extension.json");
+    expect(result.human).toContain("asg extensions install");
+    expect(result.data).toMatchObject({
+      extensions: [{ id: "demo-fetch", error: expect.stringContaining("asg-extension.json") }],
     });
   });
 

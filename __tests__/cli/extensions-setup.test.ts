@@ -59,7 +59,7 @@ function writeManifest(
 ): string {
   const target = path.join(root, "data", "extensions", dir);
   fs.mkdirSync(target, { recursive: true });
-  fs.writeFileSync(path.join(target, "asg-plugin.json"), JSON.stringify(manifest), "utf8");
+  fs.writeFileSync(path.join(target, "asg-extension.json"), JSON.stringify(manifest), "utf8");
   return target;
 }
 
@@ -357,7 +357,7 @@ describe("asg extensions setup", () => {
       id: "demo-plugin",
       name: "Demo Plugin",
       version: "1.0.0",
-      api_version: 1,
+      api_version: 2,
       provides: ["fetch"],
       entry: "index.mjs",
     });

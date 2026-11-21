@@ -4,9 +4,7 @@ export {
   EXTENSION_ID_RE,
   EXTENSION_PROVIDES,
   EXTENSION_VERSION_RE,
-  MANIFEST_FILE_NAMES,
   ManifestError,
-  V1_MANIFEST_FILE,
   V2_MANIFEST_FILE,
   isValidEntryName,
   isValidExtensionId,
@@ -17,11 +15,9 @@ export type {
   ExtensionBackend,
   ExtensionFetchChannel,
   ExtensionManifest,
-  ExtensionManifestV1,
   ExtensionManifestV2,
   ExtensionProvide,
   ExtensionSearchEngine,
-  ManifestFileName,
 } from "./manifest.js";
 
 export {

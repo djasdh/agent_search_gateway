@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchPluginRegistry, createFetchRegistry, registeredPlugins } from "../src/fetch/plugins/index.js";
-import { createFetchPluginRegistry } from "../src/fetch/plugins/registry.js";
-import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "../src/fetch/plugins/types.js";
+import {
+  createFetchProviderRegistry,
+  fetchProviderRegistry,
+  findProvider,
+  registeredProviders,
+} from "../src/fetch/plugins/index.js";
+import type {
+  FetchProvider,
+  FetchProviderContext,
+  FetchProviderResult,
+} from "../src/fetch/plugins/types.js";
 import { directFetch } from "../src/fetch/direct.js";
 import { getSecretAtPath } from "../src/settings/index.js";
 import {
@@ -13,7 +21,7 @@ import {
 } from "./helpers/settings.js";
 import type { Settings } from "../src/settings/index.js";
 
-function ctx(overrides: DeepPartial<Settings> = {}): FetchPluginContext {
+function ctx(overrides: DeepPartial<Settings> = {}): FetchProviderContext {
   const settings = makeSettings(overrides);
   const secrets = makeSecrets();
   return {
@@ -23,11 +31,11 @@ function ctx(overrides: DeepPartial<Settings> = {}): FetchPluginContext {
   };
 }
 
-function fakePlugin(
+function fakeProvider(
   id: string,
   match: (url: URL) => boolean,
-  extra: Partial<FetchPlugin> = {},
-): FetchPlugin {
+  extra: Partial<FetchProvider> = {},
+): FetchProvider {
   return {
     id,
     platform: id,
@@ -35,99 +43,101 @@ function fakePlugin(
     displayName: id,
     capabilities: [],
     match,
-    async fetch(): Promise<FetchPluginResult> {
+    async fetch(): Promise<FetchProviderResult> {
       return { ok: true, status: 200, contentType: "text/plain", bytes: Buffer.from("ok") };
     },
     ...extra,
   };
 }
 
-describe("FetchPluginRegistry", () => {
+describe("FetchProviderRegistry", () => {
   it("按注册顺序返回第一个命中者", () => {
-    const first = fakePlugin("first", () => true);
-    const second = fakePlugin("second", () => true);
-    const registry = createFetchPluginRegistry([first, second]);
+    const first = fakeProvider("first", () => true);
+    const second = fakeProvider("second", () => true);
+    const registry = createFetchProviderRegistry([first, second]);
     expect(registry.find(new URL("https://example.com/"), ctx())?.id).toBe("first");
     expect(registry.list().map((p) => p.id)).toEqual(["first", "second"]);
   });
 
   it("重复 id 构造时直接抛错", () => {
-    expect(() => createFetchPluginRegistry([fakePlugin("dup", () => true), fakePlugin("dup", () => true)])).toThrow(
-      /重复/,
-    );
+    expect(() =>
+      createFetchProviderRegistry([fakeProvider("dup", () => true), fakeProvider("dup", () => true)]),
+    ).toThrow(/重复/);
   });
 
-  it("enabled=false 的插件被跳过", () => {
-    const disabled = fakePlugin("disabled", () => true, { enabled: () => false });
-    const enabled = fakePlugin("enabled", () => true);
-    const registry = createFetchPluginRegistry([disabled, enabled]);
+  it("enabled=false 的 provider 被跳过", () => {
+    const disabled = fakeProvider("disabled", () => true, { enabled: () => false });
+    const enabled = fakeProvider("enabled", () => true);
+    const registry = createFetchProviderRegistry([disabled, enabled]);
     expect(registry.find(new URL("https://example.com/"), ctx())?.id).toBe("enabled");
   });
 
-  it("match 抛错不影响后续插件", () => {
-    const broken = fakePlugin("broken", () => {
+  it("match 抛错不影响后续 provider", () => {
+    const broken = fakeProvider("broken", () => {
       throw new Error("boom");
     });
-    const ok = fakePlugin("ok", () => true);
-    const registry = createFetchPluginRegistry([broken, ok]);
+    const ok = fakeProvider("ok", () => true);
+    const registry = createFetchProviderRegistry([broken, ok]);
     expect(registry.find(new URL("https://example.com/"), ctx())?.id).toBe("ok");
   });
 
   it("enabled 抛错也视为跳过", () => {
-    const broken = fakePlugin("broken", () => true, {
+    const broken = fakeProvider("broken", () => true, {
       enabled: () => {
         throw new Error("boom");
       },
     });
-    const ok = fakePlugin("ok", () => true);
-    const registry = createFetchPluginRegistry([broken, ok]);
+    const ok = fakeProvider("ok", () => true);
+    const registry = createFetchProviderRegistry([broken, ok]);
     expect(registry.find(new URL("https://example.com/"), ctx())?.id).toBe("ok");
   });
 
-  it("核心不再内置平台插件", () => {
-    expect(registeredPlugins()).toEqual([]);
-    expect(fetchPluginRegistry.list()).toEqual([]);
+  it("核心不再内置平台 provider", () => {
+    expect(registeredProviders()).toEqual([]);
+    expect(fetchProviderRegistry.list()).toEqual([]);
   });
 });
 
-describe("createFetchRegistry 外部插件合并", () => {
-  it("外部插件按加载顺序注册", () => {
-    const external = fakePlugin("weibo", () => true, {
+describe("createFetchProviderRegistry 外部扩展合并", () => {
+  it("外部 provider 按加载顺序注册", () => {
+    const external = fakeProvider("weibo", () => true, {
       displayName: "外部微博",
       capabilities: ["post"],
     });
 
-    const registry = createFetchRegistry([external]);
+    const registry = createFetchProviderRegistry([external]);
 
-    expect(registry.list().map((plugin) => plugin.id)).toEqual(["weibo"]);
+    expect(registry.list().map((provider) => provider.id)).toEqual(["weibo"]);
     expect(registry.list()[0]).toBe(external);
     expect(registry.find(new URL("https://example.com/"), ctx())).toBe(external);
   });
 
-  it("多个外部插件保持加载顺序", () => {
-    const first = fakePlugin("demo", () => true);
-    const second = fakePlugin("another", () => true);
-    const registry = createFetchRegistry([first, second]);
+  it("多个外部 provider 保持加载顺序，findProvider 反映默认注册表", () => {
+    const first = fakeProvider("demo", () => true);
+    const second = fakeProvider("another", () => true);
+    const registry = createFetchProviderRegistry([first, second]);
 
-    expect(registry.list().map((plugin) => plugin.id)).toEqual(["demo", "another"]);
+    expect(registry.list().map((provider) => provider.id)).toEqual(["demo", "another"]);
     expect(registry.find(new URL("https://example.com/"), ctx())?.id).toBe("demo");
+    // 默认注册表没有注入外部 provider，findProvider 不应命中。
+    expect(findProvider(new URL("https://example.com/"), ctx())).toBeUndefined();
   });
 
-  it("没有外部插件时注册表为空", () => {
-    const registry = createFetchRegistry([]);
+  it("没有外部 provider 时注册表为空", () => {
+    const registry = createFetchProviderRegistry([]);
     expect(registry.list()).toEqual([]);
     expect(registry.find(new URL("https://example.com/"), ctx())).toBeUndefined();
   });
 
-  it("外部插件自身 id 重复时构造抛错", () => {
-    expect(() => createFetchRegistry([fakePlugin("dup", () => true), fakePlugin("dup", () => true)])).toThrow(
-      /重复/,
-    );
+  it("外部 provider 自身 id 重复时构造抛错", () => {
+    expect(() =>
+      createFetchProviderRegistry([fakeProvider("dup", () => true), fakeProvider("dup", () => true)]),
+    ).toThrow(/重复/);
   });
 });
 
-describe("directFetch 插件回退", () => {
-  it("禁用 Bilibili 后不再走插件分支，改走通用抓取", async () => {
+describe("directFetch provider 回退", () => {
+  it("禁用 Bilibili 后不再走 provider 分支，改走通用抓取", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("stub network"));
     try {
       const settings = makeSettings(

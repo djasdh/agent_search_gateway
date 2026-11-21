@@ -1,9 +1,7 @@
 /** 第三方扩展 manifest 的解析。
  *
- * 过渡版本只负责“声明 + 安装薄层”：
- * - V1：asg-plugin.json，保持旧字段；
- * - V2：asg-extension.json，带 backends / fetch_channels / search_engines；
- * - V2 字段本版本只用于安装与展示，运行时不启用 V2。
+ * 0.4.0 起只接受 V2：`asg-extension.json` + `api_version: 2`。
+ * V1 `asg-plugin.json` 不再解析；调用方遇到旧文件时应提示用户升级插件。
  *
  * 这一层不做严格校验：未知字段忽略，只保留字段类型、必填项和路径安全约束。
  */
@@ -23,16 +21,8 @@ export const EXTENSION_PROVIDES = ["search", "fetch"] as const;
 
 export type ExtensionProvide = (typeof EXTENSION_PROVIDES)[number];
 
-/** V2 manifest 文件名。 */
+/** V2 manifest 文件名；0.4.0 起是唯一接受的 manifest 文件。 */
 export const V2_MANIFEST_FILE = "asg-extension.json";
-
-/** V1 manifest 文件名。 */
-export const V1_MANIFEST_FILE = "asg-plugin.json";
-
-/** 发现顺序：优先 V2，回退 V1。 */
-export const MANIFEST_FILE_NAMES = [V2_MANIFEST_FILE, V1_MANIFEST_FILE] as const;
-
-export type ManifestFileName = (typeof MANIFEST_FILE_NAMES)[number];
 
 /** manifest 声明的后端：只描述身份与旧名，不承载代码。 */
 const backendSchema = z.object({
@@ -87,12 +77,6 @@ const commonFields = {
   config_schema: z.unknown().optional(),
 };
 
-const manifestV1Schema = z.object({
-  ...commonFields,
-  api_version: z.literal(1, "api_version 必须是 1"),
-  platform: z.string().optional(),
-});
-
 const manifestV2Schema = z.object({
   ...commonFields,
   api_version: z.literal(2, "api_version 必须是 2"),
@@ -101,16 +85,13 @@ const manifestV2Schema = z.object({
   search_engines: z.array(searchEngineSchema).optional(),
 });
 
-type ParsedManifestV1 = z.infer<typeof manifestV1Schema>;
 type ParsedManifestV2 = z.infer<typeof manifestV2Schema>;
 
-export type ExtensionManifestV1 = Omit<ParsedManifestV1, "config_schema"> & {
-  config_schema?: Record<string, unknown>;
-};
 export type ExtensionManifestV2 = Omit<ParsedManifestV2, "config_schema"> & {
   config_schema?: Record<string, unknown>;
 };
-export type ExtensionManifest = ExtensionManifestV1 | ExtensionManifestV2;
+/** 0.4.0 起 manifest 只有 V2 一种形态。 */
+export type ExtensionManifest = ExtensionManifestV2;
 
 /** manifest 解析/校验错误：消息已包含中文说明，调用方负责包装成 CLI 错误。 */
 export class ManifestError extends Error {
@@ -149,7 +130,7 @@ function formatIssues(error: z.ZodError): string {
 }
 
 /** 解析 manifest 文本；失败抛 ManifestError（中文说明）。 */
-export function parseManifest(text: string, file: string = V1_MANIFEST_FILE): ExtensionManifest {
+export function parseManifest(text: string, file: string = V2_MANIFEST_FILE): ExtensionManifest {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -159,12 +140,16 @@ export function parseManifest(text: string, file: string = V1_MANIFEST_FILE): Ex
     );
   }
 
-  const apiVersion =
-    typeof raw === "object" && raw !== null && (raw as { api_version?: unknown }).api_version === 2
-      ? 2
-      : 1;
-  const schema = apiVersion === 2 ? manifestV2Schema : manifestV1Schema;
-  const result = schema.safeParse(raw);
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const apiVersion = (raw as { api_version?: unknown }).api_version;
+    if (apiVersion !== 2) {
+      throw new ManifestError(
+        `${file} 校验失败：0.4.0 起只接受 asg-extension.json（api_version: 2）；V1 插件请升级到 0.2.x`,
+      );
+    }
+  }
+
+  const result = manifestV2Schema.safeParse(raw);
   if (!result.success) {
     throw new ManifestError(`${file} 校验失败：${formatIssues(result.error)}`);
   }

@@ -1,11 +1,11 @@
 /** 第三方扩展的运行时加载：扫描 `data/extensions`，按 manifest 读取入口模块。
  *
  * 约定（见 docs/extensions.md）：
+ * - 只加载 `asg-extension.json`（api_version: 2）；只有 `asg-plugin.json` 的旧安装会报错；
  * - 目录名必须等于 `manifest.id`，否则视为坏包；
- * - V1（`asg-plugin.json`）与 V2（`asg-extension.json`）都正常加载；
  * - `provides: ["fetch"]` 读取命名导出 `fetch`，`provides: ["search"]` 读取 `engine`；
- * - V2 的 `fetch_channels` 只用于派生 platform，`search_engines` 只补展示名；
- * - V2 manifest 声明 `backends` 时，把后端目录与状态注入插件上下文；
+ * - `fetch_channels` 只用于派生 platform，`search_engines` 只补展示名；
+ * - manifest 声明 `backends` 时，把后端目录与状态注入插件上下文；
  * - 单个插件加载失败只记录 error + warn，不影响网关启动与其它插件。
  */
 
@@ -15,25 +15,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { EngineProvider, EngineProviderContext } from "../engines/provider.js";
-import type { FetchPlugin, FetchPluginContext } from "../fetch/plugins/types.js";
+import type { FetchProvider, FetchProviderContext } from "../fetch/plugins/types.js";
 import type { Logger } from "../logger.js";
 import { hasCategory } from "../search/category.js";
 import { resolveSecretValue } from "../settings/secret-ref.js";
 import { deepFreeze, resolvePluginConfig, type PluginConfig } from "./config.js";
 import { extensionsDir } from "./install.js";
-import {
-  MANIFEST_FILE_NAMES,
-  V1_MANIFEST_FILE,
-  V2_MANIFEST_FILE,
-  parseManifest,
-  type ExtensionManifest,
-} from "./manifest.js";
+import { V2_MANIFEST_FILE, parseManifest, type ExtensionManifest } from "./manifest.js";
 import { createPluginBackends, type PluginBackends } from "./paths.js";
 
 export { extensionsDir };
 
+/** V1 文件名只用于诊断旧安装，不再参与发现或解析。 */
+const LEGACY_MANIFEST_FILE = "asg-plugin.json";
+const LEGACY_UPGRADE_MESSAGE = `未找到 ${V2_MANIFEST_FILE}；0.4.0 起不再加载 ${LEGACY_MANIFEST_FILE}，请执行 asg extensions install <repo>`;
+
 export interface LoadedExtensions {
-  fetch: FetchPlugin[];
+  fetch: FetchProvider[];
   engines: EngineProvider[];
   errors: Array<{ id: string; error: string }>;
 }
@@ -47,7 +45,7 @@ export interface LoadExtensionsOptions {
   /** gateway.yaml 的 `extensions` 段：routing 按完整 engineId 索引，config 按 manifest id 索引。
    *  CLI 可能传未经 schema 校验的原始值。 */
   extensionConfig?: Record<string, unknown>;
-  /** secrets.yaml 的 `extensions` 段：同时兼容完整 engineId 与 manifest id（manifest id 优先）。 */
+  /** secrets.yaml 的 `extensions` 段：只按 manifest id 读取（`extensions.<manifest id>.<name>`）。 */
   extensionSecrets?: Record<string, unknown>;
   /** 解析 `env:NAME` 用的环境变量，默认 process.env。 */
   env?: NodeJS.ProcessEnv;
@@ -79,27 +77,27 @@ function fail(
   logger?.warn(`扩展 ${id} 加载失败：${message}`);
 }
 
-/** V2 从第一个 fetch channel 的 `platform:channel` 前缀派生 platform。 */
+/** 从第一个 fetch channel 的 `platform:channel` 前缀派生 platform。 */
 function fetchChannelPlatform(manifest: ExtensionManifest): string | undefined {
-  if (manifest.api_version !== 2) return undefined;
   const id = manifest.fetch_channels?.[0]?.id;
   if (!id) return undefined;
   const index = id.indexOf(":");
   return index > 0 ? id.slice(0, index) : undefined;
 }
 
-/** 用 manifest 覆盖 fetch 插件的身份元数据，函数实现与可选字段原样保留。 */
-function toFetchPlugin(manifest: ExtensionManifest, raw: Record<string, unknown>): FetchPlugin {
+/** 用 manifest 覆盖 fetch provider 的身份元数据，函数实现与可选字段原样保留。 */
+function toFetchProvider(
+  manifest: ExtensionManifest,
+  raw: Record<string, unknown>,
+): FetchProvider {
   if (typeof raw.match !== "function" || typeof raw.fetch !== "function") {
     throw new Error("provides 含 fetch，但入口导出的 fetch 缺少 match / fetch 函数");
   }
 
-  // manifest 的 platform 只作为 fetch 插件的平台回退；插件自身声明优先。
-  const declaredPlatform =
-    manifest.api_version === 2 ? fetchChannelPlatform(manifest) : manifest.platform;
+  // platform 优先级：入口声明 > fetch_channels[0] 的 platform 前缀 > manifest.id。
   const platform =
     (nonEmptyString(raw.platform) ? raw.platform : undefined) ??
-    declaredPlatform ??
+    fetchChannelPlatform(manifest) ??
     manifest.id;
 
   const capabilities = Array.isArray(raw.capabilities)
@@ -107,7 +105,7 @@ function toFetchPlugin(manifest: ExtensionManifest, raw: Record<string, unknown>
     : [];
 
   return {
-    ...(raw as unknown as FetchPlugin),
+    ...(raw as unknown as FetchProvider),
     id: manifest.id,
     name: manifest.id,
     displayName: manifest.name,
@@ -131,11 +129,8 @@ function toEngineProvider(manifest: ExtensionManifest, raw: Record<string, unkno
     throw new Error("provides 含 search，但入口导出的 engine 缺少 runtime");
   }
 
-  // V2 manifest 的 search_engines 只补展示名；入口 engine 仍是运行时事实。
-  const declaredEngine =
-    manifest.api_version === 2
-      ? manifest.search_engines?.find((item) => item.id === raw.id)
-      : undefined;
+  // manifest 的 search_engines 只补展示名；入口 engine 仍是运行时事实。
+  const declaredEngine = manifest.search_engines?.find((item) => item.id === raw.id);
 
   return {
     ...(raw as unknown as EngineProvider),
@@ -161,13 +156,10 @@ interface ExtensionRouting {
   hotCategory?: string;
 }
 
-/** 按 key 取 `extensions` 段里的条目；非对象一律忽略（CLI 可能传未校验值）。
- *
- * routing 用完整 engineId 作 key，config / secrets 还额外支持 manifest id。
- */
-function extensionEntry(value: unknown, engineId: string): Record<string, unknown> | undefined {
+/** 按 key 取 `extensions` 段里的条目；非对象一律忽略（CLI 可能传未校验值）。 */
+function extensionEntry(value: unknown, key: string): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
-  const entry = value[engineId];
+  const entry = value[key];
   return isRecord(entry) ? entry : undefined;
 }
 
@@ -197,25 +189,6 @@ function pluginSecretsOf(
     if (value.trim().length > 0) out[name] = value;
   }
   return out;
-}
-
-/** 合并 `extensions.<engineId>` 与 `extensions.<manifest id>` 两个密钥段。
- *
- * manifest id 是新的规范键，优先级高于 engineId（旧的 engineId 键继续兼容）。
- * 解析后仍为空的值不注入，因此空值不会清掉旧键里已有的非空值。
- */
-function mergePluginSecrets(
-  options: LoadExtensionsOptions,
-  engineId: string | undefined,
-  manifestId: string,
-): Record<string, string> {
-  const env = options.env ?? process.env;
-  const legacy =
-    engineId === undefined
-      ? {}
-      : pluginSecretsOf(extensionEntry(options.extensionSecrets, engineId), env);
-  const current = pluginSecretsOf(extensionEntry(options.extensionSecrets, manifestId), env);
-  return deepFreeze({ ...legacy, ...current });
 }
 
 /**
@@ -293,7 +266,7 @@ function withExtensionOptions(
   };
 }
 
-/** 按 engineId 读路由，再把调用方解析好的密钥/私有配置注入 provider。 */
+/** routing 按完整 engineId 读；密钥/私有配置由调用方按 manifest id 解析后注入。 */
 function applyExtensionOptions(
   provider: EngineProvider,
   options: LoadExtensionsOptions,
@@ -332,37 +305,37 @@ function applyExtensionOptions(
 }
 
 /**
- * 用 `extensions` 段包装 fetch 插件：只增强 `enabled` / `available` / `fetch`。
+ * 用 `extensions` 段包装 fetch provider：只增强 `enabled` / `available` / `fetch`。
  *
  * `match(url)` 保持原函数原样（契约要求它只读 URL、不读配置）；
  * 没有 `enabled` / `available` 时不凭空补一个。
  */
 function withFetchOptions(
-  plugin: FetchPlugin,
+  provider: FetchProvider,
   pluginConfig: PluginConfig,
   pluginSecrets: Record<string, string>,
   hasConfig: boolean,
   pluginBackends: PluginBackends | undefined,
-): FetchPlugin {
+): FetchProvider {
   const hasSecrets = Object.keys(pluginSecrets).length > 0;
   const hasBackends = pluginBackends !== undefined;
-  if (!hasConfig && !hasSecrets && !hasBackends) return plugin;
+  if (!hasConfig && !hasSecrets && !hasBackends) return provider;
 
-  const augment = (ctx: FetchPluginContext): FetchPluginContext => ({
+  const augment = (ctx: FetchProviderContext): FetchProviderContext => ({
     ...ctx,
     ...(hasConfig ? { pluginConfig } : {}),
     ...(hasSecrets ? { pluginSecrets } : {}),
     ...(hasBackends ? { pluginBackends } : {}),
   });
 
-  const enabled = plugin.enabled;
-  const available = plugin.available;
+  const enabled = provider.enabled;
+  const available = provider.available;
 
   return {
-    ...plugin,
-    ...(enabled ? { enabled: (ctx: FetchPluginContext) => enabled(augment(ctx)) } : {}),
-    ...(available ? { available: (ctx: FetchPluginContext) => available(augment(ctx)) } : {}),
-    fetch: (url: URL, ctx: FetchPluginContext) => plugin.fetch(url, augment(ctx)),
+    ...provider,
+    ...(enabled ? { enabled: (ctx: FetchProviderContext) => enabled(augment(ctx)) } : {}),
+    ...(available ? { available: (ctx: FetchProviderContext) => available(augment(ctx)) } : {}),
+    fetch: (url: URL, ctx: FetchProviderContext) => provider.fetch(url, augment(ctx)),
   };
 }
 
@@ -396,25 +369,29 @@ export async function loadExtensions(
     const dirName = entry.name;
     const dir = path.join(baseDir, dirName);
 
-    const manifestFile = MANIFEST_FILE_NAMES.find((name) =>
-      fsSync.existsSync(path.join(dir, name)),
-    );
-    if (!manifestFile) {
-      fail(result, logger, dirName, `未找到 ${V2_MANIFEST_FILE} 或 ${V1_MANIFEST_FILE}`);
+    const manifestPath = path.join(dir, V2_MANIFEST_FILE);
+    if (!fsSync.existsSync(manifestPath)) {
+      const onlyLegacy = fsSync.existsSync(path.join(dir, LEGACY_MANIFEST_FILE));
+      fail(
+        result,
+        logger,
+        dirName,
+        onlyLegacy ? LEGACY_UPGRADE_MESSAGE : `未找到 ${V2_MANIFEST_FILE}`,
+      );
       continue;
     }
 
     let text: string;
     try {
-      text = await fs.readFile(path.join(dir, manifestFile), "utf8");
+      text = await fs.readFile(manifestPath, "utf8");
     } catch (error) {
-      fail(result, logger, dirName, `无法读取 ${manifestFile}：${messageOf(error)}`);
+      fail(result, logger, dirName, `无法读取 ${V2_MANIFEST_FILE}：${messageOf(error)}`);
       continue;
     }
 
     let manifest: ExtensionManifest;
     try {
-      manifest = parseManifest(text, manifestFile);
+      manifest = parseManifest(text, V2_MANIFEST_FILE);
     } catch (error) {
       fail(result, logger, dirName, error);
       continue;
@@ -437,10 +414,7 @@ export async function loadExtensions(
       manifest.config_schema !== undefined ||
       (isRecord(rawConfig) && Object.keys(rawConfig).length > 0);
     const pluginConfig = deepFreeze(resolved.value);
-    const backendIds =
-      manifest.api_version === 2
-        ? (manifest.backends ?? []).map((backend) => backend.id)
-        : [];
+    const backendIds = (manifest.backends ?? []).map((backend) => backend.id);
     const pluginBackends =
       backendIds.length > 0
         ? createPluginBackends(root, manifest.id, backendIds)
@@ -458,10 +432,10 @@ export async function loadExtensions(
       continue;
     }
 
-    // 密钥兼容旧的 engineId 键；只有 search 插件能提供 engineId，fetch-only 默认只认 manifest id。
-    const engineId =
-      isRecord(mod.engine) && nonEmptyString(mod.engine.id) ? mod.engine.id : undefined;
-    const pluginSecrets = mergePluginSecrets(opts, engineId, manifest.id);
+    // 0.4.0 起密钥只认 `extensions.<manifest id>.<name>`；routing 仍按完整 engineId 读取。
+    const pluginSecrets = deepFreeze(
+      pluginSecretsOf(extensionEntry(opts.extensionSecrets, manifest.id), opts.env ?? process.env),
+    );
 
     if (manifest.provides.includes("fetch")) {
       if (!isRecord(mod.fetch)) {
@@ -470,7 +444,7 @@ export async function loadExtensions(
         fail(result, logger, manifest.id, `fetch 插件 id 重复：${manifest.id}`);
       } else {
         try {
-          const plugin = toFetchPlugin(manifest, mod.fetch);
+          const plugin = toFetchProvider(manifest, mod.fetch);
           result.fetch.push(
             withFetchOptions(plugin, pluginConfig, pluginSecrets, hasConfig, pluginBackends),
           );

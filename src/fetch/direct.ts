@@ -1,8 +1,8 @@
 import type { Logger } from "../logger.js";
 import { baseContentType, classifyContentType, formatBytes, looksLikeText } from "./convert.js";
-import { fetchPluginRegistry } from "./plugins/index.js";
-import type { FetchPluginRegistry } from "./plugins/registry.js";
-import type { FetchPlugin, FetchPluginContext, FetchPluginResult } from "./plugins/types.js";
+import { fetchProviderRegistry } from "./plugins/index.js";
+import type { FetchProviderRegistry } from "./plugins/registry.js";
+import type { FetchProvider, FetchProviderContext, FetchProviderResult } from "./plugins/types.js";
 import { isPrivateHost } from "./ssrf.js";
 import type { FetchPluginSecrets, FetchPluginSettings, FetchSettings } from "../settings/index.js";
 
@@ -13,8 +13,8 @@ export interface DirectFetchDeps {
     settings: FetchPluginSettings;
     secrets: FetchPluginSecrets;
     getSecret: (path: string) => string | undefined;
-    /** 进程级合并后的注册表（含外部插件）；缺省用内置注册表。 */
-    registry?: FetchPluginRegistry;
+    /** 进程级合并后的注册表（含外部扩展）；缺省用内置注册表。 */
+    registry?: FetchProviderRegistry;
   };
 }
 
@@ -48,11 +48,11 @@ export interface DirectFetchResult {
   /** kind=binary（PDF 也走这里，由 service 决定抽正文还是落盘） */
   bytes?: Buffer;
   truncated?: boolean;
-  /** 命中的取件插件名（可观测）。 */
+  /** 命中的取件 provider 名（可观测）。 */
   plugin?: string;
   errorKind?: FetchErrorKind;
   errorMessage?: string;
-  /** 插件自定义错误码（如 BILI_AUTH_REQUIRED）；service 会优先用它而不是 FETCH_NETWORK。 */
+  /** Provider 自定义错误码（如 BILI_AUTH_REQUIRED）；service 会优先用它而不是 FETCH_NETWORK。 */
   errorCode?: string;
 }
 
@@ -161,16 +161,16 @@ async function readLimited(
   return { buf: Buffer.concat(chunks), truncated: false };
 }
 
-/** 命中取件插件时的分支：插件自管请求与重定向，网关只看产物。 */
-async function fetchViaPlugin(
-  plugin: FetchPlugin,
+/** 命中取件 provider 时的分支：provider 自管请求与重定向，网关只看产物。 */
+async function fetchViaProvider(
+  provider: FetchProvider,
   url: URL,
-  ctx: FetchPluginContext,
+  ctx: FetchProviderContext,
 ): Promise<DirectFetchResult> {
-  const base = { plugin: plugin.name, finalUrl: url.toString() } as const;
-  let r: FetchPluginResult;
+  const base = { plugin: provider.name, finalUrl: url.toString() } as const;
+  let r: FetchProviderResult;
   try {
-    r = await plugin.fetch(url, ctx);
+    r = await provider.fetch(url, ctx);
   } catch (err) {
     return {
       ok: false,
@@ -187,12 +187,12 @@ async function fetchViaPlugin(
     const detail = r.errorMessage ?? "取件失败";
     return {
       ok: false,
-      plugin: plugin.name,
+      plugin: provider.name,
       status,
       contentType: r.contentType,
       finalUrl,
       errorKind,
-      errorMessage: r.errorCode ? `[${r.errorCode}] ${detail}` : `插件 ${plugin.name}: ${detail}`,
+      errorMessage: r.errorCode ? `[${r.errorCode}] ${detail}` : `插件 ${provider.name}: ${detail}`,
       errorCode: r.errorCode,
     };
   }
@@ -200,7 +200,7 @@ async function fetchViaPlugin(
   if (r.html !== undefined) {
     return {
       ok: true,
-      plugin: plugin.name,
+      plugin: provider.name,
       status: r.status,
       contentType: r.contentType ?? "text/html",
       finalUrl,
@@ -215,7 +215,7 @@ async function fetchViaPlugin(
     if (categorized === "html") {
       return {
         ok: true,
-        plugin: plugin.name,
+        plugin: provider.name,
         status: r.status,
         contentType,
         finalUrl,
@@ -226,7 +226,7 @@ async function fetchViaPlugin(
     if (categorized === "text") {
       return {
         ok: true,
-        plugin: plugin.name,
+        plugin: provider.name,
         status: r.status,
         contentType,
         finalUrl,
@@ -236,7 +236,7 @@ async function fetchViaPlugin(
     }
     return {
       ok: true,
-      plugin: plugin.name,
+      plugin: provider.name,
       status: r.status,
       contentType,
       finalUrl,
@@ -249,13 +249,13 @@ async function fetchViaPlugin(
     ok: false,
     ...base,
     errorKind: "unsupported_type",
-    errorMessage: `插件 ${plugin.name} 未返回可识别产物`,
+    errorMessage: `插件 ${provider.name} 未返回可识别产物`,
   };
 }
 
 /**
  * 直接 HTTP 抓取目标 URL。
- * - 先查取件插件注册表，命中即交给插件（跳过 SSRF 与通用重定向链）
+ * - 先查取件 provider 注册表，命中即交给 provider（跳过 SSRF 与通用重定向链）
  * - 通用路径按 Content-Type 分派：html / text（轻转换在 service 层）/ 其余二进制
  * - SSRF 防护：blockPrivateIps=true 时拒绝私网主机（初始 URL 与每跳重定向）
  * - 跟随重定向（≤MAX_REDIRECTS）；二进制超 max_download_bytes 直接报 too_large
@@ -279,18 +279,18 @@ export async function directFetch(
     return { ok: false, errorKind: "invalid_url", errorMessage: credentialMessage };
   }
 
-  // 取件插件优先（ADR-0007 D5）：匹配表由插件提供，网关无条件信任。
+  // 取件 provider 优先（ADR-0007 D5）：匹配表由 provider 提供，网关无条件信任。
   // enabled 由注册表统一过滤，禁用后自动回退通用抓取。
-  const pluginCtx: FetchPluginContext = {
+  const providerCtx: FetchProviderContext = {
     settings: deps.plugins.settings,
     secrets: deps.plugins.secrets,
     getSecret: deps.plugins.getSecret,
     logger,
   };
-  const plugin = (deps.plugins.registry ?? fetchPluginRegistry).find(url, pluginCtx);
-  if (plugin) {
-    logger?.debug(`fetch plugin matched: ${plugin.name} ${url.toString()}`);
-    return await fetchViaPlugin(plugin, url, pluginCtx);
+  const provider = (deps.plugins.registry ?? fetchProviderRegistry).find(url, providerCtx);
+  if (provider) {
+    logger?.debug(`fetch provider matched: ${provider.name} ${url.toString()}`);
+    return await fetchViaProvider(provider, url, providerCtx);
   }
 
   // SSRF 防护（初始 URL；重定向目标在循环内同样检查）

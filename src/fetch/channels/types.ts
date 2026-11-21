@@ -1,7 +1,7 @@
 /**
  * 抓取通道契约（第二步）。
  *
- * 平台对象（FetchPlugin）负责 URL 匹配与取件编排；通道对象（FetchChannel）
+ * 平台对象（FetchProvider）负责 URL 匹配与取件编排；通道对象（FetchChannel）
  * 描述具体后端：CLI 命令、HTTP 服务或会话型后端。当前通道主要是**静态元数据**，
  * 运行时执行仍由各插件内部的 router / CLI / HTTP 实现完成。
  *

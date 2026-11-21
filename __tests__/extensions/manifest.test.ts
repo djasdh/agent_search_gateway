@@ -11,7 +11,7 @@ function manifest(overrides: Record<string, unknown> = {}): string {
     id: "demo-fetch",
     name: "Demo Fetch",
     version: "1.2.3",
-    api_version: 1,
+    api_version: 2,
     provides: ["fetch"],
     entry: "index.mjs",
     ...overrides,
@@ -25,7 +25,7 @@ describe("插件 manifest", () => {
       id: "demo-fetch",
       name: "Demo Fetch",
       version: "1.2.3",
-      api_version: 1,
+      api_version: 2,
       provides: ["fetch"],
       entry: "index.mjs",
       description: "示例插件",
@@ -59,11 +59,18 @@ describe("插件 manifest", () => {
     expect(isValidExtensionVersion("1.2.3-beta.1")).toBe(true);
   });
 
-  it("api_version 接受 1 或 2", () => {
-    expect(parseManifest(manifest()).api_version).toBe(1);
-    expect(parseManifest(manifest({ api_version: 2 })).api_version).toBe(2);
-    expect(() => parseManifest(manifest({ api_version: 3 }))).toThrow(/api_version/);
-    expect(() => parseManifest(manifest({ api_version: "1" }))).toThrow(/api_version/);
+  it("0.4.0 起只接受 api_version 2", () => {
+    expect(parseManifest(manifest()).api_version).toBe(2);
+    for (const apiVersion of [1, 3, "2", undefined]) {
+      expect(
+        () => parseManifest(manifest({ api_version: apiVersion })),
+        String(apiVersion),
+      ).toThrow(/0\.4\.0 起只接受 asg-extension\.json（api_version: 2）/);
+    }
+  });
+
+  it("默认按 asg-extension.json 报告 V1 错误", () => {
+    expect(() => parseManifest(manifest({ api_version: 1 }))).toThrow(/asg-extension\.json/);
   });
 
   it("provides 只接受 search/fetch", () => {
@@ -94,7 +101,7 @@ describe("插件 manifest", () => {
   });
 });
 
-describe("插件 manifest 的 backends（api_version 2）", () => {
+describe("插件 manifest 的 backends", () => {
   const backend = {
     id: "demo-api",
     name: "Demo API",
@@ -102,22 +109,19 @@ describe("插件 manifest 的 backends（api_version 2）", () => {
     aliases: ["demo_old", "demo-old"],
   };
 
-  it("api_version 2 + 合法 backends 通过并原样保留", () => {
-    const parsed = parseManifest(
-      manifest({ api_version: 2, backends: [backend] }),
-    );
+  it("合法 backends 通过并原样保留", () => {
+    const parsed = parseManifest(manifest({ backends: [backend] }));
     expect(parsed.backends).toEqual([backend]);
   });
 
-  it("没有 backends 时 1 和 2 都通过", () => {
+  it("没有 backends 时不产生该字段", () => {
     expect(parseManifest(manifest())).not.toHaveProperty("backends");
-    expect(parseManifest(manifest({ api_version: 2 }))).not.toHaveProperty("backends");
   });
 
   it("校验 backend id 规则", () => {
     for (const id of ["ab", "ABC", "-abc", "abc-", ".abc", "a".repeat(65), "中文"]) {
       expect(
-        () => parseManifest(manifest({ api_version: 2, backends: [{ ...backend, id }] })),
+        () => parseManifest(manifest({ backends: [{ ...backend, id }] })),
         id,
       ).toThrow(/backends\[\]\.id|重复 id/);
     }
@@ -125,17 +129,16 @@ describe("插件 manifest 的 backends（api_version 2）", () => {
 
   it("校验 backend name 必填", () => {
     expect(() =>
-      parseManifest(manifest({ api_version: 2, backends: [{ id: "demo-api", name: "" }] })),
+      parseManifest(manifest({ backends: [{ id: "demo-api", name: "" }] })),
     ).toThrow(/backends\[\]\.name/);
   });
 
 });
 
 describe("插件 manifest 的 fetch_channels 与 search_engines", () => {
-  it("V2 原样保留通道和搜索源", () => {
+  it("原样保留通道和搜索源", () => {
     const parsed = parseManifest(
       manifest({
-        api_version: 2,
         fetch_channels: [
           {
             id: "example:cli",
@@ -154,11 +157,8 @@ describe("插件 manifest 的 fetch_channels 与 search_engines", () => {
         ],
       }),
     );
-    expect(parsed.api_version).toBe(2);
-    if (parsed.api_version === 2) {
-      expect(parsed.fetch_channels).toHaveLength(1);
-      expect(parsed.search_engines).toHaveLength(1);
-    }
+    expect(parsed.fetch_channels).toHaveLength(1);
+    expect(parsed.search_engines).toHaveLength(1);
   });
 });
 
@@ -182,14 +182,14 @@ describe("插件 manifest 的 config_schema", () => {
     },
   };
 
-  it("没有 config_schema 的旧 manifest 解析结果不变", () => {
+  it("没有 config_schema 时解析结果不含该字段", () => {
     const parsed = parseManifest(manifest());
     expect(parsed).not.toHaveProperty("config_schema");
     expect(parsed).toEqual({
       id: "demo-fetch",
       name: "Demo Fetch",
       version: "1.2.3",
-      api_version: 1,
+      api_version: 2,
       provides: ["fetch"],
       entry: "index.mjs",
     });

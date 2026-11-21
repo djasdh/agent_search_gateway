@@ -167,9 +167,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** V1 没有 backends；只有 V2 manifest 才返回声明。 */
+/** 返回 manifest 声明的后端（0.4.0 起只有 V2 manifest）。 */
 function declaredBackends(manifest: ExtensionManifest | undefined): ExtensionBackend[] {
-  return manifest?.api_version === 2 ? (manifest.backends ?? []) : [];
+  return manifest?.backends ?? [];
 }
 
 /** list 输出里的后端条目：manifest 声明 + `backends.json` 中的运行状态（只读文件）。 */

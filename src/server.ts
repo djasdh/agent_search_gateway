@@ -9,8 +9,8 @@ import { getSecretAtPath, ssrfOf, type GatewaySettings, type Secrets, type Setti
 import { fetchAdList, isAdListStale, startAdListScheduler } from "./filter/adlist.js";
 import { buildDomainFilter, type DomainFilter } from "./filter/domain-filter.js";
 import { createFlareSolverrClient, type FlareSolverrClient } from "./fetch/flaresolverr.js";
-import { createFetchRegistry } from "./fetch/plugins/index.js";
-import type { FetchPluginRegistry } from "./fetch/plugins/registry.js";
+import { createFetchProviderRegistry } from "./fetch/plugins/index.js";
+import type { FetchProviderRegistry } from "./fetch/plugins/registry.js";
 import { createFetchService } from "./fetch/service.js";
 import { FetchStore } from "./fetch/store.js";
 import { loadExtensions } from "./extensions/loader.js";
@@ -96,7 +96,7 @@ export function getFetchStore(settings: Settings, logger: Logger): FetchStore {
 // ---- 第三方扩展：进程级单例 ----
 // `createServer` 每个 MCP 会话都会调用；缓存 Promise 避免重复 import 同一插件文件。
 interface SharedExtensions {
-  registry: FetchPluginRegistry;
+  registry: FetchProviderRegistry;
   engines: EngineProvider[];
 }
 
@@ -121,7 +121,7 @@ function getExtensions(
         logger.info(
           `第三方扩展已加载：fetch ${loaded.fetch.length} 个，engine ${loaded.engines.length} 个`,
         );
-        return { registry: createFetchRegistry(loaded.fetch), engines: loaded.engines };
+        return { registry: createFetchProviderRegistry(loaded.fetch), engines: loaded.engines };
       })
       .catch((err) => {
         // 加载器本身异常（非单个插件问题）时回退内置实现，不让网关启动失败。
@@ -129,7 +129,7 @@ function getExtensions(
         logger.warn(
           `第三方扩展加载失败，继续使用内置实现：${err instanceof Error ? err.message : String(err)}`,
         );
-        return { registry: createFetchRegistry([]), engines: [] };
+        return { registry: createFetchProviderRegistry([]), engines: [] };
       });
   }
   return sharedExtensions;

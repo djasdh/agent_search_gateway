@@ -11,7 +11,7 @@ import { createFlareSolverrClient, type FlareSolverrClient } from "./flaresolver
 import { htmlToMarkdown } from "./html2md.js";
 import { pdfToText } from "./pdf.js";
 import type { FetchStore } from "./store.js";
-import type { FetchPluginRegistry } from "./plugins/registry.js";
+import type { FetchProviderRegistry } from "./plugins/registry.js";
 import {
   ssrfOf,
   type BrowserSettings,
@@ -51,8 +51,8 @@ export interface FetchServiceDeps {
     settings: FetchPluginSettings;
     secrets: FetchPluginSecrets;
     getSecret: (path: string) => string | undefined;
-    /** 进程级合并后的注册表（含外部插件）；缺省用内置注册表。 */
-    registry?: FetchPluginRegistry;
+    /** 进程级合并后的注册表（含外部扩展）；缺省用内置注册表。 */
+    registry?: FetchProviderRegistry;
   };
 }
 

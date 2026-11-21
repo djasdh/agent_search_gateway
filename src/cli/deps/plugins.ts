@@ -1,6 +1,6 @@
 /** 外部后端（插件）的列表、安装与卸载。
  *
- * P1 起后端身份完全由已安装插件的 manifest 决定（`asg-plugin.json → backends`），
+ * 后端身份完全由已安装插件的 manifest 决定（`asg-extension.json → backends`），
  * 核心不再内置任何平台名/旧安装名。`asg plugins` 只是兼容 facade：
  *
  * 1. 先在 `data/extensions/*` 的 manifest backends 中按 backend.id / aliases 精确匹配；
