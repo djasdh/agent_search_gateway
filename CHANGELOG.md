@@ -2,14 +2,32 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
-## [Unreleased]
+## [0.4.0] - 2026-11-21
+
+### Breaking
+
+- 扩展运行时只接受 `asg-extension.json`（`api_version: 2`）；`asg-plugin.json` 不再被发现或加载。V1 插件需先升级到 0.2.x。
+- 删除核心平台配置段：`gateway.yaml` 的顶层 `bilibili` / `weibo`、`search.weibo`，以及 `secrets.yaml` 的 `bilibili`。旧配置启动会给出迁移提示；安装器在切换 `data/current` 前中止并保留旧版本。
+- 扩展密钥只认 `extensions.<manifest id>.<name>`；`extensions.<engineId>.<name>` 不再注入，`asg engines secret` 改为写 manifest id。
+- `FetchPlugin` / `FetchPluginContext` / `FetchPluginResult` 等类型统一改名为 `FetchProvider*`。
+
+### Changed
+
+- `asg plugins`、`scripts/backends/` 与 `scripts/migrations/` 在 0.4.0 保留为 deprecated 兼容层，计划 0.4.1 删除。
+- `0.3.x.plugins.json` 的 weibo 目标改为 `0.2.2`；bilibili / cnki 为 `0.2.0`。
+- 扩展引擎启用路径与依赖优先读 `enabledPathV2` / `requiresV2`；官方 weibo 0.2.2 已适配：开关写 `extensions.weibo.config.search.enabled`，依赖插件总开关 `extensions.weibo.config.enabled`。
+- 插件文档与示例切到 V2；V1 指南保留在 `skills/asg-plugin-authoring/legacy/`。
 
 ### Removed
 
-- 删除核心平台配置段：`gateway.yaml` 的顶层 `bilibili` / `weibo`、`search.weibo`，以及 `secrets.yaml` 的 `bilibili`。
 - 删除 `BILIBILI_HTTP_TOKEN` 环境变量映射；平台密钥改走 `extensions.<id>.<name>`。
 - 删除 `src/fetch/platforms.ts`、`src/fetch/channels/registry.ts` 与对应静态平台/通道测试；平台与通道改由扩展 manifest 声明。
 - 删除 `FetchPlugin.settingsKey`。
+
+### Upgrade
+
+- 从 0.3.x 升级：先升级到 0.3.11，运行 `node scripts/migrations/0.3.x.mjs --phase config`，把官方插件升级到 bilibili/cnki `0.2.0`、weibo `0.2.2`，再安装 0.4.0。
+- 使用 `asg update` 的用户同样要先完成上述迁移；`install.sh` 升级会在检测到旧配置时中止，不会切换当前版本。
 
 ## [0.3.11] - 2026-11-21
 
