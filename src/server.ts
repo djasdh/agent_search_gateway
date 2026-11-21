@@ -158,35 +158,38 @@ function rebuildDomainFilter(adFilter: Settings["ad_filter"], logger: Logger): D
 }
 
 /**
- * 进程启动时只执行一次：初次拉取 adlist、构建过滤器、启动定期刷新。
- * 由 createServer 的首次调用触发；后续会话 await 同一个 Promise。
+ * 进程级 adlist 运行时：立即用磁盘上已有的 hosts 构建过滤器并启动定期刷新；
+ * 过期/缺失时的下载放到后台，**绝不阻塞 MCP 会话初始化**。
+ * （慢网下 2.3MB hosts 下载曾把 initialize 拖到 30–60s，触发客户端连接超时。）
+ * 由 createServer 的首次调用触发；后续会话复用同一份调度器与过滤器。
  */
-function initAdListOnce(adFilter: Settings["ad_filter"], logger: Logger): Promise<void> {
-  if (!adListInit) {
-    adListInit = (async () => {
-      // adlist 自动更新：缺失/过期时先拉取（保证广告过滤就绪）
-      if (adFilter.auto_update && adFilter.enabled && adFilter.level !== "off") {
-        if (isAdListStale(adFilter)) {
-          const ok = await fetchAdList(adFilter);
-          if (ok) {
-            logger.info(`adlist 已更新: ${adFilter.hosts_file}`);
-          } else {
-            logger.warn("adlist 拉取失败，使用本地/空列表");
-          }
-        }
-      }
+function startAdListRuntime(adFilter: Settings["ad_filter"], logger: Logger): void {
+  // 先用现有文件（可能为空）建过滤器，保证首个会话能立刻搜索。
+  getDomainFilter(adFilter, logger);
+
+  if (!stopAdListScheduler) {
+    stopAdListScheduler = startAdListScheduler(adFilter, logger, () => {
       rebuildDomainFilter(adFilter, logger);
-      if (!stopAdListScheduler) {
-        stopAdListScheduler = startAdListScheduler(adFilter, logger, () => {
-          rebuildDomainFilter(adFilter, logger);
-        });
-      }
-    })().catch((err) => {
-      adListInit = null; // 初始化失败允许下一次会话重试
-      throw err;
     });
   }
-  return adListInit;
+
+  if (adListInit) return;
+  if (!adFilter.auto_update || !adFilter.enabled || adFilter.level === "off") return;
+  if (!isAdListStale(adFilter)) return;
+
+  adListInit = fetchAdList(adFilter)
+    .then((ok) => {
+      if (ok) {
+        logger.info(`adlist 已更新: ${adFilter.hosts_file}`);
+        rebuildDomainFilter(adFilter, logger);
+      } else {
+        logger.warn("adlist 拉取失败，使用本地/空列表");
+      }
+    })
+    .catch((err) => {
+      adListInit = null; // 异常才允许下一次会话重试；失败（返回 false）不重试，避免反复阻塞
+      logger.warn(`adlist 拉取异常: ${err instanceof Error ? err.message : String(err)}`);
+    });
 }
 
 /** 每次搜索时现取当前过滤器：adlist 刷新后所有会话立即看到新值。 */
@@ -353,8 +356,8 @@ export async function createServer(settings: Settings, secrets: Secrets, logger:
   );
 
   // 进程级资源：只初始化一次，所有 MCP 会话共享。
-  // adlist 初始化 + 定期刷新、signal 清理都不再放在会话内（见 closeGatewayRuntime）。
-  await initAdListOnce(settings.ad_filter, logger);
+  // adlist 过滤器同步就绪、下载在后台进行，不让慢网阻塞会话初始化（见 startAdListRuntime）。
+  startAdListRuntime(settings.ad_filter, logger);
   const semantic = await getSemanticRuntime(settings, secrets, logger);
   const browserPool = getBrowserPool(settings, secrets, logger);
   const fetchStore = getFetchStore(settings, logger);

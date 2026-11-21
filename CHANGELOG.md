@@ -2,6 +2,12 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
+## [Unreleased]
+
+### Fixed
+
+- adlist 刷新改为后台进行：`createServer` 先用磁盘上现有 hosts 建过滤器并立即返回，过期时的下载不再阻塞 MCP 会话初始化（慢网下拉 2.3MB hosts 曾把 `initialize` 拖到 30–60s，触发客户端连接超时）。新增回归测试覆盖"下载悬而未决时 `initialize` 已完成"。
+
 ## [0.3.9] - 2026-11-21
 
 ### Added
