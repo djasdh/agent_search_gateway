@@ -493,10 +493,12 @@ function secretDependencies(record: EngineRecord): SecretDependency[] {
       dep = { raw: requirement, kind: "builtin", path };
     } else if (requirement.startsWith("secret:")) {
       const name = requirement.slice("secret:".length);
+      // 0.4.0 起运行期只读 manifest id；engineId 仅用于 routing。
+      const owner = record.pluginId ?? record.id;
       dep = {
         raw: requirement,
         kind: "extension",
-        path: ["extensions", record.id, name],
+        path: ["extensions", owner, name],
         name,
       };
     }

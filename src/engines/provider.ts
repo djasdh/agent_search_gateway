@@ -95,12 +95,22 @@ export interface EngineProvider {
   displayName: string;
   routing(ctx: EngineProviderContext): string[];
   requires?: string[];
+  /**
+   * 0.4.0+ 优先使用的依赖声明；0.3.x 仍读 `requires`。
+   * 与 `requires` 并存是官方 weibo 0.2.2 的过渡形态。
+   */
+  requiresV2?: readonly string[];
   /** 前置条件是否满足（密钥 / 上游能力开关）；不包含引擎自身的 enabled。 */
   available(ctx: EngineProviderContext): boolean;
   /** 引擎自身的启用状态；缺省视为 true（如以图搜图源由 sources 数组决定）。 */
   enabled?(ctx: EngineProviderContext): boolean;
   /** gateway.search / gateway.upstream 源的启用布尔值在 gateway.yaml 中的路径；由 GatewayStore 写回。 */
   enabledPath?: readonly string[];
+  /**
+   * 0.4.0+ 优先使用的启用路径；0.3.x 仍读 `enabledPath`。
+   * 与 `enabledPath` 并存是官方 weibo 0.2.2 的过渡形态。
+   */
+  enabledPathV2?: readonly string[];
   runtime?: EngineRuntime;
   /** auth 错误时追加的提示，如微博需要登录。 */
   authHint?: string;

@@ -171,16 +171,11 @@ function requirementSatisfied(
   }
   if (requirement.startsWith("secret:")) {
     const name = requirement.slice("secret:".length);
-    // 与运行期 loader 一致：manifest id 是新的规范键，旧的 engineId 键继续兼容。
-    // 先查 manifest id，但解析后为空时仍回退旧键。
-    const keys = pluginId === undefined ? [engineId] : [pluginId, engineId];
-    for (const key of keys) {
-      const value = dig(ctx.secrets, ["extensions", key, name]);
-      if (typeof value !== "string") continue;
-      // secrets.yaml 支持 env:NAME；判断“是否配置”必须看解析后的值。
-      if (resolveSecretValue(value, process.env).trim().length > 0) return true;
-    }
-    return false;
+    // 0.4.0 起只认 manifest id；engineId 仅用于 routing。
+    const key = pluginId ?? engineId;
+    const value = dig(ctx.secrets, ["extensions", key, name]);
+    // secrets.yaml 支持 env:NAME；判断“是否配置”必须看解析后的值。
+    return typeof value === "string" && resolveSecretValue(value, process.env).trim().length > 0;
   }
   if (requirement.startsWith("config:")) {
     const value = dig(ctx.configPlain, requirement.slice("config:".length).split("."));

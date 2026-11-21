@@ -40,7 +40,8 @@ function reverseImageRecords(ctx: EngineContext, providerCtx: EngineProviderCont
       available: provider.available(providerCtx),
       routing: provider.routing(providerCtx),
     };
-    if (provider.requires && provider.requires.length > 0) record.requires = [...provider.requires];
+    const requires = provider.requiresV2 ?? provider.requires;
+    if (requires && requires.length > 0) record.requires = [...requires];
     if (provider.pluginId) record.pluginId = provider.pluginId;
     return record;
   });
@@ -61,7 +62,8 @@ function gatewayProviderRecords(
       available: provider.available(providerCtx),
       routing: provider.routing(providerCtx),
     };
-    if (provider.requires && provider.requires.length > 0) record.requires = [...provider.requires];
+    const requires = provider.requiresV2 ?? provider.requires;
+    if (requires && requires.length > 0) record.requires = [...requires];
     if (provider.pluginId) record.pluginId = provider.pluginId;
     return record;
   });
@@ -116,12 +118,14 @@ export class GatewayStore implements EngineStore {
       const provider =
         engineProvider(change.group, change.name) ??
         missingProvider(`${change.group}:${change.name}`);
-      if (!provider.enabledPath) {
+      // 0.4.0+ 优先写 V2 路径；0.3.x 扩展只有旧字段时继续按旧路径写。
+      const enabledPath = provider.enabledPathV2 ?? provider.enabledPath;
+      if (!enabledPath) {
         throw new Error(`引擎 provider 缺少 enabledPath：${provider.id}`);
       }
       const current = provider.enabled?.(providerCtx) ?? true;
       if (current === change.enabled) continue;
-      setYamlPath(ctx.config.doc, [...provider.enabledPath], change.enabled);
+      setYamlPath(ctx.config.doc, [...enabledPath], change.enabled);
       changed.push(provider.id);
     }
 

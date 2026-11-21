@@ -102,47 +102,62 @@ function writeDeepseekSecret(root: string, value: string): void {
 /** 安装一个最小 search 扩展，用于 gateway.search 的 route / secret 测试。 */
 function writeSearchExtension(
   root: string,
-  options: { dir: string; name: string; requires?: string[] },
+  options: {
+    dir: string;
+    name: string;
+    requires?: string[];
+    requiresV2?: string[];
+    enabledPath?: string[];
+    enabledPathV2?: string[];
+  },
 ): void {
   const dir = path.join(root, "data", "extensions", options.dir);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
-    path.join(dir, "asg-plugin.json"),
+    path.join(dir, "asg-extension.json"),
     JSON.stringify({
       id: options.dir,
       name: options.name,
       version: "1.0.0",
-      api_version: 1,
+      api_version: 2,
       provides: ["search"],
       entry: "index.mjs",
     }),
     "utf8",
   );
-  const requires = options.requires ? `  requires: ${JSON.stringify(options.requires)},\n` : "";
-  fs.writeFileSync(
-    path.join(dir, "index.mjs"),
-    [
-      "export const engine = {",
-      `  id: "gateway.search:${options.name}",`,
-      '  group: "gateway.search",',
-      `  name: ${JSON.stringify(options.name)},`,
-      '  kind: "gateway",',
-      `  displayName: ${JSON.stringify(`Demo ${options.name}`)},`,
-      "  routing: () => ['category:demo'],",
-      "  available: () => true,",
-      "  enabled: () => true,",
-      `  enabledPath: ["extensions", ${JSON.stringify(options.dir)}, "config", "enabled"],`,
-      ...(requires ? [requires.trimEnd()] : []),
-      "  runtime: {",
-      '    kind: "search",',
-      "    plan: () => undefined,",
-      "    search: async () => ({ ok: false, error: { kind: 'api', message: 'x' }, latencyMs: 0 }),",
-      "  },",
-      "};",
-      "",
-    ].join("\n"),
-    "utf8",
+  const enabledPath = options.enabledPath ?? [
+    "extensions",
+    options.dir,
+    "config",
+    "enabled",
+  ];
+  const lines = [
+    "export const engine = {",
+    `  id: "gateway.search:${options.name}",`,
+    '  group: "gateway.search",',
+    `  name: ${JSON.stringify(options.name)},`,
+    '  kind: "gateway",',
+    `  displayName: ${JSON.stringify(`Demo ${options.name}`)},`,
+    "  routing: () => ['category:demo'],",
+    "  available: () => true,",
+    "  enabled: () => true,",
+    `  enabledPath: ${JSON.stringify(enabledPath)},`,
+  ];
+  if (options.enabledPathV2) {
+    lines.push(`  enabledPathV2: ${JSON.stringify(options.enabledPathV2)},`);
+  }
+  if (options.requires) lines.push(`  requires: ${JSON.stringify(options.requires)},`);
+  if (options.requiresV2) lines.push(`  requiresV2: ${JSON.stringify(options.requiresV2)},`);
+  lines.push(
+    "  runtime: {",
+    '    kind: "search",',
+    "    plan: () => undefined,",
+    "    search: async () => ({ ok: false, error: { kind: 'api', message: 'x' }, latencyMs: 0 }),",
+    "  },",
+    "};",
+    "",
   );
+  fs.writeFileSync(path.join(dir, "index.mjs"), lines.join("\n"), "utf8");
 }
 
 function read(root: string, relative: string): string {
@@ -874,7 +889,7 @@ describe("第三方扩展密钥键（manifest id / engineId）", () => {
     expect(restartCalls).toHaveLength(0);
   });
 
-  it("旧 engineId 键仍满足 secret: 依赖", async () => {
+  it("0.4.0 起旧 engineId 键不再满足 secret: 依赖", async () => {
     const root = makeRoot();
     writeSearchExtension(root, {
       dir: "demo-search",
@@ -888,10 +903,10 @@ describe("第三方扩展密钥键（manifest id / engineId）", () => {
 
     await expect(
       enginesRun({ root, reporter, rest: ["enable", "gateway.search:demo"] }),
-    ).resolves.toMatchObject({ data: { changed: ["gateway.search:demo"] } });
+    ).rejects.toMatchObject({ code: "MISSING_SECRET", exitCode: 4 });
   });
 
-  it("manifest id 键为空时回退旧 engineId 键", async () => {
+  it("manifest id 键为空时也不回退旧 engineId 键", async () => {
     const root = makeRoot();
     writeSearchExtension(root, {
       dir: "demo-search",
@@ -908,7 +923,77 @@ describe("第三方扩展密钥键（manifest id / engineId）", () => {
 
     await expect(
       enginesRun({ root, reporter, rest: ["enable", "gateway.search:demo"] }),
-    ).resolves.toMatchObject({ data: { changed: ["gateway.search:demo"] } });
+    ).rejects.toMatchObject({ code: "MISSING_SECRET", exitCode: 4 });
+  });
+});
+
+describe("扩展引擎 V2 元数据（0.4.0 过渡）", () => {
+  it("同时有旧/新 enabledPath 时写 V2 路径", async () => {
+    const root = makeRoot();
+    writeSearchExtension(root, {
+      dir: "weibo",
+      name: "weibo",
+      enabledPath: ["search", "weibo", "enabled"],
+      enabledPathV2: ["extensions", "weibo", "config", "search", "enabled"],
+    });
+
+    await enginesRun({ root, reporter, rest: ["disable", "gateway.search:weibo"] });
+
+    const config = parse(root, "gateway.yaml") as {
+      search: { weibo?: unknown };
+      extensions: Record<string, { config: { search: { enabled: boolean } } }>;
+    };
+    expect(config.extensions.weibo!.config.search.enabled).toBe(false);
+    expect(config.search.weibo).toBeUndefined();
+  });
+
+  it("只有旧 enabledPath 时仍写旧路径", async () => {
+    const root = makeRoot();
+    writeSearchExtension(root, {
+      dir: "legacy",
+      name: "legacy",
+      enabledPath: ["extensions", "legacy", "config", "enabled"],
+    });
+
+    await enginesRun({ root, reporter, rest: ["disable", "gateway.search:legacy"] });
+
+    const config = parse(root, "gateway.yaml") as {
+      extensions: Record<string, { config: { enabled: boolean } }>;
+    };
+    expect(config.extensions.legacy!.config.enabled).toBe(false);
+  });
+
+  it("requires 优先取 requiresV2", async () => {
+    const root = makeRoot();
+    writeSearchExtension(root, {
+      dir: "weibo",
+      name: "weibo",
+      requires: ["config:search.weibo.enabled"],
+      requiresV2: ["config:extensions.weibo.config.ready"],
+      enabledPath: ["search", "weibo", "enabled"],
+      enabledPathV2: ["extensions", "weibo", "config", "search", "enabled"],
+    });
+
+    let error: unknown;
+    try {
+      await enginesRun({ root, reporter, rest: ["enable", "gateway.search:weibo"] });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("extensions.weibo.config.ready");
+    expect(message).not.toContain("search.weibo.enabled");
+    expect(restartCalls).toHaveLength(0);
+
+    // 满足 V2 的 config 依赖后即可启用（旧 requires 仍不满足）。
+    write(
+      path.join(root, "gateway.yaml"),
+      `${read(root, "gateway.yaml")}extensions:\n  weibo:\n    config:\n      ready: true\n`,
+    );
+    await expect(
+      enginesRun({ root, reporter, rest: ["enable", "gateway.search:weibo"] }),
+    ).resolves.toMatchObject({ data: { changed: ["gateway.search:weibo"] } });
   });
 });
 
@@ -957,7 +1042,7 @@ describe("engines secret", () => {
     const secrets = parse(root, "secrets.yaml") as {
       extensions: Record<string, Record<string, string>>;
     };
-    expect(secrets.extensions["gateway.search:multi"]).toEqual({ cookie: "cookie-value" });
+    expect(secrets.extensions["multi-search"]).toEqual({ cookie: "cookie-value" });
   });
 
   it("未知 --name 报 MISSING_SECRET", async () => {
@@ -999,7 +1084,7 @@ describe("engines secret", () => {
     let secrets = parse(root, "secrets.yaml") as {
       extensions: Record<string, Record<string, string>>;
     };
-    expect(secrets.extensions["gateway.search:demo"]).toEqual({ cookie: "cookie-value" });
+    expect(secrets.extensions["demo-search"]).toEqual({ cookie: "cookie-value" });
 
     await enginesRun({
       root,
