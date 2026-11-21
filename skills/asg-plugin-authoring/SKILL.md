@@ -8,6 +8,9 @@ description: 为 agent-search-gateway（asg）编写、迁移或发布第三方�
 本 skill 指导你从零产出一个可安装、可发布的 asg 插件仓库。所有结论以
 `agent-search-gateway`（下称“网关”）当前的运行期约定为准。
 
+> V2 专用指南见 [`v2skills.md`](v2skills.md)。V1 流程继续保留在本文与
+> [`references/`](references/)，不会因为新增 V2 文档而删除。
+
 ## 何时使用
 
 - 用户要为某个站点写 **取件插件**（`fetch`），例如接管 `example.com/article/...`。
@@ -629,6 +632,7 @@ asg extensions install djasdh/agent-search-gateway-plugin-cnki@0.1.0
 
 ## 参考文件
 
+- [`v2skills.md`](v2skills.md)：V2 专用指南（manifest、fetch_channels、search_engines、backends、pluginBackends、迁移）。
 - `references/manifest.md`：manifest 字段、`api_version` 1/2、`backends`、校验规则、安装目录与资产。
 - `references/setup.md`：`setup(ctx)` 完整契约、路径/API、幂等与旧目录迁移。
 - `references/fetch-plugin.md`：`FetchPlugin` 全字段、结果形状、上下文与错误约定。
