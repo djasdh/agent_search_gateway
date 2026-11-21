@@ -196,7 +196,6 @@ const SECRET_ENV_KEYS = [
   "EMBEDDING_API_KEY",
   "SAUCENAO_API_KEY",
   "DEEPSEEK_API_KEY",
-  "BILIBILI_HTTP_TOKEN",
   "BROWSER_PROXY_PASSWORD",
 ] as const;
 const savedSecretEnv = new Map<string, string | undefined>();

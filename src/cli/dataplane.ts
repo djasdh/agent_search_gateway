@@ -193,10 +193,7 @@ export function parseToolFailure(text: string, fallbackCode: string): ToolFailur
 const DATA_PLANE_ERROR_PREFIXES = [
   "SEARCH_",
   "FETCH_",
-  "BILI_",
-  "WEIBO_",
   "BROWSER_",
-  "CNKI_",
 ] as const;
 
 export function looksLikeToolFailure(text: string): boolean {

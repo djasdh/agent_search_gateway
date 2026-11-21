@@ -52,7 +52,7 @@ export interface DirectFetchResult {
   plugin?: string;
   errorKind?: FetchErrorKind;
   errorMessage?: string;
-  /** Provider 自定义错误码（如 BILI_AUTH_REQUIRED）；service 会优先用它而不是 FETCH_NETWORK。 */
+  /** Provider 自定义错误码；service 会优先用它而不是 FETCH_NETWORK。 */
   errorCode?: string;
 }
 

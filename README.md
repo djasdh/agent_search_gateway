@@ -62,11 +62,9 @@ gateway (本服务, :3000/mcp)
 | `FETCH_INVALID_URL` | 非法 URL | 放弃 |
 | `BROWSER_UNAVAILABLE` | 浏览器未启用 | 检查配置 |
 | `BROWSER_ERROR` | 浏览器操作失败 | 可重试 |
-| `BILI_UNAVAILABLE` | B 站后端未启用/未安装/连不上 | 看 `extensions.bilibili.config.routes` 与安装提示 |
-| `BILI_AUTH_REQUIRED` | 评论第 2 页或专栏全文需要登录态 | 按提示登录对应后端 |
-| `BILI_CAPABILITY_UNSUPPORTED` | 当前没有支持该动作的后端 | 换/加后端 |
-| `BILI_RISK_CONTROL` | B 站 403/412 风控 | 降频、换出口，稍后重试 |
-| `BILI_INVALID_URL` | 目标不合法 | 检查 URL 是否为视频/专栏页 |
+
+> 平台插件可以返回自己的错误码（例如 `BILI_*`、`WEIBO_*`、`CNKI_*`），由对应插件仓库文档说明；
+> 核心只负责透传，不再内置这些平台常量。
 
 ## B 站抓取
 
@@ -127,13 +125,10 @@ export OPENCLI_CDP_ENDPOINT=http://127.0.0.1:9222
 
 旧版 Chrome 也可以改用 Browser Bridge 扩展（`opencli doctor` 显示扩展已连接即可）。
 
-3. 安装 post adapter override（给 `weibo post` 补图片外链字段）：
+3. 扩展配置里把 `extensions.weibo.config.enabled` 设为 `true`（`asg extensions config weibo --set enabled=true`）。
 
-```bash
-./scripts/install-weibo-override.sh
-```
-
-4. 扩展配置里把 `extensions.weibo.config.enabled` 设为 `true`（`asg extensions config weibo --set enabled=true`）。
+> 0.4.1 起不再随网关分发 OpenCLI 的 post adapter override。需要 `weibo post` 的图片外链字段时，
+> 请按 OpenCLI 官方文档自行安装对应 adapter。
 
 ### 请求
 

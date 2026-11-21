@@ -21,21 +21,13 @@ export const ErrorCodes = {
   FETCH_HTTP_STATUS: "FETCH_HTTP_STATUS",
   FETCH_NETWORK: "FETCH_NETWORK",
   FETCH_INVALID_URL: "FETCH_INVALID_URL",
-  // bilibili（fetch 插件的专用错误码，避免被包成 FETCH_NETWORK）
-  BILI_UNAVAILABLE: "BILI_UNAVAILABLE",
-  BILI_AUTH_REQUIRED: "BILI_AUTH_REQUIRED",
-  BILI_CAPABILITY_UNSUPPORTED: "BILI_CAPABILITY_UNSUPPORTED",
-  BILI_RISK_CONTROL: "BILI_RISK_CONTROL",
-  BILI_INVALID_URL: "BILI_INVALID_URL",
   // browser
   BROWSER_UNAVAILABLE: "BROWSER_UNAVAILABLE",
   BROWSER_ERROR: "BROWSER_ERROR",
 } as const;
 
-export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
-
-/** 给错误文本加 [CODE] 前缀（仅当没有前缀时） */
-export function withCode(code: ErrorCode, text: string): string {
+/** 给错误文本加 [CODE] 前缀（仅当没有前缀时）。插件可传自定义错误码。 */
+export function withCode(code: string, text: string): string {
   if (text.startsWith("[")) return text;
   return `[${code}] ${text}`;
 }

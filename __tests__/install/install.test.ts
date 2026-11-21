@@ -550,7 +550,7 @@ describe("引导脚本语法", () => {
 
   it("shell 变量不紧跟非 ASCII 字符（防中文括号吞进变量名）", () => {
     // bash 3.2（macOS 自带）把全角括号算进变量名，`$VAR（` 会变成 `VAR（` → unbound variable。
-    const files = ["scripts/install.sh", "scripts/install-weibo-override.sh", "scripts/bench.sh"];
+    const files = ["scripts/install.sh", "scripts/bench.sh"];
     const pattern = /\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]/;
     for (const file of files) {
       const text = readFileSync(join(ROOT, file), "utf8");

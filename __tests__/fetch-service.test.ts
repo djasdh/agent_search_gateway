@@ -7,6 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFetchService, redactUrl, capOutput } from "../src/fetch/service.js";
 import type { FetchServiceDeps } from "../src/fetch/service.js";
 import type { BrowserPool } from "../src/browser/pool.js";
+import { createFetchProviderRegistry } from "../src/fetch/plugins/registry.js";
+import type { FetchProvider } from "../src/fetch/plugins/types.js";
 import { FetchStore } from "../src/fetch/store.js";
 import { deepMerge, fetchServiceDeps, makeSettings, type DeepPartial } from "./helpers/settings.js";
 import { makeMinimalPdf } from "./helpers/pdf-fixture.js";
@@ -182,6 +184,31 @@ describe("createFetchService 路由", () => {
     const r = await svc.fetch({ url: `${targetBase}/shell` });
     expect(r.ok).toBe(true);
     expect(fsCalled).toBe(before + 1);
+  });
+
+  it("插件自定义错误码原样透传", async () => {
+    const cfg = makeConfig();
+    const provider: FetchProvider = {
+      id: "custom",
+      platform: "custom",
+      name: "custom",
+      displayName: "Custom",
+      capabilities: ["page"],
+      match: () => true,
+      fetch: async () => ({
+        ok: false,
+        errorCode: "CUSTOM_DENIED",
+        errorMessage: "插件拒绝",
+      }),
+    };
+    cfg.plugins.registry = createFetchProviderRegistry([provider]);
+    const svc = createFetchService(cfg, silentLogger);
+    const r = await svc.fetch({ url: "https://custom.example/page" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.code).toBe("CUSTOM_DENIED");
+      expect(r.text).toContain("[CUSTOM_DENIED]");
+    }
   });
 
   it("404 → 不升级，返回 FETCH_HTTP_STATUS", async () => {

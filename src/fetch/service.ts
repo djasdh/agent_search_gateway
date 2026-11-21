@@ -32,7 +32,8 @@ export interface FetchParams {
 
 export interface FetchOutcome {
   ok: boolean;
-  code?: (typeof ErrorCodes)[keyof typeof ErrorCodes];
+  /** 内置错误码或插件自定义错误码。 */
+  code?: string;
   text: string;
 }
 
@@ -407,11 +408,10 @@ export function createFetchService(
       }
 
       const msg = direct.errorMessage ?? "未知错误";
-      // 插件自定义错误码（Bilibili 等）优先，避免被包成 FETCH_NETWORK
+      // 插件自定义错误码优先，避免被包成 FETCH_NETWORK。
       if (direct.errorCode) {
-        const pluginCode = direct.errorCode as (typeof ErrorCodes)[keyof typeof ErrorCodes];
         logger.debug(`fetch failed (plugin code ${direct.errorCode}): ${logUrl}`);
-        return { ok: false, code: pluginCode, text: withCode(pluginCode, msg) };
+        return { ok: false, code: direct.errorCode, text: withCode(direct.errorCode, msg) };
       }
       let code: FetchOutcome["code"] = ErrorCodes.FETCH_NETWORK;
       if (direct.errorKind === "blocked_private_ip") code = ErrorCodes.FETCH_BLOCKED;

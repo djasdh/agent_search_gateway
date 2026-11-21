@@ -32,7 +32,7 @@ export interface FetchProviderResult {
   /** Provider 自行产出的 HTML（会被 html2md 渲染）。 */
   html?: string;
   errorMessage?: string;
-  /** Provider 自定义错误码（如 CNKI 的 NOT_SUBSCRIBED），透传到错误文本前缀。 */
+  /** Provider 自定义错误码（如 NOT_SUBSCRIBED），透传到错误文本前缀。 */
   errorCode?: string;
 }
 

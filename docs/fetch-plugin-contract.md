@@ -184,6 +184,7 @@ errorResult(code, message, { status?, finalUrl?, hint? });
 
 - 成功：`ok: true` + `bytes` 或 `html` 二选一；
 - 失败：`ok: false` + `errorCode` / `errorMessage`，可选 `status`、`finalUrl`；
+  核心不再白名单平台错误码，`errorCode` 原样透传并加 `[CODE]` 前缀；
 - 插件自管 headers / cookies / 会话 / 逐跳重定向，网关只看产物。
 
 ## 新增一个抓取 Provider
