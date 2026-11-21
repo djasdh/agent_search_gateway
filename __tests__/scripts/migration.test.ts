@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -384,6 +386,66 @@ describe("0.3.x 迁移脚本：阶段顺序", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     expect(calls(root).some((call) => call.cmd === "setup" && call.id === "weibo")).toBe(true);
+  });
+});
+
+describe("0.3.x 迁移脚本：配置写回权限", () => {
+  function modeOf(file: string): number {
+    return statSync(file).mode & 0o777;
+  }
+
+  function writeConfigs(root: string): void {
+    writeFileSync(
+      join(root, "gateway.yaml"),
+      [
+        "gateway:",
+        "  host: 127.0.0.1",
+        "  port: 3999",
+        "bilibili:",
+        "  enabled: true",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(root, "secrets.yaml"),
+      ["bilibili:", "  http:", "    token: secret-token", ""].join("\n"),
+    );
+  }
+
+  it("config 阶段写回 secrets.yaml 后仍是 0600，gateway.yaml 保留自定义 mode", () => {
+    const root = makeRoot();
+    writeConfigs(root);
+    chmodSync(join(root, "gateway.yaml"), 0o640);
+    chmodSync(join(root, "secrets.yaml"), 0o600);
+    installPlugin(root, { id: "weibo", version: "0.2.0" });
+    const manifest = writeChecklist([{ id: "weibo", repo: WEIBO, version: "0.2.0" }]);
+
+    const result = run(root, ["--phase", "config"], { manifest });
+    expect(result.status, result.stderr).toBe(0);
+
+    expect(modeOf(join(root, "gateway.yaml"))).toBe(0o640);
+    expect(modeOf(join(root, "secrets.yaml"))).toBe(0o600);
+
+    const gateway = parse(readFileSync(join(root, "gateway.yaml"), "utf8"));
+    expect(gateway.bilibili).toBeUndefined();
+    expect(gateway.extensions.bilibili.config.enabled).toBe(true);
+    const secrets = parse(readFileSync(join(root, "secrets.yaml"), "utf8"));
+    expect(secrets.extensions.bilibili.token).toBe("secret-token");
+  });
+
+  it("secrets.yaml 原为 0644 时 config 阶段收紧到 0600", () => {
+    const root = makeRoot();
+    writeConfigs(root);
+    chmodSync(join(root, "secrets.yaml"), 0o644);
+    installPlugin(root, { id: "weibo", version: "0.2.0" });
+    const manifest = writeChecklist([{ id: "weibo", repo: WEIBO, version: "0.2.0" }]);
+
+    const result = run(root, ["--phase", "config"], { manifest });
+    expect(result.status, result.stderr).toBe(0);
+
+    expect(modeOf(join(root, "secrets.yaml"))).toBe(0o600);
+    const secrets = parse(readFileSync(join(root, "secrets.yaml"), "utf8"));
+    expect(secrets.extensions.bilibili.token).toBe("secret-token");
   });
 });
 

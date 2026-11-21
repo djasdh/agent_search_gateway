@@ -145,16 +145,55 @@ function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function writeTextAtomic(file, text) {
+/** 文件不存在时的默认权限：配置文件 0644，密钥文件 0600。 */
+const DEFAULT_FILE_MODES = {
+  "gateway.yaml": 0o644,
+  "secrets.yaml": 0o600,
+};
+const FALLBACK_FILE_MODE = 0o644;
+
+/** 迁移写回 secrets.yaml 时的强制权限（安全优先，避免 group/other 可读）。 */
+const SECRETS_FILE_MODE = 0o600;
+
+function defaultModeFor(file) {
+  return DEFAULT_FILE_MODES[path.basename(file)] ?? FALLBACK_FILE_MODE;
+}
+
+/**
+ * 原子写入文本：
+ *   - 目标已存在时保留其原有权限（避免 600 -> 644）；
+ *   - 目标不存在时按文件名取默认权限（gateway.yaml 0644 / secrets.yaml 0600）；
+ *   - 可通过 options.mode 显式覆盖（如 config 阶段强制 secrets.yaml 为 0600）。
+ */
+async function writeTextAtomic(file, text, options = {}) {
   await fsp.mkdir(path.dirname(file), { recursive: true });
+
+  let mode = options.mode;
+  if (mode === undefined) {
+    let originalMode = null;
+    try {
+      originalMode = (await fsp.stat(file)).mode & 0o777;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    mode = originalMode ?? defaultModeFor(file);
+  }
+
   const temp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  await fsp.writeFile(temp, text, "utf8");
   try {
-    await fsp.rename(temp, file);
-  } catch {
-    // Windows 上 rename 不能覆盖已存在文件。
-    await fsp.rm(file, { force: true });
-    await fsp.rename(temp, file);
+    await fsp.writeFile(temp, text, "utf8");
+    // rename 会带走临时文件的权限，所以必须在 rename 之前设定。
+    await fsp.chmod(temp, mode);
+    try {
+      await fsp.rename(temp, file);
+    } catch {
+      // Windows 上 rename 不能覆盖已存在文件。
+      await fsp.rm(file, { force: true });
+      await fsp.rename(temp, file);
+    }
+  } catch (error) {
+    await fsp.rm(temp, { force: true }).catch(() => {});
+    throw error;
   }
 }
 
@@ -1398,7 +1437,12 @@ async function runConfigPhase(ctx) {
       out.log(`${name} 无需迁移`);
       continue;
     }
-    await writeTextAtomic(file, doc.toString({ lineWidth: 0 }));
+    // secrets.yaml 无论原权限如何都收紧到 0600；gateway.yaml 保留原有模式。
+    await writeTextAtomic(
+      file,
+      doc.toString({ lineWidth: 0 }),
+      name === "secrets.yaml" ? { mode: SECRETS_FILE_MODE } : {},
+    );
     changed.push(name);
   }
 
