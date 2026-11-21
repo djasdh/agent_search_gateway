@@ -29,7 +29,7 @@ const LEGACY_SECRET_PATHS: Array<{ path: string[]; hint: string }> = [
   { path: ["search", "deepseek", "api_key"], hint: "secrets.yaml 的 search.deepseek.api_key" },
   {
     path: ["bilibili", "http", "token"],
-    hint: "secrets.yaml 的 extensions.bilibili.token（0.3.11 可用 node scripts/migrations/0.3.x.mjs --phase config 自动迁移）",
+    hint: "secrets.yaml 的 extensions.bilibili.token（迁移脚本只存在于 0.3.11：node scripts/migrations/0.3.x.mjs --phase config）",
   },
   { path: ["browser", "proxy_password"], hint: "secrets.yaml 的 browser.proxy_password" },
 ];
@@ -47,7 +47,7 @@ const LEGACY_PLATFORM_SECTIONS: Array<{ path: string[]; target: string }> = [
 ];
 
 const LEGACY_PLATFORM_HINT =
-  "请先升级到 0.3.11 并运行 node scripts/migrations/0.3.x.mjs --phase config，或把该段迁到 extensions.<id>.config。";
+  "该迁移脚本只存在于 0.3.11：请先用 0.3.11 运行 node scripts/migrations/0.3.x.mjs --phase config，或手工把该段迁到 extensions.<id>.config。";
 
 /** secrets.yaml 里 0.4.0 已删除的旧段。 */
 function assertNoLegacySecrets(raw: JsonObject, secretsPath: string): void {

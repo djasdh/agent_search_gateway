@@ -34,7 +34,7 @@ const backendSchema = z.object({
     ),
   name: z.string().min(1, "backends[].name 不能为空"),
   description: z.string().optional(),
-  /** 旧 asg plugins 的输入名；只用于兼容历史配置/密钥键。 */
+  /** 历史安装名/通道别名；用于兼容旧安装与配置键。 */
   aliases: z.array(z.string()).optional(),
 });
 

@@ -20,7 +20,7 @@ import {
   normalizeBackendState,
   extensionDataDir,
   readBackendStates,
-} from "../deps/plugins.js";
+} from "../../extensions/paths.js";
 import {
   configPaths,
   deleteYamlPath,
@@ -197,7 +197,7 @@ function listExtensionsWithBackends(
 
     const backends = (extension.backends ?? []).map((backend) => {
       const state = normalizeBackendState(states[backend.id]);
-      // 与 `asg plugins list` 保持一致：状态文件可能缺失/过期，后端目录存在即视为已安装。
+      // 与扩展列表保持一致：状态文件可能缺失/过期，后端目录存在即视为已安装。
       const dirInstalled = existsSync(backendInstallDir(root, extension.id, backend.id));
       const entry: ListedBackend = {
         ...backend,

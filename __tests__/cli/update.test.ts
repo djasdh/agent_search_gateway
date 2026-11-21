@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import type { Reporter } from "../../src/cli/output.js";
 import { runUpdate, updateArgs } from "../../src/cli/deps/update.js";
-import type { StreamRunner } from "../../src/cli/deps/plugins.js";
+import type { StreamRunner } from "../../src/cli/deps/stream.js";
 
 const tempDirs: string[] = [];
 

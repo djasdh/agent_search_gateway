@@ -29,9 +29,7 @@ export interface SetupHostInfo {
  * - `pluginDir` 是已安装插件的只读目录（入口、manifest、插件自带资源）；
  * - `dataDir` 是插件唯一可写的数据目录；
  * - `tempDir` 是插件可写的临时目录；
- * - `backendDir(id)` 是该插件声明的后端安装目录（位于 dataDir 内）；
- * - `legacyBackendDir(id)` 是 0.3.x 的旧后端目录（`data/backends/<id>`），
- *   只用于迁移时**读取**；写入会被宿主拒绝。
+ * - `backendDir(id)` 是该插件声明的后端安装目录（位于 dataDir 内）。
  */
 export interface SetupPaths {
   root: string;
@@ -41,7 +39,6 @@ export interface SetupPaths {
   tempDir: string;
   config: string;
   secrets: string;
-  legacyBackendDir(id: string): string;
 }
 
 export interface SetupMkdirOptions {

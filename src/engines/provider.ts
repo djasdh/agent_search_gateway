@@ -12,7 +12,7 @@ import type { SearxngResult } from "../search/searxng.js";
 import type { EngineGroup, EngineKind } from "./types.js";
 
 export interface EngineProviderContext {
-  /** 与 gateway.yaml 同形的配置切片。CLI 传原始 configPlain；运行期传 { search, weibo }。 */
+  /** 与 gateway.yaml 同形的配置切片。CLI 传原始 configPlain；运行期只传内置引擎需要的切片。 */
   config: Record<string, unknown>;
   /** 与 secrets.yaml 同形的密钥切片。 */
   secrets: Record<string, unknown>;

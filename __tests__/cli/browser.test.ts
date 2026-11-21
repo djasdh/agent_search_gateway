@@ -11,7 +11,7 @@ import {
   installBrowser,
   playwrightCacheDir,
 } from "../../src/cli/deps/browser.js";
-import type { StreamRunner } from "../../src/cli/deps/plugins.js";
+import type { StreamRunner } from "../../src/cli/deps/stream.js";
 import { mcpSessionContext } from "../../src/utils/session-context.js";
 import { browserToolDeps, makeSettings } from "../helpers/settings.js";
 

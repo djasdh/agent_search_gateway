@@ -10,7 +10,7 @@ import process from "node:process";
 import { CliError, EXIT } from "../errors.js";
 import type { Reporter } from "../output.js";
 import { exists, nodePath, releaseDir } from "../root.js";
-import { forwardChildLine, spawnStream, type StreamRunner } from "./plugins.js";
+import { forwardChildLine, spawnStream, type StreamRunner } from "./stream.js";
 
 export interface BrowserStatus {
   headless_shell: boolean;

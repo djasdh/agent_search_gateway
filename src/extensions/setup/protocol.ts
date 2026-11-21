@@ -36,10 +36,6 @@ export interface SetupInitPaths {
   secrets: string;
   /** `backendDir(id)` 的父目录，通常是 `<dataDir>/backends`。 */
   backendDirBase: string;
-  /** `legacyBackendDir(id)` 的父目录，通常是 `<root>/data/backends`。 */
-  legacyBackendDirBase: string;
-  /** 旧目录名映射（逻辑名 → 历史目录名）；缺省用 id。 */
-  legacyBackendNames: Record<string, string>;
 }
 
 export interface SetupInit {

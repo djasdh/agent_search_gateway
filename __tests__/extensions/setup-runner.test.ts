@@ -100,7 +100,6 @@ describe("runPluginSetup（真实 fork，tsx 运行 worker.ts）", () => {
       pluginDir: string;
       dataDir: string;
       tempDir: string;
-      legacyBackendDir: string;
       marker: string;
       before: unknown;
       backendState: unknown;
@@ -114,7 +113,6 @@ describe("runPluginSetup（真实 fork，tsx 运行 worker.ts）", () => {
     expect(value.dataDir).toBe(path.join(root, "data", "extension-data", PLUGIN.id));
     expect(value.tempDir).toBe(path.join(value.dataDir, "tmp"));
     expect(value.dataDir.startsWith(`${pluginDir}${path.sep}`)).toBe(false);
-    expect(value.legacyBackendDir).toBe(path.join(root, "data", "backends", "demo"));
     expect(value.marker).toBe("hello from setup\n");
     expect(value.before).toBeNull();
     expect(value.backendState).toEqual({ version: "0.1.0" });
@@ -131,19 +129,6 @@ describe("runPluginSetup（真实 fork，tsx 运行 worker.ts）", () => {
       fs.readFileSync(path.join(dataDir, "state.json"), "utf8"),
     ) as unknown;
     expect(state).toEqual({ installed: true, action: "install" });
-  });
-
-  it("legacyBackendNames 会透传到 ctx.paths.legacyBackendDir", async () => {
-    const { root, entry } = makePluginRoot();
-
-    const result = await run(root, entry, {
-      legacyBackendNames: { demo: "demo-old" },
-    });
-
-    expect(result.ok).toBe(true);
-    expect((result.result as { legacyBackendDir: string }).legacyBackendDir).toBe(
-      path.join(root, "data", "backends", "demo-old"),
-    );
   });
 
   it("configSchema 透传：合法写入，非法拒绝且文件不变", async () => {

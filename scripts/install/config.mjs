@@ -65,7 +65,7 @@ export async function assertNoLegacyPlatformConfig(installRoot) {
 
   throw new Error(
     `检测到旧版平台配置段：${hits.join('；')}。` +
-      '先升级到 0.3.11 并运行 node scripts/migrations/0.3.x.mjs --phase config；0.4.0 不再接受这些顶层段。',
+      '迁移脚本只存在于 0.3.11：请先用 0.3.11 运行 node scripts/migrations/0.3.x.mjs --phase config；0.4.1 不再接受这些顶层段。',
   );
 }
 

@@ -133,7 +133,6 @@ function assertBackendId(value: unknown, label: string): string {
 
 function buildPaths(init: SetupInit): SetupPaths {
   const raw = init.paths;
-  const legacyNames = raw.legacyBackendNames ?? {};
   return {
     root: raw.root,
     pluginDir: raw.pluginDir,
@@ -143,11 +142,6 @@ function buildPaths(init: SetupInit): SetupPaths {
     secrets: raw.secrets,
     backendDir(id: string): string {
       return path.join(raw.backendDirBase, assertBackendId(id, "paths.backendDir"));
-    },
-    legacyBackendDir(id: string): string {
-      const safe = assertBackendId(id, "paths.legacyBackendDir");
-      const mapped = legacyNames[safe] ?? safe;
-      return path.join(raw.legacyBackendDirBase, mapped);
     },
   };
 }
@@ -281,7 +275,6 @@ function validateInit(init: unknown): SetupInit {
     "config",
     "secrets",
     "backendDirBase",
-    "legacyBackendDirBase",
   ] as const) {
     if (typeof paths[key] !== "string" || paths[key].length === 0) {
       throw new Error(`setup init 的 paths.${key} 必须是非空字符串`);

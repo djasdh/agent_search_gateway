@@ -32,7 +32,6 @@ export async function setup(ctx) {
     pluginDir: ctx.paths.pluginDir,
     dataDir: ctx.paths.dataDir,
     tempDir: ctx.paths.tempDir,
-    legacyBackendDir: ctx.paths.legacyBackendDir("demo"),
     marker: await ctx.readFile(marker),
     before,
     backendState: await ctx.backendState.read("demo"),

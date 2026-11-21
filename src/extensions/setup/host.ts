@@ -3,7 +3,6 @@
  * 安全边界（刻意收窄，但**不是**沙箱）：
  * - 写操作只能落在 `dataDir` / `tempDir` 内，插件安装目录（pluginDir）保持只读；
  * - `rename` 的源路径也必须是可写路径，避免把插件文件“搬走”；
- * - `legacyBackendDir(id)` 只用于读取旧后端目录；
  * - 下载只允许 https；
  * - config 只写 `gateway.yaml → extensions.<id>.config`，用 YAML Document 保留注释。
  *
@@ -70,8 +69,6 @@ export interface SetupHostOptions {
   root: string;
   plugin: SetupPluginInfo;
   logger?: (message: string) => void;
-  /** 旧后端逻辑名 → 旧目录名；由调用方提供，核心不内置任何具体后端名。 */
-  legacyBackendNames?: Record<string, string>;
   /** manifest 的 config_schema；提供后所有 config 写入都会先校验。 */
   configSchema?: unknown;
 }
@@ -114,10 +111,7 @@ export function resolveSetupPaths(root: string, pluginId: string): SetupHostPath
 }
 
 /** 把路径函数展开成可跨 IPC 的纯数据。worker 侧再拼回 `SetupPaths`。 */
-export function setupInitPaths(
-  paths: SetupHostPaths,
-  legacyBackendNames: Record<string, string> = {},
-): SetupInitPaths {
+export function setupInitPaths(paths: SetupHostPaths): SetupInitPaths {
   return {
     root: paths.root,
     pluginDir: paths.pluginDir,
@@ -126,8 +120,6 @@ export function setupInitPaths(
     config: paths.config,
     secrets: paths.secrets,
     backendDirBase: path.join(paths.dataDir, "backends"),
-    legacyBackendDirBase: path.join(paths.root, "data", "backends"),
-    legacyBackendNames: normalizeLegacyBackendNames(legacyBackendNames),
   };
 }
 
@@ -145,28 +137,6 @@ function messageOf(error: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** 校验旧目录名映射，避免调用方传入 `../` 之类的路径片段。 */
-function normalizeLegacyBackendNames(value: unknown): Record<string, string> {
-  if (value === undefined || value === null) return {};
-  if (!isRecord(value)) {
-    throw new Error("legacyBackendNames 必须是对象");
-  }
-
-  const out: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (!BACKEND_ID_RE.test(key)) {
-      throw new Error(`legacyBackendNames 的键不是合法后端 id：${key}`);
-    }
-    if (typeof raw !== "string" || !BACKEND_ID_RE.test(raw)) {
-      throw new Error(
-        `legacyBackendNames.${key} 必须是不含路径分隔符的后端目录名，收到：${String(raw)}`,
-      );
-    }
-    out[key] = raw;
-  }
-  return out;
 }
 
 function requireString(value: unknown, label: string): string {
@@ -627,7 +597,6 @@ export class SetupHost {
   readonly paths: SetupHostPaths;
   readonly plugin: SetupPluginInfo;
   private readonly logger?: (message: string) => void;
-  private readonly legacyBackendNames: Record<string, string>;
   private readonly configSchema?: unknown;
   /** 在途 proc.run 子进程；dispose 时整棵进程树杀掉。 */
   private readonly activeChildren = new Set<ChildProcess>();
@@ -645,12 +614,11 @@ export class SetupHost {
     };
     this.paths = resolveSetupPaths(options.root, this.plugin.id);
     this.logger = options.logger;
-    this.legacyBackendNames = normalizeLegacyBackendNames(options.legacyBackendNames);
     this.configSchema = options.configSchema;
   }
 
   initPaths(): SetupInitPaths {
-    return setupInitPaths(this.paths, this.legacyBackendNames);
+    return setupInitPaths(this.paths);
   }
 
   /** runner 收到 worker 的 call 后走这里；参数在具体方法内做运行时校验。 */

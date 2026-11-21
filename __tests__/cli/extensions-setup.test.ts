@@ -597,7 +597,7 @@ describe("asg extensions list 后端状态", () => {
     });
   });
 
-  it("backends.json 缺失但后端目录存在时显示已安装（与 asg plugins list 一致）", async () => {
+  it("backends.json 缺失但后端目录存在时显示已安装（与扩展列表一致）", async () => {
     const root = tempRoot();
     writeManifest(root, MANIFEST);
     fs.mkdirSync(

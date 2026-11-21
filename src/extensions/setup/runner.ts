@@ -30,8 +30,6 @@ export interface RunPluginSetupOptions {
   workerPath?: string;
   /** 测试注入点；默认 child_process.fork。 */
   fork?: typeof fork;
-  /** 旧后端逻辑名 → 旧目录名；核心不内置具体后端名。 */
-  legacyBackendNames?: Record<string, string>;
   /** manifest 的 config_schema；提供后所有 config 写入都会先校验。 */
   configSchema?: unknown;
   /** 插件 log 与宿主内部日志。 */
@@ -137,9 +135,6 @@ export async function runPluginSetup(
     root: paths.root,
     plugin: options.plugin,
     logger: options.onLog,
-    ...(options.legacyBackendNames !== undefined
-      ? { legacyBackendNames: options.legacyBackendNames }
-      : {}),
     ...(options.configSchema !== undefined ? { configSchema: options.configSchema } : {}),
   });
 

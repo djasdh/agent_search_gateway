@@ -59,7 +59,7 @@ function writeGateway(root: string): void {
 
 function makeHost(
   root = makeRoot(),
-  extra: Pick<SetupHostOptions, "legacyBackendNames" | "configSchema"> = {},
+  extra: Pick<SetupHostOptions, "configSchema"> = {},
 ): { host: SetupHost; root: string } {
   return {
     root,
@@ -110,26 +110,21 @@ describe("SetupHost 路径布局", () => {
     expect(host.paths.dataDir.startsWith(`${host.paths.pluginDir}${path.sep}`)).toBe(false);
   });
 
-  it("legacyBackendNames 默认为空，传入映射时原样透传", () => {
+  it("initPaths 不包含旧后端目录", () => {
     const root = makeRoot();
-    const plain = makeHost(root).host;
-    expect(setupInitPaths(plain.paths).legacyBackendNames).toEqual({});
-
-    const mapped = makeHost(root, {
-      legacyBackendNames: { demo: "demo-old" },
-    }).host;
-    expect(mapped.initPaths().legacyBackendNames).toEqual({ demo: "demo-old" });
-  });
-
-  it("拒绝非法 legacyBackendNames，避免路径片段逃逸", () => {
-    const root = makeRoot();
-    expect(() =>
-      new SetupHost({
-        root,
-        plugin: PLUGIN,
-        legacyBackendNames: { demo: "../escape" },
-      }),
-    ).toThrow(/legacyBackendNames/);
+    const initPaths = setupInitPaths(makeHost(root).host.paths);
+    expect(Object.keys(initPaths).sort()).toEqual([
+      "backendDirBase",
+      "config",
+      "dataDir",
+      "pluginDir",
+      "root",
+      "secrets",
+      "tempDir",
+    ]);
+    expect(initPaths.backendDirBase).toBe(
+      path.join(root, "data", "extension-data", PLUGIN.id, "backends"),
+    );
   });
 });
 
