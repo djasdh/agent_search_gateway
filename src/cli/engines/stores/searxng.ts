@@ -5,7 +5,12 @@
  */
 
 import { CliError, EXIT } from "../../errors.js";
-import { renderSearxngEngineStates } from "../../config/searxng.js";
+import {
+  hasSearxngApiKey,
+  renderSearxngEngineStates,
+  searxngApiKeyRequirement,
+  type SearxngEngineState,
+} from "../../config/searxng.js";
 import { routingFor, stringArray, asObject } from "../shared.js";
 import type { EngineChange, EngineContext, EngineGroup, EnginePlan, EngineRecord, EngineStore } from "../types.js";
 
@@ -54,21 +59,27 @@ async function fetchSearxngEngines(url: string): Promise<RemoteEngine[]> {
   return result;
 }
 
+function searxngRecord(engine: SearxngEngineState, ctx: EngineContext): EngineRecord {
+  const requirement = searxngApiKeyRequirement(engine);
+  return {
+    id: `searxng:${engine.name}`,
+    group: "searxng",
+    name: engine.name,
+    kind: "searxng",
+    enabled: engine.enabled,
+    available: requirement === undefined || hasSearxngApiKey(engine),
+    routing: routingFor(ctx.configPlain, engine.name),
+    ...(requirement === undefined ? {} : { requires: [requirement] }),
+  };
+}
+
 function localRecords(ctx: EngineContext): EngineRecord[] {
   const result: EngineRecord[] = [];
   const seen = new Set<string>();
 
   for (const engine of ctx.searxng) {
     seen.add(engine.name);
-    result.push({
-      id: `searxng:${engine.name}`,
-      group: "searxng",
-      name: engine.name,
-      kind: "searxng",
-      enabled: engine.enabled,
-      available: true,
-      routing: routingFor(ctx.configPlain, engine.name),
-    });
+    result.push(searxngRecord(engine, ctx));
   }
 
   const engines = asObject(asObject(ctx.configPlain.search).engines);

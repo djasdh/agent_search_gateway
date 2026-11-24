@@ -91,6 +91,14 @@ function appendBaiduToSettings(root: string, disabled: boolean): void {
   fs.appendFileSync(file, `  - name: baidu\n    disabled: ${disabled}\n`, "utf8");
 }
 
+/** 用给定 engines 段覆盖 settings.yml。 */
+function writeSettings(root: string, engines: string[]): void {
+  write(
+    path.join(root, SETTINGS_PATH),
+    ["use_default_settings: true", "engines:", ...engines, ""].join("\n"),
+  );
+}
+
 /** 写入 DeepSeek 通用上游密钥；值可以是明文或 `env:NAME`。 */
 function writeDeepseekSecret(root: string, value: string): void {
   write(
@@ -197,6 +205,7 @@ const SECRET_ENV_KEYS = [
   "SAUCENAO_API_KEY",
   "DEEPSEEK_API_KEY",
   "BROWSER_PROXY_PASSWORD",
+  "ASG_TEST_SEARXNG_KEY",
 ] as const;
 const savedSecretEnv = new Map<string, string | undefined>();
 
@@ -298,6 +307,94 @@ describe("engines list（本地视图）", () => {
     const engines = readLocalEngines(root);
     const names = engines.map((engine) => engine.name);
     expect(names).toEqual(expect.arrayContaining(["bilibili", "tavily", "tracemoe", "saucenao", "baidu"]));
+  });
+});
+
+describe("searxng 密钥依赖", () => {
+  it("settings.yml 的 api_key 字段生成 require，并影响 available", () => {
+    const root = makeRoot();
+    writeSettings(root, [
+      "  - name: exaapi",
+      '    api_key: ""',
+      "  - name: firecrawl",
+      '    api_key: ""',
+      "    about:",
+      "      require_api_key: false",
+      "  - name: bilibili",
+      "    disabled: false",
+    ]);
+
+    const engines = readLocalEngines(root);
+    const exa = engines.find((engine) => engine.id === "searxng:exaapi")!;
+    expect(exa.requires).toEqual(["searxng.engines.exaapi.api_key"]);
+    expect(exa.available).toBe(false);
+
+    const firecrawl = engines.find((engine) => engine.id === "searxng:firecrawl")!;
+    expect(firecrawl.requires).toBeUndefined();
+    expect(firecrawl.available).toBe(true);
+
+    const bilibili = engines.find((engine) => engine.id === "searxng:bilibili")!;
+    expect(bilibili.requires).toBeUndefined();
+  });
+
+  it("api_key 为空时 enable 报 MISSING_SECRET，且不写文件、不重启", async () => {
+    const root = makeRoot();
+    writeSettings(root, ["  - name: exaapi", '    api_key: ""']);
+    const settingsBefore = read(root, SETTINGS_PATH);
+    const configBefore = read(root, "gateway.yaml");
+
+    await expect(
+      enginesRun({ root, reporter, rest: ["enable", "searxng:exaapi"] }),
+    ).rejects.toMatchObject({
+      code: "MISSING_SECRET",
+      exitCode: 4,
+      details: {
+        missing: [
+          { engine: "searxng:exaapi", requires: ["searxng.engines.exaapi.api_key"] },
+        ],
+      },
+    });
+
+    expect(read(root, SETTINGS_PATH)).toBe(settingsBefore);
+    expect(read(root, "gateway.yaml")).toBe(configBefore);
+    expect(restartCalls).toHaveLength(0);
+  });
+
+  it("api_key 非空时允许 enable", async () => {
+    const root = makeRoot();
+    writeSettings(root, ["  - name: exaapi", "    api_key: exa-key"]);
+
+    await expect(
+      enginesRun({ root, reporter, rest: ["enable", "searxng:exaapi"] }),
+    ).resolves.toMatchObject({ data: { changed: ["searxng:exaapi"] } });
+
+    const doc = parse(root, SETTINGS_PATH) as {
+      engines: Array<{ name: string; disabled?: boolean }>;
+    };
+    expect(doc.engines.find((engine) => engine.name === "exaapi")!.disabled).toBe(false);
+    expect(restartCalls).toHaveLength(1);
+  });
+
+  it("api_key 支持 env:NAME 与 ${VAR} 占位符", async () => {
+    const root = makeRoot();
+    process.env.ASG_TEST_SEARXNG_KEY = "from-env";
+    writeSettings(root, ["  - name: exaapi", "    api_key: env:ASG_TEST_SEARXNG_KEY"]);
+    await expect(
+      enginesRun({ root, reporter, rest: ["enable", "searxng:exaapi"] }),
+    ).resolves.toMatchObject({ data: { changed: ["searxng:exaapi"] } });
+
+    const root2 = makeRoot();
+    writeSettings(root2, ["  - name: exaapi", '    api_key: "${ASG_TEST_SEARXNG_KEY}"']);
+    await expect(
+      enginesRun({ root: root2, reporter, rest: ["enable", "searxng:exaapi"] }),
+    ).resolves.toMatchObject({ data: { changed: ["searxng:exaapi"] } });
+
+    delete process.env.ASG_TEST_SEARXNG_KEY;
+    const root3 = makeRoot();
+    writeSettings(root3, ["  - name: exaapi", '    api_key: "${ASG_TEST_SEARXNG_KEY}"']);
+    await expect(
+      enginesRun({ root: root3, reporter, rest: ["enable", "searxng:exaapi"] }),
+    ).rejects.toMatchObject({ code: "MISSING_SECRET" });
   });
 });
 
@@ -1017,6 +1114,42 @@ describe("engines secret", () => {
     });
     expect(fs.statSync(path.join(root, "secrets.yaml")).mode & 0o777).toBe(0o600);
     expect(restartCalls).toEqual([root]);
+  });
+
+  it("searxng 密钥写入 settings.yml，--clear 清空但保留字段", async () => {
+    const root = makeRoot();
+    writeSettings(root, ["  - name: exaapi", '    api_key: ""', "    shortcut: exa"]);
+    setStdinReaderForTests(async () => "exa-key\n");
+
+    const result = await enginesRun({
+      root,
+      reporter,
+      rest: ["secret", "searxng:exaapi", "--stdin"],
+    });
+
+    type SettingsDoc = {
+      engines: Array<{ name: string; api_key?: string; shortcut?: string }>;
+    };
+    let doc = parse(root, SETTINGS_PATH) as SettingsDoc;
+    let entry = doc.engines.find((engine) => engine.name === "exaapi")!;
+    expect(entry.api_key).toBe("exa-key");
+    expect(entry.shortcut).toBe("exa");
+    expect(result.data).toMatchObject({
+      secret: "searxng.engines.exaapi.api_key",
+      changed: ["searxng.engines.exaapi.api_key"],
+    });
+    expect(readLocalEngines(root).find((engine) => engine.id === "searxng:exaapi")!.available).toBe(
+      true,
+    );
+
+    await enginesRun({ root, reporter, rest: ["secret", "searxng:exaapi", "--clear"] });
+    doc = parse(root, SETTINGS_PATH) as SettingsDoc;
+    entry = doc.engines.find((engine) => engine.name === "exaapi")!;
+    expect(entry.api_key).toBe("");
+    expect(readLocalEngines(root).find((engine) => engine.id === "searxng:exaapi")!.available).toBe(
+      false,
+    );
+    expect(restartCalls).toHaveLength(2);
   });
 
   it("多个依赖必须给 --name，短名与完整路径都可选", async () => {

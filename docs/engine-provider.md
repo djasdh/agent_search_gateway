@@ -64,13 +64,17 @@ interface EngineProvider {
   `extensions.<manifest id>.<name>`，`env:NAME` 已解析，空值不注入。
   0.4.0 起不再读取 `extensions.<engineId>.<name>`。
 
-`requires` 支持三种依赖：
+`requires` 支持以下依赖：
 
 - `secrets.a.b`：内置密钥，读 `secrets.yaml` 的 `a.b`；
 - `secret:<name>`：扩展密钥，读 `secrets.yaml` 的
   `extensions.<manifest id>.<name>`；值为空（含解析后的 `env:` 为空）时
   `available()` 强制返回 false。`asg engines enable` 的依赖检查只认这一个键。
 - `config:a.b`：配置依赖，读 `gateway.yaml`。
+
+此外，`SearxngStore` 会为 `settings.yml` 中带 `api_key` 的引擎产出
+`searxng.engines.<name>.api_key`（`about.require_api_key: false` 可显式关闭），
+由 `asg engines enable` 按 `MISSING_SECRET` 处理；网关 provider 一般不需要声明它。
 
 扩展引擎（`data/extensions` 加载的 provider）在 0.4.0 优先读 `requiresV2`：依赖路径以
 `extensions.<manifest id>.*` 为准；只有插件没有提供 `requiresV2` 时才回退旧的

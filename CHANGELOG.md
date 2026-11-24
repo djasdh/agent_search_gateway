@@ -2,6 +2,18 @@
 
 本项目遵循语义化版本，条目按版本倒序。
 
+## [Unreleased]
+
+### Fixed
+
+- searxng 引擎的 `api_key` 依赖不再被归类成 `MISSING_DEPENDENCY`：`settings.yml` 里声明了 `api_key` 的引擎缺密钥时统一报 `MISSING_SECRET`（退出码 4，保留 `details.missing`），`asg engines list` 的 `available` 同步反映密钥状态。
+- `asg engines secret searxng:<name>` 支持写入 / 清空 `settings.yml` 的 `engines[].api_key`。
+
+### Upgrade
+
+- 现有 `settings.yml` 里的 keyless 引擎（如 `firecrawl`）如果保留了 `api_key: ""`，需要补
+  `about.require_api_key: false` 或删掉该字段；否则 `asg engines enable` 会按缺密钥拒绝。
+
 ## [0.4.1] - 2026-11-21
 
 ### Breaking

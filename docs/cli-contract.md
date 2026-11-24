@@ -363,11 +363,16 @@ asg engines secret <engine> [--name <name>] --clear
   - `secrets.a.b` → 内置密钥，写 `secrets.yaml` 的 `a.b`；
   - `secret:<name>` → 扩展密钥，写 `secrets.yaml` 的 `extensions.<manifest id>.<name>`
     （`asg extensions secret` 与 `asg engines secret` 写同一个键，见 5.6.1）；
-  - 只有一个可写依赖时可省略 `--name`；多个依赖必须给 `--name`，否则 `ENGINE_SECRET_AMBIGUOUS`（退出码 4）；`--name` 接受完整路径、完整 `secret:name` 或末段短名；
+  - `searxng.engines.<name>.api_key` → searxng 密钥，写 `data/deps/searxng/settings.yml`
+    里该引擎条目的 `api_key`；`--clear` 置为空串并保留字段（依赖声明不消失）；
+  - 只有一个可写依赖时可省略 `--name`；多个依赖必须给 `--name`，否则 `ENGINE_SECRET_AMBIGUOUS`（退出码 4）；`--name` 接受完整路径、完整 `secret:name`、searxng 的 `api_key` 或末段短名；
   - 值只从 stdin 读（`--stdin`），不接受位置参数；末尾一个换行会被去掉，空值报错；
-  - `--clear` 删除对应路径；引擎没有密钥依赖且未给 `--name` 报 `ENGINE_NO_SECRET`，未知 `--name` 报 `MISSING_SECRET`（均为退出码 4）；
+  - `--clear` 删除对应路径（searxng 为置空 api_key，见上）；引擎没有密钥依赖且未给 `--name` 报 `ENGINE_NO_SECRET`，未知 `--name` 报 `MISSING_SECRET`（均为退出码 4）；
 - `route` / `secret` 只写一个文件，成功后整栈重启一次；人类输出会提示 MCP 连接会断开；
 - 缺 secret 的引擎 `enable` 直接拒绝：`MISSING_SECRET`，退出码 4；
+- searxng 引擎的 `settings.yml` 条目带 `api_key` 字段即声明密钥依赖
+  `searxng.engines.<name>.api_key`（`about.require_api_key: false` 可显式关闭，用于 keyless 引擎）；
+  值按 `env:NAME` / `${NAME}` 解析后为空时同样报 `MISSING_SECRET`，且 `list` 的 `available` 为 `false`；
 - 扩展搜索源可以把启用开关声明为 `config:extensions.<id>.config.enabled`；为 `false`/缺失时 `enable` 报 `MISSING_DEPENDENCY`，退出码 4；引擎命令不改扩展私有配置；
 - 批量启用/禁用全有或全无：先全部校验，任一不可用则一个文件都不写；
 - 一次命令涉及两个文件时，先全部写完，再整栈重启一次；写入失败会恢复已写文件；

@@ -8,6 +8,8 @@ engines:
     engine: exaapi
     shortcut: exa
     api_key: "<EXA_API_KEY>"        # 上游引擎只认 settings.yml
+    about:
+      require_api_key: true
     search_type: instant            # instant 比 auto 便宜 ~43%、快 ~3×
     content_mode: highlights
     inactive: false
@@ -16,7 +18,9 @@ engines:
   - name: tavily
     engine: tavily
     shortcut: tvy
-    api_key: ""                     # 空 → os.environ["TAVILY_API_KEY"]
+    api_key: "${TAVILY_API_KEY}"    # 安装器会替换；也可用 asg engines secret 写入
+    about:
+      require_api_key: true
     disabled: false
 
   # ── firecrawl:可 keyless(限速低);直连即可 ──
@@ -24,6 +28,8 @@ engines:
     engine: firecrawl
     shortcut: fc
     api_key: ""                     # 空 → keyless(限速低)
+    about:
+      require_api_key: false
     disabled: false
 
   # ── youcom:keyless MCP,不稳定,默认关 ──
@@ -65,11 +71,17 @@ engines:
     engine: zhihu
     shortcut: zh
     scope: zhihu                    # 站内搜索(≤10 条/次)
+    api_key: "${ZHIHU_ACCESS_SECRET}"
+    about:
+      require_api_key: true
     disabled: false
   - name: zhihu web
     engine: zhihu
     shortcut: zhw
     scope: web                      # 全网搜索(≤20 条/次)
+    api_key: "${ZHIHU_ACCESS_SECRET}"
+    about:
+      require_api_key: true
     disabled: false
 
 # ── 配额台账插件 ──

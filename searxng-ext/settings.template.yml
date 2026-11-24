@@ -101,13 +101,17 @@ engines:
     engine: exaapi
     shortcut: exa
     api_key: "${EXA_API_KEY}"
+    about:
+      require_api_key: true
     search_type: instant
     content_mode: highlights
     inactive: false
   - name: tavily
     engine: tavily
     shortcut: tvy
-    api_key: ""              # 读环境变量 TAVILY_API_KEY
+    api_key: "${TAVILY_API_KEY}"
+    about:
+      require_api_key: true
     disabled: false
   - name: youcom
     engine: youcom
@@ -117,19 +121,25 @@ engines:
     engine: firecrawl
     shortcut: fc
     api_key: ""              # 空 = keyless（限速低）；直连即可
+    about:
+      require_api_key: false
     disabled: false
   # 知乎官方 API：一个模块两个 scope（站内 / 全网），读 ZHIHU_ACCESS_SECRET
   - name: zhihu
     engine: zhihu
     shortcut: zh
     scope: zhihu
-    api_key: ""
+    api_key: "${ZHIHU_ACCESS_SECRET}"
+    about:
+      require_api_key: true
     disabled: false
   - name: zhihu web
     engine: zhihu
     shortcut: zhw
     scope: web
-    api_key: ""
+    api_key: "${ZHIHU_ACCESS_SECRET}"
+    about:
+      require_api_key: true
     disabled: false
 
   # 知网学术检索：检索匿名可用；摘要/下载需要机构出口 IP（会话票据 LID）。

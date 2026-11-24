@@ -23,6 +23,7 @@ import {
   type EngineInfo,
 } from "../config/engines.js";
 import { loadEngineContext } from "../engines/context.js";
+import { parseSearxngSecretRequirement } from "../engines/requirements.js";
 import { asObject, stringArray } from "../engines/shared.js";
 import type { EngineContext } from "../engines/types.js";
 import {
@@ -33,7 +34,9 @@ import {
   readYamlDocument,
   setYamlPath,
   writeConfigFile,
+  writeFileAtomic,
 } from "../config/gateway.js";
+import { renderSearxngEngineApiKey } from "../config/searxng.js";
 import { validateConfigTexts } from "../config/validate.js";
 
 const RESTART_NOTICE = "整栈重启会断开所有 MCP 连接。";
@@ -472,11 +475,11 @@ async function runRoute(
 }
 
 interface SecretDependency {
-  /** requires 里的原始写法：`secrets.a.b` 或 `secret:name`。 */
+  /** requires 里的原始写法：`secrets.a.b` / `secret:name` / `searxng.engines.<name>.api_key`。 */
   raw: string;
-  kind: "builtin" | "extension";
+  kind: "builtin" | "extension" | "searxng";
   path: string[];
-  /** 扩展密钥名（仅 extension）。 */
+  /** 扩展密钥名（仅 extension）或 searxng 引擎名（仅 searxng）。 */
   name?: string;
 }
 
@@ -501,9 +504,14 @@ function secretDependencies(record: EngineRecord): SecretDependency[] {
         path: ["extensions", owner, name],
         name,
       };
+    } else {
+      const engineName = parseSearxngSecretRequirement(requirement);
+      if (engineName !== undefined) {
+        dep = { raw: requirement, kind: "searxng", path: [], name: engineName };
+      }
     }
     if (!dep || dep.path.some((segment) => segment.length === 0)) continue;
-    const key = dep.path.join(".");
+    const key = dep.kind === "searxng" ? dep.raw : dep.path.join(".");
     if (seen.has(key)) continue;
     seen.add(key);
     deps.push(dep);
@@ -514,6 +522,7 @@ function secretDependencies(record: EngineRecord): SecretDependency[] {
 
 function matchesSecretName(dep: SecretDependency, name: string): boolean {
   if (name === dep.raw) return true;
+  if (dep.kind === "searxng") return name === "api_key";
   if (dep.kind === "builtin") {
     return name === dep.path.join(".") || name === dep.path[dep.path.length - 1];
   }
@@ -590,42 +599,68 @@ async function runSecret(
     usage(`密钥名不合法：${dep.name}（要求 [a-z][a-z0-9_-]*）`);
   }
 
-  const display = `secrets.${dep.path.join(".")}`;
-  const secretsDoc = readYamlDocument(ctx.paths.secrets);
+  const isSearxng = dep.kind === "searxng";
+  const display = isSearxng ? dep.raw : `secrets.${dep.path.join(".")}`;
 
-  let text: string | undefined;
-  if (clear) {
-    if (deleteYamlPath(secretsDoc.doc, dep.path)) {
-      text = documentToText(secretsDoc.doc);
-    }
-  } else {
-    const value = (await stdinReader()).replace(/\r?\n$/, "");
+  let value: string | undefined;
+  if (!clear) {
+    value = (await stdinReader()).replace(/\r?\n$/, "");
     if (value.trim().length === 0) {
       usage("密钥不能为空；如需删除请使用 --clear");
     }
-    setYamlPath(secretsDoc.doc, dep.path, value);
-    text = documentToText(secretsDoc.doc);
   }
 
-  if (text !== undefined) {
-    // 先校验再写：secrets.yaml 用 0600，避免密钥对 group/other 可读。
-    const { warnings } = validateConfigTexts({ configText: ctx.config.text, secretsText: text });
-    for (const warning of warnings) reporter.info(`警告: ${warning}`);
-    writeConfigFile(ctx.paths.secrets, text, 0o600);
+  let changed = false;
+  if (isSearxng) {
+    // searxng 的密钥只能写在 settings.yml；清空时保留 api_key 字段，依赖声明不消失。
+    const rendered = renderSearxngEngineApiKey(
+      ctx.paths.searxngSettings,
+      dep.name!,
+      clear ? "" : value!,
+    );
+    if (rendered.text !== undefined) {
+      writeFileAtomic(ctx.paths.searxngSettings, rendered.text);
+      changed = true;
+    }
+  } else {
+    const secretsDoc = readYamlDocument(ctx.paths.secrets);
+
+    let text: string | undefined;
+    if (clear) {
+      if (deleteYamlPath(secretsDoc.doc, dep.path)) {
+        text = documentToText(secretsDoc.doc);
+      }
+    } else {
+      setYamlPath(secretsDoc.doc, dep.path, value!);
+      text = documentToText(secretsDoc.doc);
+    }
+
+    if (text !== undefined) {
+      // 先校验再写：secrets.yaml 用 0600，避免密钥对 group/other 可读。
+      const { warnings } = validateConfigTexts({ configText: ctx.config.text, secretsText: text });
+      for (const warning of warnings) reporter.info(`警告: ${warning}`);
+      writeConfigFile(ctx.paths.secrets, text, 0o600);
+      changed = true;
+    }
   }
 
   await restart(root, reporter);
+
+  const unchangedMessage = `密钥已是未设置状态: ${display}`;
+  const changedMessage = clear
+    ? `${isSearxng ? "已清空" : "已删除"}密钥: ${display}`
+    : `已更新密钥: ${display}`;
 
   return {
     data: {
       engine: record.id,
       secret: display,
-      changed: text === undefined ? [] : [display],
+      changed: changed ? [display] : [],
       restart: "all",
       restarted: true,
     },
     human: [
-      text === undefined ? `密钥已是未设置状态: ${display}` : clear ? `已删除密钥: ${display}` : `已更新密钥: ${display}`,
+      changed ? changedMessage : unchangedMessage,
       "服务已整栈重启并通过健康检查。",
       RESTART_NOTICE,
     ].join("\n"),

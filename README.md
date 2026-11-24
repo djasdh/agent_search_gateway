@@ -573,7 +573,7 @@ corpus:         # enabled/store_path/ttl_ms/recall_k/sweep_interval_ms
 - settings.yml 是独立配置文件，**不要放 `/tmp`**（重启会丢）
 - `settings.yml` 由一键安装器从 `searxng-ext/settings.template.yml` 渲染；手改后重装会被覆盖，改模板或改生成后的文件并重启
 - 引擎开关用 `asg engines enable/disable <name|group:name>`；searxng 引擎写 settings.yml，网关源写 gateway.yaml，然后整栈重启（会断开 MCP 连接）
-- 引擎路由用 `asg engines route`：searxng 引擎设 `resident` / `rotating` / `none`，文本源设 `--category` / `--hot-category`；密钥用 `asg engines secret <engine> --stdin`（值只从 stdin 读）
+- 引擎路由用 `asg engines route`：searxng 引擎设 `resident` / `rotating` / `none`，文本源设 `--category` / `--hot-category`；密钥用 `asg engines secret <engine> --stdin`（值只从 stdin 读）；searxng 引擎的 `api_key` 由该命令写入 settings.yml，也可继续用 `env:` / `${VAR}` 占位符
 - 通用上游 `gateway.upstream:deepseek` 只支持 `list` / `enable` / `disable` / `secret`，**不支持 `route`**；启用后写 `search.deepseek.enabled`
 - 裸名冲突时用限定名区分：`searxng:baidu` / `gateway.reverse_image:baidu`；扩展搜索源用完整 id（如 `gateway.search:weibo`，需安装对应扩展并开启其配置）；DeepSeek 用 `gateway.upstream:deepseek`
 

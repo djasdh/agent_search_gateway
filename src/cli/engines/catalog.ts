@@ -12,6 +12,8 @@ import { readTextIfExists, writeConfigFile, writeFileAtomic } from "../config/ga
 import { validateConfigTexts } from "../config/validate.js";
 import { loadEngineContext } from "./context.js";
 import { dig } from "./shared.js";
+import { isSecretRequirement, parseSearxngSecretRequirement } from "./requirements.js";
+import { resolveSearxngApiKey } from "../config/searxng.js";
 import { resolveSecretValue } from "../../settings/secret-ref.js";
 import { secretEnvNameForPath } from "../../settings/secrets.js";
 import { GatewayStore } from "./stores/gateway.js";
@@ -177,6 +179,15 @@ function requirementSatisfied(
     // secrets.yaml 支持 env:NAME；判断“是否配置”必须看解析后的值。
     return typeof value === "string" && resolveSecretValue(value, process.env).trim().length > 0;
   }
+  const searxngEngine = parseSearxngSecretRequirement(requirement);
+  if (searxngEngine !== undefined) {
+    const engine = ctx.searxng.find((item) => item.name === searxngEngine);
+    return (
+      engine !== undefined &&
+      engine.apiKey !== undefined &&
+      resolveSearxngApiKey(engine.apiKey).trim().length > 0
+    );
+  }
   if (requirement.startsWith("config:")) {
     const value = dig(ctx.configPlain, requirement.slice("config:".length).split("."));
     return (
@@ -199,12 +210,7 @@ function checkRequirements(records: readonly EngineRecord[], ctx: EngineContext)
   if (missing.length === 0) return;
 
   const summary = missing.map((item) => `${item.engine} 需要 ${item.requires.join(", ")}`).join("；");
-  const lacksSecret = missing.some((item) =>
-    item.requires.some(
-      (requirement) =>
-        requirement.startsWith("secrets.") || requirement.startsWith("secret:"),
-    ),
-  );
+  const lacksSecret = missing.some((item) => item.requires.some(isSecretRequirement));
   if (lacksSecret) {
     throw new CliError("MISSING_SECRET", EXIT.INVALID, `缺少密钥，拒绝启用：${summary}`, { missing });
   }
